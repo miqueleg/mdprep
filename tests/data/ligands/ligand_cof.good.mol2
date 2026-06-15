@@ -1,0 +1,11 @@
+@<TRIPOS>MOLECULE
+COF
+ 2 1 0 0 0
+SMALL
+USER_CHARGES
+
+@<TRIPOS>ATOM
+      1 N1           8.0000     8.0000     8.0000 n           1 COF        0.000000
+      2 C1           9.0000     8.0000     8.0000 c3          1 COF        0.000000
+@<TRIPOS>BOND
+     1    1    2 1

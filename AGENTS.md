@@ -23,12 +23,18 @@ preparation.
   unavailable.
 - Temporary xTB tautomer hydrogens must never be written to the final prepared
   PDB.
+- Ligand atom names, atom order, coordinates, residue identity, and total
+  charge must be preserved or failures must be explicit.
+- Do not add molecule-conversion fallback paths.
+- Final Amber topology generation is not part of the Task 6 ligand stage.
 - Unsupported chemistry must fail with a clear error.
 - External commands must go through `mdprep.external.runner`.
 - External command records must include command, working directory, return code,
   stdout, stderr, and runtime.
 - Unit tests must not require AmberTools, xTB, PySCF, or PropKa.
 - External tests must skip cleanly if required executables are unavailable.
+- External AmberTools tests must skip cleanly if `antechamber` or `parmchk2`
+  is unavailable.
 - All user-facing features need tests and docs.
 - All example YAML files must validate in tests.
 

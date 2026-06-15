@@ -129,6 +129,11 @@ class LigandConfig(StrictModel):
     atom_types: Literal["gaff", "gaff2"]
     charge_method: Literal["am1bcc", "gas_resp_pyscf", "qmmesp_pyscf", "user_mol2"]
     user_mol2: str | None = None
+    user_frcmod: str | None = None
+    preserve_atom_names: bool = True
+    preserve_coordinates: bool = True
+    allow_atom_renaming: bool = False
+    allow_coordinate_changes: bool = False
     qmmesp: QmmespConfig | None = None
 
     @model_validator(mode="after")

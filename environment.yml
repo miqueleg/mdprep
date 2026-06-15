@@ -16,5 +16,6 @@ dependencies:
   - pytest=9.0.3
   - propka=3.5.1
   - xtb=6.7.1
+  - ambertools=24.8
   - pip:
       - -e .

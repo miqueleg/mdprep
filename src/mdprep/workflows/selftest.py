@@ -12,6 +12,7 @@ from rich.table import Table
 import mdprep
 from mdprep.config.loader import load_manifest
 from mdprep.external.discovery import optional_executable_report
+from mdprep.ambertools.mol2 import read_mol2
 
 
 OPTIONAL_EXECUTABLES = ["tleap", "antechamber", "parmchk2", "propka3", "propka", "xtb"]
@@ -95,6 +96,12 @@ def run_selftest(*, quick: bool = False, console: Console | None = None) -> Self
         )
     )
 
+    try:
+        mol2 = read_mol2(root / "tests" / "data" / "ligands" / "ligand_sub.good.mol2")
+        checks.append(("mol2 parser fixture", len(mol2.atoms) == 2, f"{len(mol2.atoms)} atoms"))
+    except Exception as exc:
+        checks.append(("mol2 parser fixture", False, str(exc)))
+
     table = Table(title="mdprep self-test")
     table.add_column("Check")
     table.add_column("Status")
@@ -114,4 +121,3 @@ def run_selftest(*, quick: bool = False, console: Console | None = None) -> Self
         passed=all(ok for _, ok, _ in checks),
         checked_examples=len(examples),
     )
-

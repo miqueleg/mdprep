@@ -39,4 +39,5 @@ testpaths = ["tests"]
 addopts = "-ra"
 markers = [
   "external: tests requiring optional external executables",
+  "ambertools: tests requiring optional AmberTools executables",
 ]

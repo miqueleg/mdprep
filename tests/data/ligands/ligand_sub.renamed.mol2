@@ -1,0 +1,11 @@
+@<TRIPOS>MOLECULE
+SUB
+ 2 1 0 0 0
+SMALL
+USER_CHARGES
+
+@<TRIPOS>ATOM
+      1 X1           5.0000     5.0000     5.0000 c3          1 SUB        0.100000
+      2 Y1           6.0000     5.0000     5.0000 o           1 SUB       -0.100000
+@<TRIPOS>BOND
+     1    1    2 1

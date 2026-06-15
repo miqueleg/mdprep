@@ -10,7 +10,8 @@ recorded, validated, and reproduced.
 This initial version provides the package scaffold, manifest validation, CLI
 entry points, examples, self-test checks, PDB inspection, safe structure
 normalization, manual protonation handling, PropKa-based automatic residue
-state assignment, and xTB-based neutral histidine tautomer ranking.
+state assignment, xTB-based neutral histidine tautomer ranking, and ligand
+extraction plus starter AmberTools ligand parameter generation.
 
 Planned supported chemistry includes standard amino-acid proteins,
 crystallographic waters, manual and detected disulfides, ASP/GLU/LYS/ARG/HIS
@@ -40,7 +41,8 @@ conda activate mdprep
 ```
 
 The conda environment includes the optional PropKa and xTB executables used by
-`protonation.method: propka` and `protonation.method: propka_xtb_his`.
+`protonation.method: propka` and `protonation.method: propka_xtb_his`, plus
+AmberTools for `antechamber`/`parmchk2` ligand parameter generation.
 
 For a lighter local install:
 
@@ -132,7 +134,45 @@ requested automated workflows fail clearly if an executable is unavailable.
 The external integration test is marked `external` and skips cleanly unless
 `propka3` and `xtb` are installed.
 
-The downstream chemistry-producing commands remain placeholders:
+Run the ligand stage:
+
+```bash
+mdprep prepare system.yaml --stop-after ligands
+```
+
+Task 6 supports two ligand charge/parameter input modes:
+
+- `am1bcc`: extracts each configured ligand residue, runs AmberTools
+  `antechamber`, validates the generated mol2, then runs `parmchk2`.
+- `user_mol2`: validates a user-provided mol2 against the extracted ligand.
+  If `user_frcmod` is provided it is copied; otherwise `parmchk2` is required.
+
+`gas_resp_pyscf` and `qmmesp_pyscf` remain planned and fail clearly at the
+ligand stage. Multiple configured ligands are processed independently; mdprep
+does not reuse charges between ligand instances in this stage. The user must
+provide the correct `net_charge` for every ligand. Atom count, atom names,
+element order, coordinates, residue identity, and charge sum are validated, and
+small mol2 charge residuals are corrected only within a strict tolerance.
+
+The ligand stage writes extracted ligand PDBs, identity files, final mol2 files,
+frcmod files, charge CSVs, validation JSON files, and ligand reports. It does
+not build the final system topology yet.
+
+Ligand troubleshooting:
+
+- If AmberTools is unavailable, install the conda environment from
+  `environment.yml` or add `antechamber` and `parmchk2` to `PATH`.
+- If `antechamber` fails, inspect the ligand-specific stdout/stderr files in
+  `prepared/ligands/<ligand_id>/parameters/`.
+- If charge validation fails, check the manifest `net_charge` and mol2 charges.
+- If atom-name validation fails, verify that the mol2 atom order matches the
+  extracted ligand PDB.
+- If coordinate validation fails, provide a mol2 generated from the same
+  coordinates or explicitly allow coordinate changes in the manifest.
+- Missing ligand hydrogens may cause parameterization failure; provide a
+  chemically complete ligand input when needed.
+
+The downstream full-system build commands remain placeholders:
 
 ```bash
 mdprep prepare system.yaml

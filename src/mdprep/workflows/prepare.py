@@ -15,6 +15,8 @@ import yaml
 from mdprep import __version__
 from mdprep.config.loader import load_manifest
 from mdprep.external.runner import run_command
+from mdprep.ligands.report import write_ligand_reports
+from mdprep.ligands.workflow import LigandStageResult, LigandWorkflowError, run_ligand_stage
 from mdprep.protonation.apply import (
     ProtonationApplicationError,
     ProtonationResult,
@@ -35,6 +37,7 @@ class PrepareResult:
     stage: str
     structure_result: StructureNormalizationResult
     protonation_result: ProtonationResult | None = None
+    ligand_result: LigandStageResult | None = None
 
     @property
     def output_path(self) -> Path | None:
@@ -51,10 +54,13 @@ def prepare_system(
 ) -> PrepareResult:
     if stop_after is None:
         raise PrepareWorkflowError(
-            "Full Amber preparation is not implemented yet; use --stop-after structure or --stop-after protonation."
+            "Full Amber topology generation is not implemented yet; use --stop-after structure, "
+            "--stop-after protonation, or --stop-after ligands."
         )
-    if stop_after not in {"structure", "protonation"}:
-        raise PrepareWorkflowError("Unsupported stop stage; use --stop-after structure or --stop-after protonation.")
+    if stop_after not in {"structure", "protonation", "ligands"}:
+        raise PrepareWorkflowError(
+            "Unsupported stop stage; use --stop-after structure, --stop-after protonation, or --stop-after ligands."
+        )
 
     manifest_file = Path(manifest_path)
     manifest = load_manifest(manifest_file)
@@ -89,7 +95,9 @@ def prepare_system(
 
     protonation_report = None
     protonation_result = None
-    if stop_after == "protonation":
+    ligand_report = None
+    ligand_result = None
+    if stop_after in {"protonation", "ligands"}:
         protonation_pdb = intermediate_dir / "01_protonation_assigned.pdb"
         protonation_result = apply_protonation_stage(
             result.normalized_structure,
@@ -115,7 +123,41 @@ def prepare_system(
             external_executables=_external_executables_from_protonation_report(protonation_report),
         )
 
-    return PrepareResult(stage=stop_after, structure_result=result, protonation_result=protonation_result)
+    if stop_after == "ligands":
+        assert protonation_result is not None
+        ligand_result = run_ligand_stage(
+            protonation_result.structure,
+            manifest,
+            output_dir=output_dir,
+        )
+        ligand_report = write_ligand_reports(
+            ligand_result,
+            json_path=reports_dir / "ligand_report.json",
+            csv_path=reports_dir / "ligand_report.csv",
+            markdown_path=reports_dir / "ligand_report.md",
+        )
+        _write_manifest_lock(
+            manifest=manifest,
+            structure_report=report,
+            path=output_dir / "manifest.lock.yaml",
+            protonation_report=protonation_report,
+            ligand_report=ligand_report,
+        )
+        external_versions = {}
+        if protonation_report is not None:
+            external_versions.update(_external_executables_from_protonation_report(protonation_report))
+        external_versions.update(_external_executables_from_ligand_report(ligand_report))
+        _write_versions(
+            output_dir / "versions.json",
+            external_executables=external_versions,
+        )
+
+    return PrepareResult(
+        stage=stop_after,
+        structure_result=result,
+        protonation_result=protonation_result,
+        ligand_result=ligand_result,
+    )
 
 
 def _write_manifest_lock(
@@ -124,6 +166,7 @@ def _write_manifest_lock(
     structure_report: dict[str, object],
     path: Path,
     protonation_report: dict[str, object] | None = None,
+    ligand_report: dict[str, object] | None = None,
 ) -> None:
     manifest_data = manifest.model_dump(mode="json")  # type: ignore[attr-defined]
     lock_data = {
@@ -172,6 +215,20 @@ def _write_manifest_lock(
                 "solvent": manifest_data["protonation"]["histidine"]["xtb"]["solvent"],
                 "histidine_selections": protonation_report["xtb_histidines"],
             }
+    if ligand_report is not None:
+        lock_data["resolved"]["ligands"] = [
+            {
+                "id": ligand["ligand_id"],
+                "selector": ligand["selector"],
+                "charge_method": ligand["charge_method"],
+                "atom_types": ligand["atom_types"],
+                "final_mol2_path": ligand["final_mol2_path"],
+                "final_frcmod_path": ligand["final_frcmod_path"],
+                "antechamber": ligand["antechamber"],
+                "parmchk2": ligand["parmchk2"],
+            }
+            for ligand in ligand_report["ligands"]
+        ]
     path.write_text(yaml.safe_dump(lock_data, sort_keys=False), encoding="utf-8")
 
 
@@ -205,6 +262,29 @@ def _external_executables_from_protonation_report(
         first = xtb_histidines[0]
         if isinstance(first, dict) and isinstance(first.get("executable"), str):
             executables["xtb"] = first["executable"]
+    return executables
+
+
+def _external_executables_from_ligand_report(
+    ligand_report: dict[str, object],
+) -> dict[str, str]:
+    executables: dict[str, str] = {}
+    ligands = ligand_report.get("ligands")
+    if not isinstance(ligands, list):
+        return executables
+    for ligand in ligands:
+        if not isinstance(ligand, dict):
+            continue
+        antechamber = ligand.get("antechamber")
+        if isinstance(antechamber, dict) and isinstance(antechamber.get("command"), list):
+            command = antechamber["command"]
+            if command:
+                executables["antechamber"] = str(command[0])
+        parmchk2 = ligand.get("parmchk2")
+        if isinstance(parmchk2, dict) and isinstance(parmchk2.get("command"), list):
+            command = parmchk2["command"]
+            if command:
+                executables["parmchk2"] = str(command[0])
     return executables
 
 

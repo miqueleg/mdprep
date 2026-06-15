@@ -17,6 +17,7 @@ def generate_starter_manifest(
     ph: float = 7.0,
     output_dir: str | None = None,
     protonation_method: str = "manual_only",
+    include_ligand_placeholders: bool = False,
 ) -> Path:
     input_path = Path(input_structure)
     target = Path(output_path)
@@ -35,6 +36,7 @@ def generate_starter_manifest(
         water_model=water_model,
         ph=ph,
         protonation_method=protonation_method,
+        include_ligand_placeholders=include_ligand_placeholders,
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(manifest_text, encoding="utf-8")
@@ -51,6 +53,7 @@ def _render_manifest(
     water_model: str,
     ph: float,
     protonation_method: str,
+    include_ligand_placeholders: bool,
 ) -> str:
     lines: list[str] = [
         "# mdprep starter manifest",
@@ -119,9 +122,11 @@ def _render_manifest(
             "ligands:",
         ]
     )
-    if summary.likely_ligands:
+    if summary.likely_ligands and include_ligand_placeholders:
+        lines.append("  # Placeholder ligand entries were generated from likely heterogens.")
+        lines.append("  # Check every net_charge before running ligand parameterization.")
         for residue in summary.likely_ligands:
-            ligand_id = f"{residue.id.resname}_{residue.id.resid}"
+            ligand_id = f"{residue.id.resname.lower()}_{residue.id.resid}"
             lines.extend(
                 [
                     f"  - id: {ligand_id}",
@@ -135,11 +140,17 @@ def _render_manifest(
                     "    atom_types: gaff2",
                     "    charge_method: am1bcc",
                     "    user_mol2: null",
+                    "    user_frcmod: null",
+                    "    preserve_atom_names: true",
+                    "    preserve_coordinates: true",
+                    "    allow_atom_renaming: false",
+                    "    allow_coordinate_changes: false",
                     "    qmmesp: null",
                 ]
             )
     else:
         lines.append("  []")
+        lines.extend(_comment_ligand_placeholders(summary.likely_ligands))
     lines.extend(
         [
             "",
@@ -170,6 +181,42 @@ def _comment_residues(title: str, residues: list[object]) -> list[str]:
     for residue in residues:
         residue_id = residue.id  # type: ignore[attr-defined]
         lines.append(f"#   - {residue_id.display()}")
+    return lines
+
+
+def _comment_ligand_placeholders(residues: list[object]) -> list[str]:
+    if not residues:
+        return [
+            "# Example ligand block:",
+            "#   - id: sub_501",
+            "#     selector: {chain: B, resname: SUB, resid: 501, icode: null}",
+            "#     net_charge: 0  # CHECK THIS VALUE",
+            "#     multiplicity: 1",
+            "#     atom_types: gaff2",
+            "#     charge_method: am1bcc",
+            "#     user_mol2: null",
+            "#     user_frcmod: null",
+        ]
+    lines = [
+        "# Detected ligand placeholder suggestions are commented out by default.",
+        "# Re-run with --include-ligand-placeholders to make them active.",
+        "# Check every net_charge before ligand parameterization.",
+    ]
+    for residue in residues:
+        ligand_id = f"{residue.id.resname.lower()}_{residue.id.resid}"  # type: ignore[attr-defined]
+        residue_id = residue.id  # type: ignore[attr-defined]
+        lines.extend(
+            [
+                f"#   - id: {ligand_id}",
+                f"#     selector: {{chain: {_yaml_string(residue_id.chain_id)}, resname: {residue_id.resname}, resid: {residue_id.resid}, icode: {_yaml_null_or_string(residue_id.icode)}}}",
+                "#     net_charge: 0  # CHECK THIS VALUE",
+                "#     multiplicity: 1",
+                "#     atom_types: gaff2",
+                "#     charge_method: am1bcc",
+                "#     user_mol2: null",
+                "#     user_frcmod: null",
+            ]
+        )
     return lines
 
 

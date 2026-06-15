@@ -148,6 +148,11 @@ def init_command(
         "--output-dir",
         help="Preparation output directory. Defaults to prepared/<input stem>.",
     ),
+    include_ligand_placeholders: bool = typer.Option(
+        False,
+        "--include-ligand-placeholders",
+        help="Add active placeholder ligand blocks for detected ligands. Review net charges before use.",
+    ),
 ) -> None:
     """Create an initial manifest from an input structure."""
 
@@ -170,6 +175,7 @@ def init_command(
             ph=ph,
             output_dir=output_dir,
             protonation_method=protonation_method,
+            include_ligand_placeholders=include_ligand_placeholders,
         )
     except (FileExistsError, FileNotFoundError, PdbParseError, ValueError) as exc:
         console.print(f"[red]Error:[/red] {exc}")
@@ -183,7 +189,7 @@ def prepare_command(
     stop_after: str | None = typer.Option(
         None,
         "--stop-after",
-        help="Stop after a supported workflow stage: structure or protonation.",
+        help="Stop after a supported workflow stage: structure, protonation, or ligands.",
     ),
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite mdprep-generated outputs."),
     quiet: bool = typer.Option(False, "--quiet", help="Reduce command output."),

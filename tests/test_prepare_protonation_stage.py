@@ -113,4 +113,4 @@ def test_full_prepare_without_stop_after_fails_clearly(tmp_path):
     result = CliRunner().invoke(app, ["prepare", str(manifest)])
 
     assert result.exit_code != 0
-    assert "Full Amber preparation is not implemented yet" in result.output
+    assert "Full Amber topology generation is not implemented yet" in result.output
