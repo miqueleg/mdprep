@@ -12,6 +12,9 @@ preparation.
 - User overrides always win over automated predictions.
 - Do not silently guess catalytic chemistry, protonation, ligand charge, or
   metal-center behavior.
+- Structure normalization must never delete unknown heterogens silently; require
+  explicit manifest configuration.
+- Generated manifests must validate with `mdprep config-check`.
 - Unsupported chemistry must fail with a clear error.
 - External commands must go through `mdprep.external.runner`.
 - External command records must include command, working directory, return code,
@@ -45,4 +48,3 @@ python -m mdprep.cli --help
 python -m mdprep.cli config-check examples/*.yaml
 python -m mdprep.cli selftest --quick
 ```
-

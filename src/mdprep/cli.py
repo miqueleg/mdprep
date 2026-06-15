@@ -12,9 +12,11 @@ from rich.table import Table
 from mdprep import __version__
 from mdprep.config.loader import load_manifest
 from mdprep.structure.inspect import InspectionSummary
+from mdprep.structure.normalize import StructureNormalizationError
 from mdprep.structure.pdb import PdbParseError, VALID_ALTLOC_POLICIES
+from mdprep.workflows.init import generate_starter_manifest
 from mdprep.workflows.inspect import inspect_structure
-from mdprep.workflows.prepare import prepare_system
+from mdprep.workflows.prepare import PrepareWorkflowError, prepare_system
 from mdprep.workflows.selftest import run_selftest
 from mdprep.workflows.validate import validate_system
 
@@ -127,26 +129,72 @@ def inspect_command(
 def init_command(
     input_structure: Path = typer.Argument(..., help="Input PDB/mmCIF file."),
     output: Path = typer.Option(Path("system.yaml"), "-o", "--output", help="Output YAML path."),
+    overwrite: bool = typer.Option(
+        False,
+        "--overwrite",
+        "--force",
+        help="Overwrite an existing output manifest.",
+    ),
+    forcefield: str = typer.Option("ff19SB", "--forcefield", help="Protein force field."),
+    water_model: str = typer.Option("OPC", "--water-model", help="Water model."),
+    ph: float = typer.Option(7.0, "--ph", help="Target pH for starter manifest defaults."),
+    output_dir: str | None = typer.Option(
+        None,
+        "--output-dir",
+        help="Preparation output directory. Defaults to prepared/<input stem>.",
+    ),
 ) -> None:
     """Create an initial manifest from an input structure."""
 
-    message = (
-        f"mdprep init is not implemented yet for {input_structure} -> {output}; "
-        "Task 1 only bootstraps the CLI and config validation."
-    )
-    console.print(f"[yellow]{message}[/yellow]")
-    raise typer.Exit(1)
+    if forcefield not in {"ff14SB", "ff19SB"}:
+        console.print("[red]Error:[/red] --forcefield must be ff14SB or ff19SB")
+        raise typer.Exit(1)
+    if water_model not in {"TIP3P", "OPC"}:
+        console.print("[red]Error:[/red] --water-model must be TIP3P or OPC")
+        raise typer.Exit(1)
+    try:
+        manifest_path = generate_starter_manifest(
+            input_structure,
+            output_path=output,
+            overwrite=overwrite,
+            forcefield=forcefield,
+            water_model=water_model,
+            ph=ph,
+            output_dir=output_dir,
+        )
+    except (FileExistsError, FileNotFoundError, PdbParseError, ValueError) as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"Wrote starter manifest: {manifest_path}")
 
 
 @app.command("prepare")
-def prepare_command(manifest: Path = typer.Argument(..., help="YAML manifest path.")) -> None:
+def prepare_command(
+    manifest: Path = typer.Argument(..., help="YAML manifest path."),
+    stop_after: str | None = typer.Option(
+        None,
+        "--stop-after",
+        help="Stop after a supported workflow stage. Currently only: structure.",
+    ),
+    overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite mdprep-generated outputs."),
+    quiet: bool = typer.Option(False, "--quiet", help="Reduce command output."),
+) -> None:
     """Prepare an Amber system from a manifest."""
 
     try:
-        prepare_system(manifest)
-    except NotImplementedError as exc:
-        console.print(f"[yellow]{exc}[/yellow]")
+        result = prepare_system(manifest, stop_after=stop_after, overwrite=overwrite)
+    except (
+        PrepareWorkflowError,
+        StructureNormalizationError,
+        FileExistsError,
+        FileNotFoundError,
+        PdbParseError,
+        ValueError,
+    ) as exc:
+        console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from exc
+    if not quiet:
+        console.print(f"Wrote normalized PDB: {result.output_path}")
 
 
 @app.command("validate")

@@ -64,14 +64,6 @@ Inspect a PDB structure:
 mdprep inspect input.pdb
 ```
 
-The chemistry-producing commands remain placeholders:
-
-```bash
-mdprep init input.pdb -o system.yaml
-mdprep prepare system.yaml
-mdprep validate prepared/final/system.prmtop prepared/final/system.inpcrd
-```
-
 `mdprep inspect` is functional for PDB input. It reports atom and residue
 counts, chains, waters, likely ligands or cofactors, histidines, titratable
 residues, possible disulfides, alternate-location handling, and multi-model
@@ -79,6 +71,34 @@ warnings. Machine-readable output is available with:
 
 ```bash
 mdprep inspect input.pdb --json
+```
+
+Create a starter manifest:
+
+```bash
+mdprep init input.pdb -o system.yaml
+mdprep config-check system.yaml
+```
+
+Run the currently supported safe preparation stage:
+
+```bash
+mdprep prepare system.yaml --stop-after structure
+```
+
+This stage resolves alternate locations, keeps or removes crystal waters
+according to the manifest, validates configured ligand selectors, refuses
+unknown heterogens unless the manifest explicitly allows removing them, writes
+a normalized PDB, and produces structure reports.
+
+This stage does not assign protonation states, parameterize ligands, derive
+QM-based charges, run AmberTools, or build Amber files.
+
+The downstream chemistry-producing commands remain placeholders:
+
+```bash
+mdprep prepare system.yaml
+mdprep validate prepared/final/system.prmtop prepared/final/system.inpcrd
 ```
 
 ## Planned Workflow
