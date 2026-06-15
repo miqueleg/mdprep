@@ -107,10 +107,36 @@ class DisulfideConfig(StrictModel):
     forbid: list[DisulfidePair] = Field(default_factory=list)
 
 
+class QmEspGridConfig(StrictModel):
+    type: Literal["connolly"] = "connolly"
+    vdw_scale_factors: list[float] = Field(default_factory=lambda: [1.4, 1.6, 1.8, 2.0])
+    points_per_atom_per_shell: int = Field(default=60, ge=1)
+    exclude_inside_vdw_scale: float = Field(default=1.2, gt=0)
+    max_points: int = Field(default=8000, ge=10)
+
+
 class RespFittingConfig(StrictModel):
-    backend: Literal["auto", "psiresp", "native"] = "auto"
+    backend: Literal["auto", "psiresp", "native"] = "native"
     total_charge_constraint: bool = True
+    restraint: Literal["none", "resp"] = "resp"
+    restraint_a: float = Field(default=0.0005, ge=0)
+    restraint_b: float = Field(default=0.1, gt=0)
+    max_iter: int = Field(default=25, ge=1)
+    convergence: float = Field(default=1.0e-6, gt=0)
     stage_2: bool = True
+
+
+class QmmespEnvironmentConfig(StrictModel):
+    include_protein: bool = True
+    include_waters: bool = True
+    include_other_ligands: bool = True
+    exclude_self_ligand: bool = True
+
+    @model_validator(mode="after")
+    def require_target_exclusion(self) -> "QmmespEnvironmentConfig":
+        if not self.exclude_self_ligand:
+            raise ValueError("qmmesp.environment.exclude_self_ligand must be true; target ligand self-embedding is not allowed")
+        return self
 
 
 class QmmespConfig(StrictModel):
@@ -118,7 +144,13 @@ class QmmespConfig(StrictModel):
     method: str = "HF"
     basis: str = "6-31G*"
     embedding_cutoff_angstrom: float = Field(default=12.0, gt=0)
+    scf_charge: int | None = None
+    scf_spin: int | None = Field(default=None, ge=0)
+    max_cycle: int = Field(default=100, ge=1)
+    conv_tol: float = Field(default=1.0e-9, gt=0)
+    grid: QmEspGridConfig = Field(default_factory=QmEspGridConfig)
     resp_fitting: RespFittingConfig = Field(default_factory=RespFittingConfig)
+    environment: QmmespEnvironmentConfig = Field(default_factory=QmmespEnvironmentConfig)
 
 
 class LigandConfig(StrictModel):
@@ -140,8 +172,8 @@ class LigandConfig(StrictModel):
     def validate_charge_inputs(self) -> "LigandConfig":
         if self.charge_method == "user_mol2" and not self.user_mol2:
             raise ValueError("charge_method: user_mol2 requires user_mol2")
-        if self.charge_method == "qmmesp_pyscf" and self.qmmesp is None:
-            raise ValueError("charge_method: qmmesp_pyscf requires qmmesp")
+        if self.charge_method in {"gas_resp_pyscf", "qmmesp_pyscf"} and self.qmmesp is None:
+            raise ValueError(f"charge_method: {self.charge_method} requires qmmesp")
         return self
 
 

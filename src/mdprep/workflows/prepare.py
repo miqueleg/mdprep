@@ -30,6 +30,7 @@ from mdprep.structure.normalize import StructureNormalizationResult, normalize_s
 from mdprep.structure.writer import write_pdb
 from mdprep.validation.openmm_check import openmm_version
 from mdprep.validation.parmed_check import parmed_version
+from mdprep.qm.pyscf_runner import pyscf_version
 from mdprep.validation.topology import FinalValidationError, validate_final_outputs, write_validation_reports
 
 
@@ -138,6 +139,7 @@ def prepare_system(
             protonation_result.structure,
             manifest,
             output_dir=output_dir,
+            protonation_result=protonation_result,
         )
         ligand_report = write_ligand_reports(
             ligand_result,
@@ -159,6 +161,7 @@ def prepare_system(
         _write_versions(
             output_dir / "versions.json",
             external_executables=external_versions,
+            include_optional_python_packages=True,
         )
 
     if stop_after == "tleap":
@@ -285,6 +288,8 @@ def _write_manifest_lock(
                 "final_frcmod_path": ligand["final_frcmod_path"],
                 "antechamber": ligand["antechamber"],
                 "parmchk2": ligand["parmchk2"],
+                "provisional_mol2_path": ligand.get("provisional_mol2_path"),
+                "qm": ligand.get("qm"),
             }
             for ligand in ligand_report["ligands"]
         ]
@@ -334,6 +339,7 @@ def _write_versions(
         versions["python_packages"] = {
             "parmed": parmed_version(),
             "openmm": openmm_version(),
+            "pyscf": pyscf_version(),
         }
     path.write_text(json.dumps(versions, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 

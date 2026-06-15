@@ -41,6 +41,13 @@ preparation.
   is unavailable.
 - External `tleap`, ParmEd, and OpenMM tests must skip cleanly when optional
   executables or libraries are unavailable.
+- PySCF is the primary QM backend for ligand RESP/ESP and QMMESP-like charges.
+- Do not add ORCA or Multiwfn in this task series.
+- RESP/ESP fitting must be deterministic and tested.
+- QMMESP charges must fit only target ligand atom charges.
+- MM point charges are only for density polarization.
+- Never include environment point charges as ligand charge centers.
+- External PySCF tests must skip cleanly if PySCF is unavailable.
 - All user-facing features need tests and docs.
 - All example YAML files must validate in tests.
 

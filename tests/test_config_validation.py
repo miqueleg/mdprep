@@ -142,3 +142,51 @@ def test_qmmesp_pyscf_requires_qmmesp_block():
         ManifestConfig.model_validate(data)
 
     assert "charge_method: qmmesp_pyscf requires qmmesp" in str(excinfo.value)
+
+
+def test_gas_resp_pyscf_requires_qmmesp_block():
+    data = base_manifest()
+    data["ligands"] = [
+        {
+            "id": "SUB_501",
+            "selector": {"chain": "B", "resname": "SUB", "resid": 501, "icode": None},
+            "net_charge": 0,
+            "multiplicity": 1,
+            "atom_types": "gaff2",
+            "charge_method": "gas_resp_pyscf",
+            "user_mol2": None,
+            "qmmesp": None,
+        }
+    ]
+
+    with pytest.raises(ValidationError) as excinfo:
+        ManifestConfig.model_validate(data)
+
+    assert "charge_method: gas_resp_pyscf requires qmmesp" in str(excinfo.value)
+
+
+def test_qmmesp_rejects_self_ligand_embedding():
+    data = base_manifest()
+    data["ligands"] = [
+        {
+            "id": "SUB_501",
+            "selector": {"chain": "B", "resname": "SUB", "resid": 501, "icode": None},
+            "net_charge": 0,
+            "multiplicity": 1,
+            "atom_types": "gaff2",
+            "charge_method": "qmmesp_pyscf",
+            "user_mol2": None,
+            "qmmesp": {
+                "qm_engine": "pyscf",
+                "method": "HF",
+                "basis": "STO-3G",
+                "embedding_cutoff_angstrom": 12.0,
+                "environment": {"exclude_self_ligand": False},
+            },
+        }
+    ]
+
+    with pytest.raises(ValidationError) as excinfo:
+        ManifestConfig.model_validate(data)
+
+    assert "target ligand self-embedding is not allowed" in str(excinfo.value)

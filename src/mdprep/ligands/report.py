@@ -97,6 +97,23 @@ def _render_markdown(report: dict[str, Any]) -> str:
             lines.append(f"- antechamber command: `{' '.join(item['antechamber']['command'])}`")
         if item.get("parmchk2"):
             lines.append(f"- parmchk2 command: `{' '.join(item['parmchk2']['command'])}`")
+        if item.get("qm"):
+            qm = item["qm"]
+            lines.extend(
+                [
+                    "- PySCF charge derivation:",
+                    f"  - Method: `{qm['method']}`",
+                    f"  - Output directory: `{qm['qm_dir']}`",
+                    f"  - Grid points: {qm['grid_point_count']}",
+                    f"  - Fitted charge sum: {qm['fit_result']['charge_sum_final']}",
+                ]
+            )
+            if qm["fit_result"].get("confirmation"):
+                lines.append(f"  - Interpretation: {qm['fit_result']['confirmation']}")
+            if qm.get("embedding_summary"):
+                embedding = qm["embedding_summary"]
+                lines.append(f"  - MM point charges: {embedding['point_charge_count_after_cutoff']}")
+                lines.append(f"  - Target atom count: {embedding['target_atom_count']}")
         warnings = item.get("warnings") or []
         lines.append("- Warnings: " + ("; ".join(warnings) if warnings else "None"))
         lines.append("")

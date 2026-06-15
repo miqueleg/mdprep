@@ -43,4 +43,6 @@ markers = [
   "tleap: tests requiring optional tleap executable",
   "openmm: tests requiring optional OpenMM package",
   "parmed: tests requiring optional ParmEd package",
+  "pyscf: tests requiring optional PySCF package",
+  "qmmesp: tests requiring optional QMMESP-style integration dependencies",
 ]

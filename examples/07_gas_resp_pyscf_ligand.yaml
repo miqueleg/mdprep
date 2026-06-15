@@ -1,7 +1,7 @@
 project:
-  name: qmmesp_pyscf_ligand
-  input_structure: data/protein_qm_ligand.pdb
-  output_dir: prepared/qmmesp_pyscf_ligand
+  name: gas_resp_pyscf_ligand
+  input_structure: data/protein_gas_resp_ligand.pdb
+  output_dir: prepared/gas_resp_pyscf_ligand
 
 structure:
   keep_crystal_waters: true
@@ -16,7 +16,7 @@ protein:
 
 protonation:
   ph: 7.0
-  method: propka_xtb_his
+  method: manual_only
   overrides: []
   histidine:
     neutral_tautomer_method: xtb
@@ -24,7 +24,7 @@ protonation:
       executable: xtb
       model: gfn2
       mode: opt
-      opt_level: normal
+      opt_level: loose
       solvent: water
       cutoff_angstrom: 5.0
       extra_args: []
@@ -42,10 +42,10 @@ ligands:
       resname: SUB
       resid: 501
       icode: null
-    net_charge: -1
+    net_charge: 0
     multiplicity: 1
     atom_types: gaff2
-    charge_method: qmmesp_pyscf
+    charge_method: gas_resp_pyscf
     user_mol2: null
     qmmesp:
       qm_engine: pyscf

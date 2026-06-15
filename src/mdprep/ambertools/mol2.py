@@ -107,6 +107,23 @@ def write_mol2(mol2: Mol2File, path: str | Path) -> None:
     output.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_mol2_with_charges(
+    mol2_path: str | Path,
+    charges: list[float],
+    output_path: str | Path,
+) -> None:
+    mol2 = read_mol2(mol2_path)
+    if len(charges) != len(mol2.atoms):
+        raise Mol2Error(
+            f"Charge count {len(charges)} does not match mol2 atom count {len(mol2.atoms)}."
+        )
+    mol2.atoms = [
+        replace(atom, charge=float(charge))
+        for atom, charge in zip(mol2.atoms, charges, strict=True)
+    ]
+    write_mol2(mol2, output_path)
+
+
 def validate_and_write_final_mol2(
     *,
     mol2_path: str | Path,

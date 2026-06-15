@@ -11,11 +11,15 @@ from rich.table import Table
 
 import mdprep
 from mdprep.ambertools.mol2 import read_mol2
+from mdprep.charges.esp_grid import generate_connolly_grid
+from mdprep.charges.resp_fit import fit_resp_charges
 from mdprep.config.loader import load_manifest
 from mdprep.external.discovery import optional_executable_report
 from mdprep.leap.forcefields import protein_leaprc, water_box, water_leaprc
+from mdprep.qm.pyscf_runner import pyscf_available
 from mdprep.validation.openmm_check import openmm_available
 from mdprep.validation.parmed_check import parmed_available
+import numpy as np
 
 
 OPTIONAL_EXECUTABLES = ["tleap", "antechamber", "parmchk2", "propka3", "propka", "xtb"]
@@ -117,6 +121,45 @@ def run_selftest(*, quick: bool = False, console: Console | None = None) -> Self
 
     checks.append(("ParmEd import", True, "available" if parmed_available() else "not available"))
     checks.append(("OpenMM import", True, "available" if openmm_available() else "not available"))
+    checks.append(("PySCF import", True, "available" if pyscf_available() else "not available"))
+
+    try:
+        coords = np.asarray([[0.0, 0.0, 0.0], [0.96, 0.0, 0.0]], dtype=float)
+        grid_a = generate_connolly_grid(
+            elements=["O", "H"],
+            coordinates=coords,
+            vdw_scale_factors=[1.4],
+            points_per_atom_per_shell=8,
+            exclude_inside_vdw_scale=1.1,
+            max_points=100,
+        )
+        grid_b = generate_connolly_grid(
+            elements=["O", "H"],
+            coordinates=coords,
+            vdw_scale_factors=[1.4],
+            points_per_atom_per_shell=8,
+            exclude_inside_vdw_scale=1.1,
+            max_points=100,
+        )
+        checks.append(("ESP grid determinism", bool(np.allclose(grid_a.points, grid_b.points)), f"{len(grid_a.points)} points"))
+    except Exception as exc:
+        checks.append(("ESP grid determinism", False, str(exc)))
+
+    try:
+        atom_coords = np.asarray([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=float)
+        grid_coords = np.asarray([[0.0, 3.0, 0.0], [2.0, 3.0, 0.0], [1.0, 3.5, 0.0], [1.0, -3.0, 0.0]], dtype=float)
+        true_charges = np.asarray([-0.3, 0.3], dtype=float)
+        esp = (1.0 / np.linalg.norm(grid_coords[:, None, :] - atom_coords[None, :, :], axis=2)) @ true_charges
+        fit = fit_resp_charges(
+            atom_coordinates=atom_coords,
+            grid_coordinates=grid_coords,
+            esp_values=esp,
+            total_charge=0.0,
+            restraint="none",
+        )
+        checks.append(("Native RESP/ESP fit", bool(abs(fit.charge_sum_final) < 1.0e-8), f"rms={fit.rms_error:.3e}"))
+    except Exception as exc:
+        checks.append(("Native RESP/ESP fit", False, str(exc)))
 
     table = Table(title="mdprep self-test")
     table.add_column("Check")

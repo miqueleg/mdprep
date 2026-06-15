@@ -19,5 +19,6 @@ dependencies:
   - ambertools=24.8
   - parmed=4.3.1
   - openmm
+  - pyscf
   - pip:
       - -e .

@@ -6,15 +6,17 @@ import re
 from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from mdprep.ambertools.mol2 import Mol2Error, read_mol2
 from mdprep.config.models import ManifestConfig
-from mdprep.ligands.workflow import LigandStageResult
 from mdprep.protonation.apply import ProtonationRecord, ProtonationResult
-from mdprep.structure.classify import is_water_residue
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord
 from mdprep.structure.selectors import SelectorError, resolve_residue_selector
 from mdprep.structure.writer import write_pdb
+
+if TYPE_CHECKING:
+    from mdprep.ligands.workflow import LigandStageResult
 
 
 class LeapResidueError(ValueError):

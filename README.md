@@ -143,19 +143,35 @@ Run the ligand stage:
 mdprep prepare system.yaml --stop-after ligands
 ```
 
-Task 6 supports two ligand charge/parameter input modes:
+The ligand stage supports four ligand charge/parameter input modes:
 
 - `am1bcc`: extracts each configured ligand residue, runs AmberTools
   `antechamber`, validates the generated mol2, then runs `parmchk2`.
 - `user_mol2`: validates a user-provided mol2 against the extracted ligand.
   If `user_frcmod` is provided it is copied; otherwise `parmchk2` is required.
+- `gas_resp_pyscf`: uses AmberTools only for GAFF/GAFF2 atom types and bonded
+  terms, then replaces provisional AM1-BCC charges with native RESP/ESP-like
+  charges fitted from a PySCF gas-phase ligand calculation.
+- `qmmesp_pyscf`: builds a provisional dry Amber system, extracts non-target
+  MM point charges with ParmEd, polarizes the target ligand density with PySCF,
+  fits charges only on target ligand atoms, and rebuilds later stages with the
+  fitted target charges.
 
-`gas_resp_pyscf` and `qmmesp_pyscf` remain planned and fail clearly at the
-ligand stage. Multiple configured ligands are processed independently; mdprep
-does not reuse charges between ligand instances in this stage. The user must
-provide the correct `net_charge` for every ligand. Atom count, atom names,
-element order, coordinates, residue identity, and charge sum are validated, and
-small mol2 charge residuals are corrected only within a strict tolerance.
+Multiple configured ligands are processed independently; mdprep does not reuse
+charges between ligand instances in this stage. The user must provide the
+correct `net_charge` for every ligand. Atom count, atom names, element order,
+coordinates, residue identity, and charge sum are validated, and small mol2
+charge residuals are corrected only within a strict tolerance.
+
+PySCF ligand-charge workflows use a `qmmesp:` manifest block for QM method,
+basis, ESP-grid, fitting, and environment settings. For gas-phase RESP, the
+environment options are ignored. For QMMESP-like charges, the MM environment is
+used only to polarize the target ligand electron density; environment point
+charges are never fitted as ligand charge centers and are never written into
+the ligand mol2. The fitting target is the polarized target-ligand QM ESP, not
+the total protein-plus-ligand electrostatic field compressed into ligand
+charges. AM1-BCC charges are provisional for PySCF workflows and are replaced
+in the final mol2.
 
 The ligand stage writes extracted ligand PDBs, identity files, final mol2
 files, frcmod files, charge CSVs, validation JSON files, and ligand reports.
@@ -173,6 +189,19 @@ Ligand troubleshooting:
   coordinates or explicitly allow coordinate changes in the manifest.
 - Missing ligand hydrogens may cause parameterization failure; provide a
   chemically complete ligand input when needed.
+- If PySCF is unavailable, install the conda environment from
+  `environment.yml` or add PySCF to the active Python environment.
+- If SCF fails to converge, inspect the ligand-specific `qm/` directory and
+  consider a smaller test basis or a corrected ligand structure.
+- If ESP-grid generation fails, adjust the manifest grid settings or inspect
+  ligand atom elements.
+- If the ESP fit is poor, inspect `fit_report.json`; equivalent-atom
+  constraints are not implemented in v0.1.
+- If QMMESP mapping is ambiguous, use unique ligand residue names/selectors.
+- If ParmEd is unavailable, `qmmesp_pyscf` cannot extract reliable MM point
+  charges.
+- If too few MM point charges are included, increase the embedding cutoff or
+  check environment include/exclude settings.
 
 Run the final Amber build:
 
@@ -215,7 +244,7 @@ when importable to load the topology and coordinates and record total charge.
 OpenMM is used when requested and importable to compute a finite potential
 energy sanity check; no minimization or production simulation is run.
 
-PySCF RESP/QMMESP ligand charges are still planned for a later task.
+PySCF is the only QM backend in v0.1. ORCA and Multiwfn are not required.
 Noncanonical residues, covalent ligands, and bonded metal centers remain
 unsupported.
 
