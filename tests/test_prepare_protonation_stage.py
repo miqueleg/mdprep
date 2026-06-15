@@ -5,6 +5,7 @@ import yaml
 from typer.testing import CliRunner
 
 from mdprep.cli import app
+from mdprep.protonation.propka import PropkaExecutionError
 from mdprep.structure.pdb import read_pdb
 from tests.test_manual_protonation import override
 from tests.test_structure_normalize import manifest_data
@@ -64,25 +65,39 @@ def test_protonation_reports_contain_changes_and_csv_columns(tmp_path):
             "original_resname",
             "final_resname",
             "source",
+            "pka",
+            "ph",
             "reason",
             "changed",
         ]
 
 
-def test_automated_propka_method_fails_at_protonation_stage(tmp_path):
+def test_automated_propka_method_fails_clearly_if_propka_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "mdprep.protonation.apply.run_propka_workflow",
+        lambda structure, manifest, work_dir: (_ for _ in ()).throw(
+            PropkaExecutionError("PropKa executable not found. Searched: propka3, propka")
+        ),
+    )
     manifest, _ = write_manifest(tmp_path, method="propka")
     result = CliRunner().invoke(app, ["prepare", str(manifest), "--stop-after", "protonation"])
 
     assert result.exit_code != 0
-    assert "Automated protonation is not implemented yet" in result.output
+    assert "PropKa executable not found" in result.output
 
 
-def test_automated_propka_xtb_method_fails_at_protonation_stage(tmp_path):
+def test_automated_propka_xtb_method_fails_clearly_if_propka_missing(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        "mdprep.protonation.apply.run_propka_workflow",
+        lambda structure, manifest, work_dir: (_ for _ in ()).throw(
+            PropkaExecutionError("PropKa executable not found. Searched: propka3, propka")
+        ),
+    )
     manifest, _ = write_manifest(tmp_path, method="propka_xtb_his")
     result = CliRunner().invoke(app, ["prepare", str(manifest), "--stop-after", "protonation"])
 
     assert result.exit_code != 0
-    assert "Automated protonation is not implemented yet" in result.output
+    assert "PropKa executable not found" in result.output
 
 
 def test_structure_stage_still_works_with_future_automated_method(tmp_path):
@@ -99,4 +114,3 @@ def test_full_prepare_without_stop_after_fails_clearly(tmp_path):
 
     assert result.exit_code != 0
     assert "Full Amber preparation is not implemented yet" in result.output
-

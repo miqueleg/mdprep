@@ -14,5 +14,7 @@ dependencies:
   - scipy=1.17.1
   - pandas=3.0.3
   - pytest=9.0.3
+  - propka=3.5.1
+  - xtb=6.7.1
   - pip:
       - -e .

@@ -16,8 +16,13 @@ preparation.
   explicit manifest configuration.
 - Generated manifests must validate with `mdprep config-check`.
 - Every residue rename must be recorded in reports.
-- Automated protonation must not be silently skipped; fail clearly until the
-  relevant backend is implemented.
+- Automated protonation must not be silently skipped; fail clearly when a
+  requested backend is unavailable or cannot produce an unambiguous assignment.
+- Manual overrides always override PropKa and xTB decisions.
+- PropKa/xTB tests must skip cleanly or use fakes if executables are
+  unavailable.
+- Temporary xTB tautomer hydrogens must never be written to the final prepared
+  PDB.
 - Unsupported chemistry must fail with a clear error.
 - External commands must go through `mdprep.external.runner`.
 - External command records must include command, working directory, return code,
@@ -29,8 +34,8 @@ preparation.
 
 ## Current v0.1 Limits
 
-Do not implement real chemistry during bootstrap work. Build the manifest,
-CLI, examples, tests, and clean failure modes first.
+Do not implement ligand parameterization, QM charge derivation, or final Amber
+topology generation until the corresponding task explicitly requests it.
 
 Explicitly unsupported for v0.1:
 

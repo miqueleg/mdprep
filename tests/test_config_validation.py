@@ -91,17 +91,15 @@ def test_invalid_ligand_charge_method_fails():
         ManifestConfig.model_validate(data)
 
 
-def test_gxtb_opt_mode_fails_with_expected_message():
+def test_gxtb_opt_mode_is_allowed():
     data = base_manifest()
     data["protonation"]["histidine"]["xtb"]["model"] = "gxtb"
     data["protonation"]["histidine"]["xtb"]["mode"] = "opt"
 
-    with pytest.raises(ValidationError) as excinfo:
-        ManifestConfig.model_validate(data)
+    manifest = ManifestConfig.model_validate(data)
 
-    assert "g-xTB optimization mode is not supported in mdprep v0.1; use mode: sp." in str(
-        excinfo.value
-    )
+    assert manifest.protonation.histidine.xtb.model == "gxtb"
+    assert manifest.protonation.histidine.xtb.mode == "opt"
 
 
 def test_user_mol2_requires_path():

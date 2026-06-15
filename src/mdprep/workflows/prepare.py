@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import platform
 import shutil
+import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,7 @@ import yaml
 
 from mdprep import __version__
 from mdprep.config.loader import load_manifest
+from mdprep.external.runner import run_command
 from mdprep.protonation.apply import (
     ProtonationApplicationError,
     ProtonationResult,
@@ -108,6 +110,10 @@ def prepare_system(
             path=output_dir / "manifest.lock.yaml",
             protonation_report=protonation_report,
         )
+        _write_versions(
+            output_dir / "versions.json",
+            external_executables=_external_executables_from_protonation_report(protonation_report),
+        )
 
     return PrepareResult(stage=stop_after, structure_result=result, protonation_result=protonation_result)
 
@@ -143,17 +149,82 @@ def _write_manifest_lock(
             "ph": protonation_report["ph"],
             "applied_manual_overrides": protonation_report["manual_overrides_applied"],
             "applied_disulfide_assignments": protonation_report["disulfide_assignments_applied"],
+            "input_state_assignments": protonation_report["input_state_assignments_applied"],
+            "propka_assignments": protonation_report["propka_assignments_applied"],
+            "xtb_assignments": protonation_report["xtb_assignments_applied"],
             "hydrogens_removed": protonation_report["hydrogen_atoms_removed"],
             "final_protonation_pdb_path": protonation_report["output_protonation_pdb_path"],
         }
+        if protonation_report.get("propka") is not None:
+            propka = protonation_report["propka"]
+            lock_data["resolved"]["protonation"]["propka"] = {
+                "executable": propka["executable"],
+                "command": propka["command"],
+                "output_pka_path": propka["output_pka_path"],
+                "parsed_pkas_path": propka["parsed_pkas_path"],
+            }
+        if protonation_report.get("xtb_histidines"):
+            manifest_data = manifest.model_dump(mode="json")  # type: ignore[attr-defined]
+            lock_data["resolved"]["protonation"]["xtb"] = {
+                "executable": protonation_report["xtb_histidines"][0]["executable"],
+                "model": manifest_data["protonation"]["histidine"]["xtb"]["model"],
+                "mode": manifest_data["protonation"]["histidine"]["xtb"]["mode"],
+                "solvent": manifest_data["protonation"]["histidine"]["xtb"]["solvent"],
+                "histidine_selections": protonation_report["xtb_histidines"],
+            }
     path.write_text(yaml.safe_dump(lock_data, sort_keys=False), encoding="utf-8")
 
 
-def _write_versions(path: Path) -> None:
+def _write_versions(
+    path: Path,
+    *,
+    external_executables: dict[str, str] | None = None,
+) -> None:
     versions = {
         "mdprep": __version__,
         "python": sys.version,
         "platform": platform.platform(),
         "external_tools_required": [],
+        "external_versions": {
+            name: _external_version(executable)
+            for name, executable in (external_executables or {}).items()
+        },
     }
     path.write_text(json.dumps(versions, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _external_executables_from_protonation_report(
+    protonation_report: dict[str, object],
+) -> dict[str, str]:
+    executables: dict[str, str] = {}
+    propka = protonation_report.get("propka")
+    if isinstance(propka, dict) and isinstance(propka.get("executable"), str):
+        executables["propka"] = propka["executable"]
+    xtb_histidines = protonation_report.get("xtb_histidines")
+    if isinstance(xtb_histidines, list) and xtb_histidines:
+        first = xtb_histidines[0]
+        if isinstance(first, dict) and isinstance(first.get("executable"), str):
+            executables["xtb"] = first["executable"]
+    return executables
+
+
+def _external_version(executable: str) -> dict[str, object]:
+    try:
+        result = run_command([executable, "--version"], timeout=5.0)
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return {"executable": executable, "version": "unknown"}
+    text = (result.stdout or result.stderr).strip()
+    version = _version_line(text)
+    return {
+        "executable": executable,
+        "version": version,
+        "returncode": result.returncode,
+    }
+
+
+def _version_line(text: str) -> str:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    for line in lines:
+        if "version" in line.lower():
+            return line
+    return lines[0] if lines else "unknown"

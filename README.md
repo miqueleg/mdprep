@@ -8,8 +8,9 @@ recorded, validated, and reproduced.
 ## v0.1 Scope
 
 This initial version provides the package scaffold, manifest validation, CLI
-entry points, examples, and self-test checks. Real chemistry workflows will be
-implemented in later tasks.
+entry points, examples, self-test checks, PDB inspection, safe structure
+normalization, manual protonation handling, PropKa-based automatic residue
+state assignment, and xTB-based neutral histidine tautomer ranking.
 
 Planned supported chemistry includes standard amino-acid proteins,
 crystallographic waters, manual and detected disulfides, ASP/GLU/LYS/ARG/HIS
@@ -37,6 +38,9 @@ Create the development environment with conda or mamba:
 mamba env create -f environment.yml
 conda activate mdprep
 ```
+
+The conda environment includes the optional PropKa and xTB executables used by
+`protonation.method: propka` and `protonation.method: propka_xtb_his`.
 
 For a lighter local install:
 
@@ -94,22 +98,39 @@ a normalized PDB, and produces structure reports.
 This stage does not assign protonation states, parameterize ligands, derive
 QM-based charges, run AmberTools, or build Amber files.
 
-Run the manual protonation stage:
+Run the protonation stage:
 
 ```bash
 mdprep prepare system.yaml --stop-after protonation
 ```
 
-For now this stage supports only `protonation.method: manual_only`. It applies
-manual residue-state overrides, assigns disulfide-linked cysteines to `CYX`
-from configured or detected pairs, optionally removes input hydrogens according
-to `structure.remove_input_hydrogens`, writes
-`intermediate/01_protonation_assigned.pdb`, and produces JSON, CSV, and
-Markdown protonation reports. It does not add hydrogens.
+Supported protonation modes are:
 
-PropKa and xTB/GFN2 execution are planned for the next task. Automated
-protonation methods are schema-valid but intentionally fail at the protonation
-stage until that implementation exists.
+- `manual_only`: applies only user overrides and disulfide `CYX` assignment.
+- `propka`: runs PropKa and assigns pH-dependent ASP/GLU/CYS/LYS/HIS states,
+  but requires every neutral HIS to already be HID/HIE by input state or manual
+  override.
+- `propka_xtb_his`: runs PropKa, assigns HIP for protonated HIS, and ranks
+  neutral HID/HIE tautomers with xTB/GFN2 by default.
+
+Manual overrides always win over PropKa and xTB. Input Amber-specific residue
+states such as `ASH`, `GLH`, `HID`, `HIE`, `HIP`, `LYN`, `CYM`, and `CYX` are
+preserved unless explicitly overridden. The protonation stage assigns
+disulfide-linked cysteines to `CYX` from configured or detected pairs,
+optionally removes input hydrogens according to
+`structure.remove_input_hydrogens`, writes
+`intermediate/01_protonation_assigned.pdb`, and produces JSON, CSV, and
+Markdown protonation reports.
+
+No hydrogens are added to the final prepared PDB. Temporary xTB tautomer
+hydrogens are written only to local HID/HIE comparison XYZ files and are never
+propagated to `01_protonation_assigned.pdb`. g-xTB can be used in single-point
+or optimization mode through the `histidine.xtb` manifest block.
+
+PropKa and xTB remain optional external tools. Unit tests do not require them;
+requested automated workflows fail clearly if an executable is unavailable.
+The external integration test is marked `external` and skips cleanly unless
+`propka3` and `xtb` are installed.
 
 The downstream chemistry-producing commands remain placeholders:
 

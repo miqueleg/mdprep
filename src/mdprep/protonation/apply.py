@@ -1,4 +1,4 @@
-"""Apply safe manual protonation-stage residue-name changes."""
+"""Apply safe protonation-stage residue-name changes."""
 
 from __future__ import annotations
 
@@ -12,14 +12,21 @@ from mdprep.protonation.disulfide_states import (
     DisulfideResidueAssignment,
     resolve_disulfide_assignments,
 )
+from mdprep.protonation.histidine_xtb import (
+    HistidineXtbError,
+    HistidineXtbSelection,
+    select_histidine_tautomer,
+)
 from mdprep.protonation.overrides import ManualOverrideError, resolve_manual_overrides
+from mdprep.protonation.pka_rules import PkaDecision, PkaRuleError, decide_residue_state
+from mdprep.protonation.propka import (
+    PropkaExecutionError,
+    PropkaWorkflowResult,
+    run_propka_workflow,
+)
+from mdprep.protonation.propka_parser import PropkaParseError, PropkaRecord, map_propka_records
 from mdprep.structure.classify import is_histidine, is_titratable_residue
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord
-
-
-AUTOMATED_NOT_IMPLEMENTED_MESSAGE = (
-    "Automated protonation is not implemented yet in mdprep; use method: manual_only for Task 4 workflows."
-)
 
 
 class ProtonationApplicationError(ValueError):
@@ -36,6 +43,9 @@ class ProtonationRecord:
     source: str
     reason: str
     selector: dict[str, object] | None = None
+    pka: float | None = None
+    ph: float | None = None
+    metadata: dict[str, object] = field(default_factory=dict)
 
     @property
     def changed(self) -> bool:
@@ -52,6 +62,9 @@ class ProtonationRecord:
             "reason": self.reason,
             "changed": self.changed,
             "selector": self.selector,
+            "pka": self.pka,
+            "ph": self.ph,
+            "metadata": self.metadata,
         }
 
 
@@ -64,6 +77,11 @@ class ProtonationResult:
     structure: PdbStructure
     manual_overrides_applied: list[ProtonationRecord] = field(default_factory=list)
     disulfide_assignments_applied: list[ProtonationRecord] = field(default_factory=list)
+    input_state_assignments_applied: list[ProtonationRecord] = field(default_factory=list)
+    propka_assignments_applied: list[ProtonationRecord] = field(default_factory=list)
+    xtb_assignments_applied: list[ProtonationRecord] = field(default_factory=list)
+    propka_result: PropkaWorkflowResult | None = None
+    xtb_selections: list[HistidineXtbSelection] = field(default_factory=list)
     hydrogen_atoms_removed: int = 0
     unresolved_histidines: list[dict[str, object]] = field(default_factory=list)
     titratable_residues_not_explicitly_assigned: list[dict[str, object]] = field(default_factory=list)
@@ -71,19 +89,43 @@ class ProtonationResult:
 
     @property
     def records(self) -> list[ProtonationRecord]:
-        return self.manual_overrides_applied + self.disulfide_assignments_applied
+        return (
+            self.manual_overrides_applied
+            + self.disulfide_assignments_applied
+            + self.input_state_assignments_applied
+            + self.propka_assignments_applied
+            + self.xtb_assignments_applied
+        )
 
     def to_report_dict(self) -> dict[str, object]:
         changed = [record.to_dict() for record in self.records if record.changed]
         unchanged = [record.to_dict() for record in self.records if not record.changed]
+        propka = self.propka_result.to_dict() if self.propka_result is not None else None
+        parsed_pkas = (
+            [record.to_dict() for record in self.propka_result.records]
+            if self.propka_result is not None
+            else []
+        )
         return {
             "input_normalized_pdb_path": str(self.input_normalized_pdb_path),
             "output_protonation_pdb_path": str(self.output_protonation_pdb_path),
             "method": self.method,
             "ph": self.ph,
+            "propka": propka,
+            "parsed_pkas": parsed_pkas,
+            "xtb_histidines": [selection.to_dict() for selection in self.xtb_selections],
             "manual_overrides_applied": [record.to_dict() for record in self.manual_overrides_applied],
             "disulfide_assignments_applied": [
                 record.to_dict() for record in self.disulfide_assignments_applied
+            ],
+            "input_state_assignments_applied": [
+                record.to_dict() for record in self.input_state_assignments_applied
+            ],
+            "propka_assignments_applied": [
+                record.to_dict() for record in self.propka_assignments_applied
+            ],
+            "xtb_assignments_applied": [
+                record.to_dict() for record in self.xtb_assignments_applied
             ],
             "hydrogen_atoms_removed": self.hydrogen_atoms_removed,
             "residues_changed": changed,
@@ -101,9 +143,6 @@ def apply_protonation_stage(
     input_normalized_pdb_path: str | Path,
     output_protonation_pdb_path: str | Path,
 ) -> ProtonationResult:
-    if manifest.protonation.method != "manual_only":
-        raise ProtonationApplicationError(AUTOMATED_NOT_IMPLEMENTED_MESSAGE)
-
     try:
         manual_assignments = resolve_manual_overrides(structure, manifest)
         disulfide_assignments = resolve_disulfide_assignments(structure, manifest)
@@ -111,12 +150,12 @@ def apply_protonation_stage(
         raise ProtonationApplicationError(str(exc)) from exc
 
     final_by_residue: dict[int, str] = {}
-    records: list[ProtonationRecord] = []
+    manual_records: list[ProtonationRecord] = []
     manual_state_by_residue = {id(item.residue): item.requested_state for item in manual_assignments}
 
     for assignment in manual_assignments:
         final_by_residue[id(assignment.residue)] = assignment.requested_state
-        records.append(
+        manual_records.append(
             _record(
                 assignment.residue,
                 final_resname=assignment.requested_state,
@@ -140,6 +179,91 @@ def apply_protonation_stage(
             )
         )
 
+    warnings = list(structure.warnings)
+    input_state_records: list[ProtonationRecord] = []
+    propka_records: list[ProtonationRecord] = []
+    xtb_records: list[ProtonationRecord] = []
+    propka_result: PropkaWorkflowResult | None = None
+    xtb_selections: list[HistidineXtbSelection] = []
+    if manifest.protonation.method in {"propka", "propka_xtb_his"}:
+        try:
+            propka_result = run_propka_workflow(
+                structure,
+                manifest,
+                work_dir=_protonation_work_dir(output_protonation_pdb_path) / "propka",
+            )
+            mapped_pkas = map_propka_records(structure, propka_result.records)
+            pka_decisions = _decide_propka_states(
+                structure,
+                mapped_pkas=mapped_pkas,
+                manifest=manifest,
+                final_by_residue=final_by_residue,
+            )
+        except (PropkaExecutionError, PropkaParseError, PkaRuleError) as exc:
+            raise ProtonationApplicationError(str(exc)) from exc
+
+        xtb_needed: list[PkaDecision] = []
+        for decision in pka_decisions:
+            warnings.extend(decision.warnings)
+            if decision.needs_xtb:
+                xtb_needed.append(decision)
+                continue
+            if decision.final_state is None:
+                continue
+            final_by_residue[id(decision.residue)] = decision.final_state
+            record = _record(
+                decision.residue,
+                final_resname=decision.final_state,
+                source=decision.source,
+                reason=decision.reason,
+                selector=None,
+                pka=decision.pka,
+                ph=manifest.protonation.ph,
+            )
+            if decision.source == "input_state":
+                input_state_records.append(record)
+            else:
+                propka_records.append(record)
+
+        if xtb_needed and manifest.protonation.histidine.neutral_tautomer_method != "xtb":
+            raise ProtonationApplicationError(
+                "Neutral HIS residues require HID/HIE assignment; set "
+                "protonation.histidine.neutral_tautomer_method: xtb or add manual overrides."
+            )
+        for decision in xtb_needed:
+            try:
+                selection = select_histidine_tautomer(
+                    structure,
+                    decision.residue,
+                    manifest,
+                    work_dir=_protonation_work_dir(output_protonation_pdb_path) / "histidine_xtb",
+                    planned_states=final_by_residue,
+                )
+            except HistidineXtbError as exc:
+                raise ProtonationApplicationError(str(exc)) from exc
+            warnings.extend(selection.warnings)
+            xtb_selections.append(selection)
+            final_by_residue[id(decision.residue)] = selection.selected_state
+            xtb_records.append(
+                _record(
+                    decision.residue,
+                    final_resname=selection.selected_state,
+                    source="propka_xtb_his",
+                    reason=(
+                        "Neutral HIS assigned by xTB HID/HIE comparison; "
+                        f"delta(HID-HIE)={selection.delta_kcal_mol:.3f} kcal/mol"
+                    ),
+                    selector=None,
+                    pka=decision.pka,
+                    ph=manifest.protonation.ph,
+                    metadata=selection.to_dict(),
+                )
+            )
+    elif manifest.protonation.method != "manual_only":
+        raise ProtonationApplicationError(
+            f"Unsupported protonation method: {manifest.protonation.method}"
+        )
+
     renamed_atoms = _rename_atoms(structure, final_by_residue)
     hydrogen_atoms_removed = 0
     if manifest.structure.remove_input_hydrogens:
@@ -157,7 +281,13 @@ def apply_protonation_stage(
     )
     explicit_keys = {
         (record.chain, record.resid, record.icode)
-        for record in (records + disulfide_records)
+        for record in (
+            manual_records
+            + disulfide_records
+            + input_state_records
+            + propka_records
+            + xtb_records
+        )
     }
     unresolved_his = [
         _residue_dict(residue)
@@ -176,13 +306,48 @@ def apply_protonation_stage(
         method=manifest.protonation.method,
         ph=manifest.protonation.ph,
         structure=protonated_structure,
-        manual_overrides_applied=records,
+        manual_overrides_applied=manual_records,
         disulfide_assignments_applied=disulfide_records,
+        input_state_assignments_applied=input_state_records,
+        propka_assignments_applied=propka_records,
+        xtb_assignments_applied=xtb_records,
+        propka_result=propka_result,
+        xtb_selections=xtb_selections,
         hydrogen_atoms_removed=hydrogen_atoms_removed,
         unresolved_histidines=unresolved_his,
         titratable_residues_not_explicitly_assigned=unassigned_titratable,
-        warnings=list(protonated_structure.warnings),
+        warnings=warnings,
     )
+
+
+def _decide_propka_states(
+    structure: PdbStructure,
+    *,
+    mapped_pkas: dict[int, PropkaRecord],
+    manifest: ManifestConfig,
+    final_by_residue: dict[int, str],
+) -> list[PkaDecision]:
+    decisions: list[PkaDecision] = []
+    for residue in structure.residues:
+        if id(residue) in final_by_residue:
+            continue
+        if not is_titratable_residue(residue):
+            continue
+        decision = decide_residue_state(
+            residue,
+            record=mapped_pkas.get(id(residue)),  # type: ignore[arg-type]
+            ph=manifest.protonation.ph,
+            method=manifest.protonation.method,  # type: ignore[arg-type]
+        )
+        if decision is not None:
+            decisions.append(decision)
+    return decisions
+
+
+def _protonation_work_dir(output_protonation_pdb_path: str | Path) -> Path:
+    output_path = Path(output_protonation_pdb_path)
+    output_dir = output_path.parent.parent if output_path.parent.name == "intermediate" else output_path.parent
+    return output_dir / "protonation"
 
 
 def is_hydrogen_atom(atom: AtomRecord) -> bool:
@@ -246,6 +411,9 @@ def _record(
     source: str,
     reason: str,
     selector: dict[str, object] | None,
+    pka: float | None = None,
+    ph: float | None = None,
+    metadata: dict[str, object] | None = None,
 ) -> ProtonationRecord:
     return ProtonationRecord(
         chain=residue.id.chain_id,
@@ -256,6 +424,9 @@ def _record(
         source=source,
         reason=reason,
         selector=selector,
+        pka=pka,
+        ph=ph,
+        metadata={} if metadata is None else metadata,
     )
 
 
@@ -266,4 +437,3 @@ def _residue_dict(residue: ResidueRecord) -> dict[str, object]:
         "record_names": sorted(residue.record_names),
         "original_index": residue.original_index,
     }
-

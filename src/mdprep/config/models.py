@@ -71,14 +71,7 @@ class HistidineXtbConfig(StrictModel):
     solvent: str | None = "water"
     cutoff_angstrom: float = Field(default=5.0, gt=0)
     extra_args: list[str] = Field(default_factory=list)
-
-    @model_validator(mode="after")
-    def validate_gxtb_mode(self) -> "HistidineXtbConfig":
-        if self.model == "gxtb" and self.mode == "opt":
-            raise ValueError(
-                "g-xTB optimization mode is not supported in mdprep v0.1; use mode: sp."
-            )
-        return self
+    energy_close_call_kcal_mol: float = Field(default=0.5, ge=0)
 
 
 class HistidineConfig(StrictModel):
@@ -86,9 +79,17 @@ class HistidineConfig(StrictModel):
     xtb: HistidineXtbConfig = Field(default_factory=HistidineXtbConfig)
 
 
+class PropkaConfig(StrictModel):
+    executable: str | None = None
+    fallback_executables: list[str] = Field(default_factory=lambda: ["propka3", "propka"])
+    extra_args: list[str] = Field(default_factory=list)
+    require_success: bool = True
+
+
 class ProtonationConfig(StrictModel):
     ph: float = 7.0
     method: Literal["manual_only", "propka", "propka_xtb_his"]
+    propka: PropkaConfig = Field(default_factory=PropkaConfig)
     overrides: list[ProtonationOverride] = Field(default_factory=list)
     histidine: HistidineConfig = Field(default_factory=HistidineConfig)
 
@@ -165,4 +166,3 @@ class ManifestConfig(StrictModel):
     ligands: list[LigandConfig] = Field(default_factory=list)
     solvation: SolvationConfig
     validation: ValidationConfig
-

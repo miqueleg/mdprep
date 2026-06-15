@@ -37,4 +37,6 @@ packages = ["src/mdprep"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
-
+markers = [
+  "external: tests requiring optional external executables",
+]

@@ -17,6 +17,8 @@ CSV_COLUMNS = [
     "original_resname",
     "final_resname",
     "source",
+    "pka",
+    "ph",
     "reason",
     "changed",
 ]
@@ -69,6 +71,12 @@ def _render_markdown(report: dict[str, Any]) -> str:
     lines.extend(_record_lines(report["manual_overrides_applied"]))
     lines.extend(["", "## Disulfide Assignments", ""])
     lines.extend(_record_lines(report["disulfide_assignments_applied"]))
+    lines.extend(["", "## PropKa Assignments", ""])
+    lines.extend(_record_lines(report.get("propka_assignments_applied", [])))
+    lines.extend(["", "## Input States Preserved", ""])
+    lines.extend(_record_lines(report.get("input_state_assignments_applied", [])))
+    lines.extend(["", "## xTB Histidine Selections", ""])
+    lines.extend(_xtb_lines(report.get("xtb_histidines", [])))
     lines.extend(["", "## Hydrogens Removed", ""])
     lines.append(f"- {report['hydrogen_atoms_removed']}")
     lines.extend(["", "## Remaining HIS Residues", ""])
@@ -99,6 +107,21 @@ def _residue_lines(residues: list[dict[str, Any]]) -> list[str]:
     return [f"- {_format_residue(residue)}" for residue in residues]
 
 
+def _xtb_lines(selections: list[dict[str, Any]]) -> list[str]:
+    if not selections:
+        return ["- None"]
+    lines: list[str] = []
+    for selection in selections:
+        chain = selection["chain"] or "<blank>"
+        icode = selection["icode"] or ""
+        lines.append(
+            f"- {chain}:HIS{selection['resid']}{icode} -> {selection['selected_state']} "
+            f"(delta HID-HIE {selection['delta_kcal_mol']:.3f} kcal/mol, "
+            f"model `{selection['model']}`, mode `{selection['mode']}`)"
+        )
+    return lines
+
+
 def _format_record(record: dict[str, Any]) -> str:
     chain = record["chain"] or "<blank>"
     icode = record["icode"] or ""
@@ -112,4 +135,3 @@ def _format_residue(residue: dict[str, Any]) -> str:
     chain = residue["chain_id"] or "<blank>"
     icode = residue["icode"] or ""
     return f"{chain}:{residue['resname']}{residue['resid']}{icode}"
-
