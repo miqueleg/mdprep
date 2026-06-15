@@ -1,0 +1,18 @@
+name: mdprep
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip=26.1.2
+  - hatchling=1.30.1
+  - typer=0.26.7
+  - rich=15.0.0
+  - pydantic=2.13.4
+  - pydantic-settings=2.14.1
+  - pyyaml=6.0.3
+  - numpy=2.4.6
+  - scipy=1.17.1
+  - pandas=3.0.3
+  - pytest=9.0.3
+  - pip:
+      - -e .

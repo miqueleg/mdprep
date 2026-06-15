@@ -1,0 +1,54 @@
+project:
+  name: protein_only_ff19sb
+  input_structure: data/protein_only.pdb
+  output_dir: prepared/protein_only_ff19sb
+
+structure:
+  keep_crystal_waters: true
+  altloc_policy: highest_occupancy
+  remove_unknown_heterogens: false
+  preserve_chain_ids: true
+  remove_input_hydrogens: true
+
+protein:
+  forcefield: ff19SB
+  water_model: OPC
+
+protonation:
+  ph: 7.0
+  method: propka
+  overrides: []
+  histidine:
+    neutral_tautomer_method: manual
+    xtb:
+      executable: xtb
+      model: gfn2
+      mode: opt
+      opt_level: loose
+      solvent: water
+      cutoff_angstrom: 5.0
+      extra_args: []
+
+disulfides:
+  auto_detect: true
+  detection_cutoff_angstrom: 2.2
+  force: []
+  forbid: []
+
+ligands: []
+
+solvation:
+  enabled: true
+  box: truncated_octahedron
+  buffer_angstrom: 10.0
+  neutralize: true
+  salt_concentration_molar: 0.15
+  positive_ion: Na+
+  negative_ion: Cl-
+
+validation:
+  run_openmm_energy_check: true
+  fail_on_warnings: false
+  fail_on_missing_parameters: true
+  fail_on_noninteger_ligand_charge: true
+

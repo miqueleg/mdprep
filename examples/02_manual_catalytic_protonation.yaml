@@ -1,0 +1,68 @@
+project:
+  name: manual_catalytic_protonation
+  input_structure: data/enzyme_substrate.pdb
+  output_dir: prepared/manual_catalytic_protonation
+
+structure:
+  keep_crystal_waters: true
+  altloc_policy: highest_occupancy
+  remove_unknown_heterogens: false
+  preserve_chain_ids: true
+  remove_input_hydrogens: true
+
+protein:
+  forcefield: ff19SB
+  water_model: TIP3P
+
+protonation:
+  ph: 7.0
+  method: propka_xtb_his
+  overrides:
+    - selector:
+        chain: A
+        resname: ASP
+        resid: 199
+        icode: null
+      state: ASH
+      reason: Catalytic acid; force protonated
+    - selector:
+        chain: A
+        resname: HIS
+        resid: 57
+        icode: null
+      state: HIE
+      reason: Catalytic base tautomer from experimental mechanism
+  histidine:
+    neutral_tautomer_method: xtb
+    xtb:
+      executable: xtb
+      model: gfn2
+      mode: opt
+      opt_level: loose
+      solvent: water
+      cutoff_angstrom: 5.0
+      extra_args: []
+
+disulfides:
+  auto_detect: true
+  detection_cutoff_angstrom: 2.2
+  force: []
+  forbid: []
+
+ligands: []
+
+solvation:
+  enabled: true
+  box: truncated_octahedron
+  buffer_angstrom: 10.0
+  neutralize: true
+  salt_concentration_molar: 0.15
+  positive_ion: Na+
+  negative_ion: Cl-
+
+validation:
+  run_openmm_energy_check: true
+  fail_on_warnings: false
+  fail_on_missing_parameters: true
+  fail_on_noninteger_ligand_charge: true
+

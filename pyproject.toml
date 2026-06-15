@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "mdprep"
+version = "0.1.0"
+description = "Reproducible Amber MD preparation workflow manager for proteins and independent ligands."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [
+  { name = "mdprep developers" }
+]
+dependencies = [
+  "typer>=0.12",
+  "rich>=13",
+  "pydantic>=2",
+  "pydantic-settings>=2",
+  "pyyaml>=6",
+  "numpy>=1.24",
+  "scipy>=1.10",
+  "pandas>=2",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8",
+]
+
+[project.scripts]
+mdprep = "mdprep.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mdprep"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
