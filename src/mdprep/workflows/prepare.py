@@ -6,12 +6,19 @@ import json
 import platform
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
 
 from mdprep import __version__
 from mdprep.config.loader import load_manifest
+from mdprep.protonation.apply import (
+    ProtonationApplicationError,
+    ProtonationResult,
+    apply_protonation_stage,
+)
+from mdprep.protonation.report import write_protonation_reports
 from mdprep.reports.structure_report import write_structure_reports
 from mdprep.structure.normalize import StructureNormalizationResult, normalize_structure_stage
 from mdprep.structure.writer import write_pdb
@@ -21,16 +28,31 @@ class PrepareWorkflowError(ValueError):
     """Raised when the requested preparation workflow is not available."""
 
 
+@dataclass
+class PrepareResult:
+    stage: str
+    structure_result: StructureNormalizationResult
+    protonation_result: ProtonationResult | None = None
+
+    @property
+    def output_path(self) -> Path | None:
+        if self.protonation_result is not None:
+            return self.protonation_result.output_protonation_pdb_path
+        return self.structure_result.output_path
+
+
 def prepare_system(
     manifest_path: str | Path,
     *,
     stop_after: str | None = None,
     overwrite: bool = False,
-) -> StructureNormalizationResult:
-    if stop_after != "structure":
+) -> PrepareResult:
+    if stop_after is None:
         raise PrepareWorkflowError(
-            "Full Amber preparation is not implemented yet; use --stop-after structure for the currently supported workflow."
+            "Full Amber preparation is not implemented yet; use --stop-after structure or --stop-after protonation."
         )
+    if stop_after not in {"structure", "protonation"}:
+        raise PrepareWorkflowError("Unsupported stop stage; use --stop-after structure or --stop-after protonation.")
 
     manifest_file = Path(manifest_path)
     manifest = load_manifest(manifest_file)
@@ -58,14 +80,45 @@ def prepare_system(
     )
     _write_manifest_lock(
         manifest=manifest,
-        report=report,
+        structure_report=report,
         path=output_dir / "manifest.lock.yaml",
     )
     _write_versions(output_dir / "versions.json")
-    return result
+
+    protonation_report = None
+    protonation_result = None
+    if stop_after == "protonation":
+        protonation_pdb = intermediate_dir / "01_protonation_assigned.pdb"
+        protonation_result = apply_protonation_stage(
+            result.normalized_structure,
+            manifest,
+            input_normalized_pdb_path=normalized_pdb,
+            output_protonation_pdb_path=protonation_pdb,
+        )
+        write_pdb(protonation_result.structure, protonation_pdb)
+        protonation_report = write_protonation_reports(
+            protonation_result,
+            json_path=reports_dir / "protonation_report.json",
+            csv_path=reports_dir / "protonation_report.csv",
+            markdown_path=reports_dir / "protonation_report.md",
+        )
+        _write_manifest_lock(
+            manifest=manifest,
+            structure_report=report,
+            path=output_dir / "manifest.lock.yaml",
+            protonation_report=protonation_report,
+        )
+
+    return PrepareResult(stage=stop_after, structure_result=result, protonation_result=protonation_result)
 
 
-def _write_manifest_lock(*, manifest: object, report: dict[str, object], path: Path) -> None:
+def _write_manifest_lock(
+    *,
+    manifest: object,
+    structure_report: dict[str, object],
+    path: Path,
+    protonation_report: dict[str, object] | None = None,
+) -> None:
     manifest_data = manifest.model_dump(mode="json")  # type: ignore[attr-defined]
     lock_data = {
         "mdprep_version": __version__,
@@ -79,11 +132,20 @@ def _write_manifest_lock(*, manifest: object, report: dict[str, object], path: P
                 {"id": ligand["id"], "selector": ligand["selector"]}
                 for ligand in manifest_data.get("ligands", [])
             ],
-            "unknown_heterogens_removed": report["unknown_heterogens_removed"],
-            "unknown_heterogens_causing_failure": report["unknown_heterogens_causing_failure"],
-            "possible_disulfides": report["possible_disulfides"],
+            "unknown_heterogens_removed": structure_report["unknown_heterogens_removed"],
+            "unknown_heterogens_causing_failure": structure_report["unknown_heterogens_causing_failure"],
+            "possible_disulfides": structure_report["possible_disulfides"],
         },
     }
+    if protonation_report is not None:
+        lock_data["resolved"]["protonation"] = {
+            "method": protonation_report["method"],
+            "ph": protonation_report["ph"],
+            "applied_manual_overrides": protonation_report["manual_overrides_applied"],
+            "applied_disulfide_assignments": protonation_report["disulfide_assignments_applied"],
+            "hydrogens_removed": protonation_report["hydrogen_atoms_removed"],
+            "final_protonation_pdb_path": protonation_report["output_protonation_pdb_path"],
+        }
     path.write_text(yaml.safe_dump(lock_data, sort_keys=False), encoding="utf-8")
 
 

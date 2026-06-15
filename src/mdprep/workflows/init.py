@@ -16,6 +16,7 @@ def generate_starter_manifest(
     water_model: str = "OPC",
     ph: float = 7.0,
     output_dir: str | None = None,
+    protonation_method: str = "manual_only",
 ) -> Path:
     input_path = Path(input_structure)
     target = Path(output_path)
@@ -33,6 +34,7 @@ def generate_starter_manifest(
         forcefield=forcefield,
         water_model=water_model,
         ph=ph,
+        protonation_method=protonation_method,
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(manifest_text, encoding="utf-8")
@@ -48,6 +50,7 @@ def _render_manifest(
     forcefield: str,
     water_model: str,
     ph: float,
+    protonation_method: str,
 ) -> str:
     lines: list[str] = [
         "# mdprep starter manifest",
@@ -86,7 +89,7 @@ def _render_manifest(
             "",
             "protonation:",
             f"  ph: {ph}",
-            "  method: propka_xtb_his",
+            f"  method: {protonation_method}",
             "  overrides: []",
             "  histidine:",
             "    neutral_tautomer_method: xtb",
@@ -172,4 +175,3 @@ def _yaml_string(value: str) -> str:
 
 def _yaml_null_or_string(value: str | None) -> str:
     return "null" if value is None else _yaml_string(value)
-

@@ -138,6 +138,11 @@ def init_command(
     forcefield: str = typer.Option("ff19SB", "--forcefield", help="Protein force field."),
     water_model: str = typer.Option("OPC", "--water-model", help="Water model."),
     ph: float = typer.Option(7.0, "--ph", help="Target pH for starter manifest defaults."),
+    protonation_method: str = typer.Option(
+        "manual_only",
+        "--protonation-method",
+        help="Initial protonation method: manual_only, propka, or propka_xtb_his.",
+    ),
     output_dir: str | None = typer.Option(
         None,
         "--output-dir",
@@ -152,6 +157,9 @@ def init_command(
     if water_model not in {"TIP3P", "OPC"}:
         console.print("[red]Error:[/red] --water-model must be TIP3P or OPC")
         raise typer.Exit(1)
+    if protonation_method not in {"manual_only", "propka", "propka_xtb_his"}:
+        console.print("[red]Error:[/red] --protonation-method must be manual_only, propka, or propka_xtb_his")
+        raise typer.Exit(1)
     try:
         manifest_path = generate_starter_manifest(
             input_structure,
@@ -161,6 +169,7 @@ def init_command(
             water_model=water_model,
             ph=ph,
             output_dir=output_dir,
+            protonation_method=protonation_method,
         )
     except (FileExistsError, FileNotFoundError, PdbParseError, ValueError) as exc:
         console.print(f"[red]Error:[/red] {exc}")
@@ -174,7 +183,7 @@ def prepare_command(
     stop_after: str | None = typer.Option(
         None,
         "--stop-after",
-        help="Stop after a supported workflow stage. Currently only: structure.",
+        help="Stop after a supported workflow stage: structure or protonation.",
     ),
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite mdprep-generated outputs."),
     quiet: bool = typer.Option(False, "--quiet", help="Reduce command output."),
@@ -194,7 +203,7 @@ def prepare_command(
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from exc
     if not quiet:
-        console.print(f"Wrote normalized PDB: {result.output_path}")
+        console.print(f"Wrote output PDB: {result.output_path}")
 
 
 @app.command("validate")

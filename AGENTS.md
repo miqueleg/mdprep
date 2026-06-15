@@ -15,6 +15,9 @@ preparation.
 - Structure normalization must never delete unknown heterogens silently; require
   explicit manifest configuration.
 - Generated manifests must validate with `mdprep config-check`.
+- Every residue rename must be recorded in reports.
+- Automated protonation must not be silently skipped; fail clearly until the
+  relevant backend is implemented.
 - Unsupported chemistry must fail with a clear error.
 - External commands must go through `mdprep.external.runner`.
 - External command records must include command, working directory, return code,

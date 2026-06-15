@@ -94,6 +94,23 @@ a normalized PDB, and produces structure reports.
 This stage does not assign protonation states, parameterize ligands, derive
 QM-based charges, run AmberTools, or build Amber files.
 
+Run the manual protonation stage:
+
+```bash
+mdprep prepare system.yaml --stop-after protonation
+```
+
+For now this stage supports only `protonation.method: manual_only`. It applies
+manual residue-state overrides, assigns disulfide-linked cysteines to `CYX`
+from configured or detected pairs, optionally removes input hydrogens according
+to `structure.remove_input_hydrogens`, writes
+`intermediate/01_protonation_assigned.pdb`, and produces JSON, CSV, and
+Markdown protonation reports. It does not add hydrogens.
+
+PropKa and xTB/GFN2 execution are planned for the next task. Automated
+protonation methods are schema-valid but intentionally fail at the protonation
+stage until that implementation exists.
+
 The downstream chemistry-producing commands remain placeholders:
 
 ```bash

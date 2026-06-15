@@ -61,3 +61,39 @@ def test_init_overwrite_replaces_existing_file(tmp_path):
     assert result.exit_code == 0
     assert "project:" in output.read_text(encoding="utf-8")
 
+
+def test_init_accepts_manual_only_protonation_method(tmp_path):
+    output = tmp_path / "system.yaml"
+    result = CliRunner().invoke(
+        app,
+        [
+            "init",
+            "tests/data/protein_with_waters.pdb",
+            "-o",
+            str(output),
+            "--protonation-method",
+            "manual_only",
+        ],
+    )
+
+    assert result.exit_code == 0
+    manifest = load_manifest(output)
+    assert manifest.protonation.method == "manual_only"
+
+
+def test_init_rejects_invalid_protonation_method(tmp_path):
+    output = tmp_path / "system.yaml"
+    result = CliRunner().invoke(
+        app,
+        [
+            "init",
+            "tests/data/protein_with_waters.pdb",
+            "-o",
+            str(output),
+            "--protonation-method",
+            "bad",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "--protonation-method" in result.output

@@ -133,7 +133,7 @@ def normalize_structure_stage(
     warnings = list(structure.warnings)
     if manifest.structure.remove_input_hydrogens:
         warnings.append(
-            "structure.remove_input_hydrogens is acknowledged but not applied in Task 3."
+            "structure.remove_input_hydrogens is not applied during the structure-only stage."
         )
 
     return StructureNormalizationResult(
