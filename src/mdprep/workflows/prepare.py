@@ -15,6 +15,8 @@ import yaml
 from mdprep import __version__
 from mdprep.config.loader import load_manifest
 from mdprep.external.runner import run_command
+from mdprep.leap.builder import TLeapBuildError, TLeapStageResult, run_tleap_stage
+from mdprep.leap.report import write_tleap_reports
 from mdprep.ligands.report import write_ligand_reports
 from mdprep.ligands.workflow import LigandStageResult, LigandWorkflowError, run_ligand_stage
 from mdprep.protonation.apply import (
@@ -26,6 +28,9 @@ from mdprep.protonation.report import write_protonation_reports
 from mdprep.reports.structure_report import write_structure_reports
 from mdprep.structure.normalize import StructureNormalizationResult, normalize_structure_stage
 from mdprep.structure.writer import write_pdb
+from mdprep.validation.openmm_check import openmm_version
+from mdprep.validation.parmed_check import parmed_version
+from mdprep.validation.topology import FinalValidationError, validate_final_outputs, write_validation_reports
 
 
 class PrepareWorkflowError(ValueError):
@@ -38,9 +43,12 @@ class PrepareResult:
     structure_result: StructureNormalizationResult
     protonation_result: ProtonationResult | None = None
     ligand_result: LigandStageResult | None = None
+    tleap_result: TLeapStageResult | None = None
 
     @property
     def output_path(self) -> Path | None:
+        if self.tleap_result is not None:
+            return self.tleap_result.final_outputs.pdb
         if self.protonation_result is not None:
             return self.protonation_result.output_protonation_pdb_path
         return self.structure_result.output_path
@@ -53,13 +61,11 @@ def prepare_system(
     overwrite: bool = False,
 ) -> PrepareResult:
     if stop_after is None:
+        stop_after = "tleap"
+    if stop_after not in {"structure", "protonation", "ligands", "tleap"}:
         raise PrepareWorkflowError(
-            "Full Amber topology generation is not implemented yet; use --stop-after structure, "
-            "--stop-after protonation, or --stop-after ligands."
-        )
-    if stop_after not in {"structure", "protonation", "ligands"}:
-        raise PrepareWorkflowError(
-            "Unsupported stop stage; use --stop-after structure, --stop-after protonation, or --stop-after ligands."
+            "Unsupported stop stage; use --stop-after structure, --stop-after protonation, "
+            "--stop-after ligands, or --stop-after tleap."
         )
 
     manifest_file = Path(manifest_path)
@@ -97,7 +103,10 @@ def prepare_system(
     protonation_result = None
     ligand_report = None
     ligand_result = None
-    if stop_after in {"protonation", "ligands"}:
+    tleap_report = None
+    validation_report = None
+    tleap_result = None
+    if stop_after in {"protonation", "ligands", "tleap"}:
         protonation_pdb = intermediate_dir / "01_protonation_assigned.pdb"
         protonation_result = apply_protonation_stage(
             result.normalized_structure,
@@ -123,7 +132,7 @@ def prepare_system(
             external_executables=_external_executables_from_protonation_report(protonation_report),
         )
 
-    if stop_after == "ligands":
+    if stop_after in {"ligands", "tleap"}:
         assert protonation_result is not None
         ligand_result = run_ligand_stage(
             protonation_result.structure,
@@ -152,11 +161,59 @@ def prepare_system(
             external_executables=external_versions,
         )
 
+    if stop_after == "tleap":
+        assert protonation_result is not None
+        assert ligand_result is not None
+        tleap_result = run_tleap_stage(
+            structure=protonation_result.structure,
+            manifest=manifest,
+            output_dir=output_dir,
+            protonation_result=protonation_result,
+            ligand_result=ligand_result,
+        )
+        tleap_report = write_tleap_reports(
+            tleap_result,
+            json_path=reports_dir / "tleap_report.json",
+            markdown_path=reports_dir / "tleap_report.md",
+        )
+        validation_report = validate_final_outputs(
+            manifest=manifest,
+            prmtop=tleap_result.final_outputs.prmtop,
+            inpcrd=tleap_result.final_outputs.inpcrd,
+            pdb=tleap_result.final_outputs.pdb,
+        )
+        write_validation_reports(
+            validation_report,
+            json_path=reports_dir / "validation_report.json",
+            markdown_path=reports_dir / "validation_report.md",
+        )
+        _write_manifest_lock(
+            manifest=manifest,
+            structure_report=report,
+            path=output_dir / "manifest.lock.yaml",
+            protonation_report=protonation_report,
+            ligand_report=ligand_report,
+            tleap_report=tleap_report,
+            validation_report=validation_report,
+        )
+        external_versions = {}
+        if protonation_report is not None:
+            external_versions.update(_external_executables_from_protonation_report(protonation_report))
+        if ligand_report is not None:
+            external_versions.update(_external_executables_from_ligand_report(ligand_report))
+        external_versions.update(_external_executables_from_tleap_report(tleap_report))
+        _write_versions(
+            output_dir / "versions.json",
+            external_executables=external_versions,
+            include_optional_python_packages=True,
+        )
+
     return PrepareResult(
         stage=stop_after,
         structure_result=result,
         protonation_result=protonation_result,
         ligand_result=ligand_result,
+        tleap_result=tleap_result,
     )
 
 
@@ -167,6 +224,8 @@ def _write_manifest_lock(
     path: Path,
     protonation_report: dict[str, object] | None = None,
     ligand_report: dict[str, object] | None = None,
+    tleap_report: dict[str, object] | None = None,
+    validation_report: dict[str, object] | None = None,
 ) -> None:
     manifest_data = manifest.model_dump(mode="json")  # type: ignore[attr-defined]
     lock_data = {
@@ -229,6 +288,29 @@ def _write_manifest_lock(
             }
             for ligand in ligand_report["ligands"]
         ]
+    if tleap_report is not None:
+        lock_data["resolved"]["tleap"] = {
+            "force_fields_sourced": tleap_report["force_fields_sourced"],
+            "water_box": tleap_report["water_box"],
+            "ligands": tleap_report["ligands"],
+            "disulfide_bond_commands": tleap_report["disulfide_bond_commands"],
+            "solvation_enabled": tleap_report["solvation_enabled"],
+            "solvation_box_type": tleap_report["solvation_box_type"],
+            "buffer_angstrom": tleap_report["buffer_angstrom"],
+            "neutralization_requested": tleap_report["neutralization_requested"],
+            "neutralizing_ions_added": tleap_report["neutralizing_ions_added"],
+            "salt_concentration_molar": tleap_report["salt_concentration_molar"],
+            "salt_ion_pairs_requested": tleap_report["salt_ion_pairs_requested"],
+            "final_outputs": tleap_report["final_outputs"],
+        }
+    if validation_report is not None:
+        lock_data["resolved"]["validation"] = {
+            "final_prmtop_path": validation_report["final_prmtop_path"],
+            "final_inpcrd_path": validation_report["final_inpcrd_path"],
+            "final_pdb_path": validation_report["final_pdb_path"],
+            "warnings": validation_report["warnings"],
+            "errors": validation_report["errors"],
+        }
     path.write_text(yaml.safe_dump(lock_data, sort_keys=False), encoding="utf-8")
 
 
@@ -236,6 +318,7 @@ def _write_versions(
     path: Path,
     *,
     external_executables: dict[str, str] | None = None,
+    include_optional_python_packages: bool = False,
 ) -> None:
     versions = {
         "mdprep": __version__,
@@ -247,6 +330,11 @@ def _write_versions(
             for name, executable in (external_executables or {}).items()
         },
     }
+    if include_optional_python_packages:
+        versions["python_packages"] = {
+            "parmed": parmed_version(),
+            "openmm": openmm_version(),
+        }
     path.write_text(json.dumps(versions, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
@@ -286,6 +374,17 @@ def _external_executables_from_ligand_report(
             if command:
                 executables["parmchk2"] = str(command[0])
     return executables
+
+
+def _external_executables_from_tleap_report(
+    tleap_report: dict[str, object],
+) -> dict[str, str]:
+    dry = tleap_report.get("dry_tleap")
+    if isinstance(dry, dict) and isinstance(dry.get("command"), list):
+        command = dry["command"]
+        if command:
+            return {"tleap": str(command[0])}
+    return {}
 
 
 def _external_version(executable: str) -> dict[str, object]:

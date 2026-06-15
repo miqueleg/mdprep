@@ -108,9 +108,9 @@ def test_structure_stage_still_works_with_future_automated_method(tmp_path):
     assert (output_dir / "intermediate" / "00_input_normalized.pdb").exists()
 
 
-def test_full_prepare_without_stop_after_fails_clearly(tmp_path):
+def test_unsupported_stop_stage_fails_clearly(tmp_path):
     manifest, _ = write_manifest(tmp_path)
-    result = CliRunner().invoke(app, ["prepare", str(manifest)])
+    result = CliRunner().invoke(app, ["prepare", str(manifest), "--stop-after", "future"])
 
     assert result.exit_code != 0
-    assert "Full Amber topology generation is not implemented yet" in result.output
+    assert "Unsupported stop stage" in result.output

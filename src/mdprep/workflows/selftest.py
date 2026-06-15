@@ -10,9 +10,12 @@ from rich.console import Console
 from rich.table import Table
 
 import mdprep
+from mdprep.ambertools.mol2 import read_mol2
 from mdprep.config.loader import load_manifest
 from mdprep.external.discovery import optional_executable_report
-from mdprep.ambertools.mol2 import read_mol2
+from mdprep.leap.forcefields import protein_leaprc, water_box, water_leaprc
+from mdprep.validation.openmm_check import openmm_available
+from mdprep.validation.parmed_check import parmed_available
 
 
 OPTIONAL_EXECUTABLES = ["tleap", "antechamber", "parmchk2", "propka3", "propka", "xtb"]
@@ -101,6 +104,19 @@ def run_selftest(*, quick: bool = False, console: Console | None = None) -> Self
         checks.append(("mol2 parser fixture", len(mol2.atoms) == 2, f"{len(mol2.atoms)} atoms"))
     except Exception as exc:
         checks.append(("mol2 parser fixture", False, str(exc)))
+
+    try:
+        ok = (
+            protein_leaprc("ff19SB") == "leaprc.protein.ff19SB"
+            and water_leaprc("TIP3P") == "leaprc.water.tip3p"
+            and water_box("OPC") == "OPCBOX"
+        )
+        checks.append(("force-field mappings", ok, "ok" if ok else "unexpected mapping"))
+    except Exception as exc:
+        checks.append(("force-field mappings", False, str(exc)))
+
+    checks.append(("ParmEd import", True, "available" if parmed_available() else "not available"))
+    checks.append(("OpenMM import", True, "available" if openmm_available() else "not available"))
 
     table = Table(title="mdprep self-test")
     table.add_column("Check")

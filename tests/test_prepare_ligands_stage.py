@@ -62,12 +62,12 @@ def test_ligand_report_contains_multiple_ligands(tmp_path):
     assert [item["ligand_id"] for item in report["ligands"]] == ["sub_501", "cof_601"]
 
 
-def test_full_prepare_without_stop_after_mentions_ligands_stage(tmp_path):
+def test_unsupported_stop_stage_mentions_tleap_stage(tmp_path):
     manifest, _ = write_ligand_manifest(tmp_path)
-    result = CliRunner().invoke(app, ["prepare", str(manifest)])
+    result = CliRunner().invoke(app, ["prepare", str(manifest), "--stop-after", "future"])
 
     assert result.exit_code != 0
-    assert "--stop-after ligands" in result.output
+    assert "--stop-after tleap" in result.output
 
 
 def test_structure_and_protonation_stages_still_work(tmp_path):

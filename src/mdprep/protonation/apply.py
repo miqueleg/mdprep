@@ -176,6 +176,10 @@ def apply_protonation_stage(
                 source=assignment.source,
                 reason=assignment.reason,
                 selector=None,
+                metadata={
+                    "partner": assignment.partner.id.to_dict(),
+                    "distance_angstrom": assignment.distance_angstrom,
+                },
             )
         )
 

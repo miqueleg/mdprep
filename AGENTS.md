@@ -26,7 +26,11 @@ preparation.
 - Ligand atom names, atom order, coordinates, residue identity, and total
   charge must be preserved or failures must be explicit.
 - Do not add molecule-conversion fallback paths.
-- Final Amber topology generation is not part of the Task 6 ligand stage.
+- Final topology generation must go through `tleap`.
+- All `tleap` scripts and logs must be preserved.
+- Do not silently ignore `tleap` warnings or errors; report them and fail when
+  configured to do so.
+- All final `.prmtop`/`.inpcrd` outputs must be validated.
 - Unsupported chemistry must fail with a clear error.
 - External commands must go through `mdprep.external.runner`.
 - External command records must include command, working directory, return code,
@@ -35,13 +39,14 @@ preparation.
 - External tests must skip cleanly if required executables are unavailable.
 - External AmberTools tests must skip cleanly if `antechamber` or `parmchk2`
   is unavailable.
+- External `tleap`, ParmEd, and OpenMM tests must skip cleanly when optional
+  executables or libraries are unavailable.
 - All user-facing features need tests and docs.
 - All example YAML files must validate in tests.
 
 ## Current v0.1 Limits
 
-Do not implement ligand parameterization, QM charge derivation, or final Amber
-topology generation until the corresponding task explicitly requests it.
+Do not implement QM charge derivation beyond the currently requested task.
 
 Explicitly unsupported for v0.1:
 

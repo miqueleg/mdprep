@@ -10,8 +10,9 @@ recorded, validated, and reproduced.
 This initial version provides the package scaffold, manifest validation, CLI
 entry points, examples, self-test checks, PDB inspection, safe structure
 normalization, manual protonation handling, PropKa-based automatic residue
-state assignment, xTB-based neutral histidine tautomer ranking, and ligand
-extraction plus starter AmberTools ligand parameter generation.
+state assignment, xTB-based neutral histidine tautomer ranking, ligand
+extraction plus AmberTools ligand parameter generation, and final `tleap`
+Amber topology generation.
 
 Planned supported chemistry includes standard amino-acid proteins,
 crystallographic waters, manual and detected disulfides, ASP/GLU/LYS/ARG/HIS
@@ -42,7 +43,9 @@ conda activate mdprep
 
 The conda environment includes the optional PropKa and xTB executables used by
 `protonation.method: propka` and `protonation.method: propka_xtb_his`, plus
-AmberTools for `antechamber`/`parmchk2` ligand parameter generation.
+AmberTools for `antechamber`/`parmchk2` ligand parameter generation and
+`tleap` final system building. ParmEd and OpenMM are included for optional
+final topology sanity checks.
 
 For a lighter local install:
 
@@ -154,9 +157,8 @@ provide the correct `net_charge` for every ligand. Atom count, atom names,
 element order, coordinates, residue identity, and charge sum are validated, and
 small mol2 charge residuals are corrected only within a strict tolerance.
 
-The ligand stage writes extracted ligand PDBs, identity files, final mol2 files,
-frcmod files, charge CSVs, validation JSON files, and ligand reports. It does
-not build the final system topology yet.
+The ligand stage writes extracted ligand PDBs, identity files, final mol2
+files, frcmod files, charge CSVs, validation JSON files, and ligand reports.
 
 Ligand troubleshooting:
 
@@ -172,12 +174,65 @@ Ligand troubleshooting:
 - Missing ligand hydrogens may cause parameterization failure; provide a
   chemically complete ligand input when needed.
 
-The downstream full-system build commands remain placeholders:
+Run the final Amber build:
 
 ```bash
 mdprep prepare system.yaml
-mdprep validate prepared/final/system.prmtop prepared/final/system.inpcrd
+mdprep prepare system.yaml --stop-after tleap
 ```
+
+Both commands run the currently supported full workflow through structure
+normalization, protonation assignment, ligand parameterization, `tleap`, and
+final validation. The generated final files are:
+
+```text
+final/system.prmtop
+final/system.inpcrd
+final/system.pdb
+```
+
+The final build uses explicit force-field mappings: `ff14SB` or `ff19SB` for
+protein, `TIP3P` or `OPC` for water, and `gaff` or `gaff2` for ligands. Ligand
+mol2/frcmod files from the ligand stage are loaded into `tleap`; residue names
+and atom names are checked before the script is written. Disulfide-linked
+`CYX` residues generate explicit `bond system.<idx>.SG system.<idx>.SG`
+commands based on the loaded PDB residue order.
+
+If `solvation.enabled: false`, the dry build is copied to `final/`. If
+solvation is enabled, mdprep writes a solvated `tleap` script using either
+`solvateOct` or `solvateBox`, applies configured ion names for neutralization,
+and adds salt ion pairs when the solvated box volume can be determined. The
+requested salt concentration is converted with:
+
+```text
+n_pairs = round(molarity * volume_A3 * 0.000602214076)
+```
+
+Final validation always checks file existence, file sizes, final PDB
+parseability, configured ligand presence, ligand atom names, water presence
+relative to solvation settings, and basic disulfide consistency. ParmEd is used
+when importable to load the topology and coordinates and record total charge.
+OpenMM is used when requested and importable to compute a finite potential
+energy sanity check; no minimization or production simulation is run.
+
+PySCF RESP/QMMESP ligand charges are still planned for a later task.
+Noncanonical residues, covalent ligands, and bonded metal centers remain
+unsupported.
+
+Final-build troubleshooting:
+
+- If `tleap` is unavailable, install the conda environment from
+  `environment.yml` or add `tleap` to `PATH`.
+- Unknown residues usually mean the manifest did not configure a ligand or the
+  PDB residue name does not match a loaded mol2 template.
+- Missing atom types or parameters usually mean the ligand mol2/frcmod is
+  incomplete or inconsistent with the PDB.
+- Ligand atom-name mismatch means the final mol2 atom order/names do not match
+  the extracted ligand PDB.
+- A `CYX` residue without a disulfide pair requires a `disulfides.force` entry
+  or a residue-state change to `CYS`/`CYM`.
+- OpenMM validation warnings are reported in `reports/validation_report.json`
+  and `reports/validation_report.md`.
 
 ## Planned Workflow
 
@@ -189,7 +244,9 @@ The intended preparation flow is:
    neutral histidine tautomer selection where requested.
 4. Parameterize independent ligands while preserving atom names, atom order,
    coordinates, residue identity, and total charge.
-5. For embedded ligand charges, run provisional Amber setup, PySCF QM
+5. Build final Amber topology and coordinate files with `tleap`, solvation,
+   ions, and validation.
+6. For embedded ligand charges, run provisional Amber setup, PySCF QM
    evaluation, RESP/ESP-like fitting, and final Amber rebuild.
-6. Generate reproducible manifests, versions, intermediate structures, reports,
+7. Generate reproducible manifests, versions, intermediate structures, reports,
    and final Amber topology/coordinate files.

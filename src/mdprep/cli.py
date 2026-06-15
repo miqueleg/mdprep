@@ -189,7 +189,7 @@ def prepare_command(
     stop_after: str | None = typer.Option(
         None,
         "--stop-after",
-        help="Stop after a supported workflow stage: structure, protonation, or ligands.",
+        help="Stop after a supported workflow stage: structure, protonation, ligands, or tleap.",
     ),
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite mdprep-generated outputs."),
     quiet: bool = typer.Option(False, "--quiet", help="Reduce command output."),
@@ -221,9 +221,10 @@ def validate_command(
 
     try:
         validate_system(prmtop, inpcrd)
-    except NotImplementedError as exc:
-        console.print(f"[yellow]{exc}[/yellow]")
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from exc
+    console.print("Validation passed")
 
 
 @app.command("selftest")

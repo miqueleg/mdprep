@@ -40,4 +40,7 @@ addopts = "-ra"
 markers = [
   "external: tests requiring optional external executables",
   "ambertools: tests requiring optional AmberTools executables",
+  "tleap: tests requiring optional tleap executable",
+  "openmm: tests requiring optional OpenMM package",
+  "parmed: tests requiring optional ParmEd package",
 ]
