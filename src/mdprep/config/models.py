@@ -75,6 +75,8 @@ class HistidineXtbConfig(StrictModel):
     add_missing_water_hydrogens: bool = True
     water_oh_distance_angstrom: float = Field(default=0.9572, gt=0)
     water_hoh_angle_degrees: float = Field(default=104.52, gt=0, lt=180)
+    scf_iterations: int = Field(default=500, ge=1)
+    electronic_temperature_kelvin: float | None = Field(default=None, gt=0)
 
 
 class HistidineConfig(StrictModel):

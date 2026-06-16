@@ -97,6 +97,8 @@ def test_water_with_only_oxygen_gets_two_temporary_hydrogens():
     assert count_water_hydrogens(water) == 0
     assert len(build_water_hydrogen_coordinates(water, [histidine, water])) == 2
     assert len(temporary) == 2
+    fixed_names = [model.atoms[index - 1].name for index in model.fixed_atom_indices]
+    assert "O" in fixed_names
     assert model.to_dict()["temporary_water_hydrogens_added"] == 2
     assert dist((oxygen.x, oxygen.y, oxygen.z), (temporary[0].x, temporary[0].y, temporary[0].z)) == pytest.approx(0.9572)
     assert dist((oxygen.x, oxygen.y, oxygen.z), (temporary[1].x, temporary[1].y, temporary[1].z)) == pytest.approx(0.9572)

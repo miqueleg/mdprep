@@ -115,6 +115,8 @@ def _render_manifest(
             "      add_missing_water_hydrogens: true",
             "      water_oh_distance_angstrom: 0.9572",
             "      water_hoh_angle_degrees: 104.52",
+            "      scf_iterations: 500",
+            "      electronic_temperature_kelvin: null",
             "",
             "disulfides:",
             "  auto_detect: true",

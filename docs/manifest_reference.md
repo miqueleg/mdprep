@@ -42,6 +42,9 @@ Top-level keys:
     oxygen-only cluster waters.
   - `water_oh_distance_angstrom`: O-H distance for temporary cluster waters.
   - `water_hoh_angle_degrees`: H-O-H angle for temporary cluster waters.
+  - `scf_iterations`: xTB SCC/SCF iteration limit for histidine tautomer jobs.
+  - `electronic_temperature_kelvin`: optional xTB electronic temperature
+    passed as `--etemp`; leave null unless needed.
 
 ## disulfides
 

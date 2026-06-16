@@ -66,7 +66,13 @@ def test_generated_cluster_preserves_input_hydrogens_adds_caps_and_tautomer_h():
     assert "HE2" not in names
     assert "HCA_NCAP" in names
     assert "HCA_CCAP" in names
-    assert len(model.fixed_atom_indices) == 3
+    fixed_names = [model.atoms[index - 1].name for index in model.fixed_atom_indices]
+    assert "CA" in fixed_names
+    assert "CG" in fixed_names
+    assert "ND1" in fixed_names
+    assert "NE2" in fixed_names
+    assert "HCA_NCAP" in fixed_names
+    assert "HCA_CCAP" in fixed_names
     assert len(model.cap_atom_indices) == 2
     assert len(model.anchor_atom_indices) == 1
 
@@ -86,8 +92,22 @@ def test_dehydrogenated_cluster_fails_clearly():
     structure = read_pdb("tests/data/protein_histidine_ring.pdb")
     residue = next(residue for residue in structure.residues if residue.id.resname == "HIS")
 
-    with pytest.raises(HistidineGeometryError, match="requires a hydrogenated protein model"):
+    with pytest.raises(HistidineGeometryError, match="inconsistent valence"):
         build_tautomer_cluster_model([residue], residue, tautomer="HID")
+
+
+def test_protonated_acid_state_without_carboxyl_h_fails_before_xtb():
+    histidine_residue = histidine()
+    structure = read_pdb("tests/data/protein_with_waters.pdb")
+    asp = next(residue for residue in structure.residues if residue.id.resname == "ASP")
+
+    with pytest.raises(HistidineGeometryError, match="assigned ASH"):
+        build_tautomer_cluster_model(
+            [histidine_residue, asp],
+            histidine_residue,
+            tautomer="HID",
+            residue_states={id(asp): "ASH"},
+        )
 
 
 def test_xcontrol_fix_file_contains_fixed_atoms(tmp_path):

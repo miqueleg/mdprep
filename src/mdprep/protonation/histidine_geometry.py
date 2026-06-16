@@ -122,6 +122,7 @@ def build_tautomer_xyz_atoms(
     histidine: ResidueRecord,
     *,
     tautomer: str,
+    residue_states: dict[int, str] | None = None,
     add_missing_water_hydrogens: bool = True,
     water_oh_distance_angstrom: float = 0.9572,
     water_hoh_angle_degrees: float = 104.52,
@@ -130,6 +131,7 @@ def build_tautomer_xyz_atoms(
         cluster_residues,
         histidine,
         tautomer=tautomer,
+        residue_states=residue_states,
         add_missing_water_hydrogens=add_missing_water_hydrogens,
         water_oh_distance_angstrom=water_oh_distance_angstrom,
         water_hoh_angle_degrees=water_hoh_angle_degrees,
@@ -141,10 +143,12 @@ def build_tautomer_cluster_model(
     histidine: ResidueRecord,
     *,
     tautomer: str,
+    residue_states: dict[int, str] | None = None,
     add_missing_water_hydrogens: bool = True,
     water_oh_distance_angstrom: float = 0.9572,
     water_hoh_angle_degrees: float = 104.52,
 ) -> TautomerClusterModel:
+    states = {} if residue_states is None else residue_states
     atoms: list[XyzAtom] = []
     fixed_atom_indices: list[int] = []
     cap_atom_indices: list[int] = []
@@ -158,6 +162,8 @@ def build_tautomer_cluster_model(
                 atoms,
                 residue,
                 target_histidine=residue is histidine,
+                tautomer=tautomer if residue is histidine else None,
+                residue_state=states.get(id(residue), residue.id.resname),
             )
             fixed_atom_indices.extend(fixed["fixed"])
             cap_atom_indices.extend(fixed["caps"])
@@ -169,6 +175,7 @@ def build_tautomer_cluster_model(
                 atoms,
                 residue,
                 cluster_residues=cluster_residues,
+                fixed_atom_indices=fixed_atom_indices,
                 add_missing_hydrogens=add_missing_water_hydrogens,
                 oh_distance=water_oh_distance_angstrom,
                 hoh_angle_degrees=water_hoh_angle_degrees,
@@ -177,7 +184,7 @@ def build_tautomer_cluster_model(
             if record is not None:
                 temporary_water_hydrogens.append(record)
             continue
-        _append_full_residue(atoms, residue)
+        fixed_atom_indices.extend(_append_full_residue(atoms, residue))
 
     atoms.append(place_histidine_tautomer_hydrogen(histidine, tautomer=tautomer))
     return TautomerClusterModel(
@@ -283,7 +290,15 @@ def _append_truncated_protein_residue(
     residue: ResidueRecord,
     *,
     target_histidine: bool,
+    tautomer: str | None,
+    residue_state: str,
 ) -> dict[str, list[int]]:
+    _validate_residue_hydrogen_state(
+        residue,
+        residue_state=residue_state,
+        target_histidine=target_histidine,
+        tautomer=tautomer,
+    )
     atom_by_name = {atom.name.strip(): atom for atom in residue.atoms}
     ca = atom_by_name.get("CA")
     if ca is None:
@@ -297,11 +312,17 @@ def _append_truncated_protein_residue(
         name = atom.name.strip()
         if name in BACKBONE_ATOMS:
             continue
-        if target_histidine and name in TAUTOMER_HYDROGENS:
+        if _skip_hydrogen_for_cluster_state(
+            atom,
+            residue,
+            residue_state=residue_state,
+            target_histidine=target_histidine,
+        ):
             continue
         atoms.append(_xyz_from_atom(atom))
-        if name == "CA":
+        if not is_hydrogen_like(atom):
             fixed.append(len(atoms))
+        if name == "CA":
             anchors.append(len(atoms))
 
     for boundary_name, cap_name in [("N", "HCA_NCAP"), ("C", "HCA_CCAP")]:
@@ -315,9 +336,13 @@ def _append_truncated_protein_residue(
     return {"fixed": fixed, "caps": caps, "anchors": anchors}
 
 
-def _append_full_residue(atoms: list[XyzAtom], residue: ResidueRecord) -> None:
+def _append_full_residue(atoms: list[XyzAtom], residue: ResidueRecord) -> list[int]:
+    fixed: list[int] = []
     for atom in residue.atoms:
         atoms.append(_xyz_from_atom(atom))
+        if not is_hydrogen_like(atom):
+            fixed.append(len(atoms))
+    return fixed
 
 
 def _append_water_residue(
@@ -325,6 +350,7 @@ def _append_water_residue(
     residue: ResidueRecord,
     *,
     cluster_residues: list[ResidueRecord],
+    fixed_atom_indices: list[int],
     add_missing_hydrogens: bool,
     oh_distance: float,
     hoh_angle_degrees: float,
@@ -340,7 +366,7 @@ def _append_water_residue(
             f"Water residue {residue.id.display()} has multiple oxygen atoms; cannot add temporary xTB hydrogens."
         )
     existing_hydrogens = [atom for atom in residue.atoms if is_hydrogen_like(atom)]
-    _append_full_residue(atoms, residue)
+    fixed_atom_indices.extend(_append_full_residue(atoms, residue))
     if len(existing_hydrogens) >= 2:
         return None
     if not add_missing_hydrogens:
@@ -395,6 +421,131 @@ def _append_water_residue(
     )
 
 
+def _validate_residue_hydrogen_state(
+    residue: ResidueRecord,
+    *,
+    residue_state: str,
+    target_histidine: bool,
+    tautomer: str | None,
+) -> None:
+    if residue.id.resname in {"HIS", "HID", "HIE", "HIP"}:
+        _validate_histidine_fragment_hydrogens(
+            residue,
+            residue_state=residue_state,
+            target_histidine=target_histidine,
+            tautomer=tautomer,
+        )
+    elif residue_state in {"ASH", "GLH"}:
+        anchors = ("OD1", "OD2") if residue_state == "ASH" else ("OE1", "OE2")
+        if _hydrogen_count_near_any(residue, anchors) < 1:
+            raise HistidineGeometryError(
+                f"xTB cluster residue {residue.id.display()} is assigned {residue_state}, "
+                f"but no carboxyl proton is present on {'/'.join(anchors)}. "
+                "Hydrogenate the input consistently or use a manual override that matches the input geometry."
+            )
+    elif residue_state == "CYS":
+        if _hydrogen_count_near_any(residue, ("SG",)) < 1:
+            raise HistidineGeometryError(
+                f"xTB cluster residue {residue.id.display()} is assigned CYS, "
+                "but no thiol proton is present on SG."
+            )
+    elif residue_state == "LYS":
+        count = _hydrogen_count_near_any(residue, ("NZ",))
+        if count < 3:
+            raise HistidineGeometryError(
+                f"xTB cluster residue {residue.id.display()} is assigned LYS, "
+                f"but NZ has only {count} nearby hydrogens; expected 3."
+            )
+    elif residue_state == "LYN":
+        count = _hydrogen_count_near_any(residue, ("NZ",))
+        if count != 2:
+            raise HistidineGeometryError(
+                f"xTB cluster residue {residue.id.display()} is assigned LYN, "
+                f"but NZ has {count} nearby hydrogens; expected 2."
+            )
+    elif residue_state == "ARG":
+        required = {"NE": 1, "NH1": 2, "NH2": 2}
+        missing = [
+            f"{atom_name} expected {expected}, found {_hydrogen_count_near_any(residue, (atom_name,))}"
+            for atom_name, expected in required.items()
+            if _hydrogen_count_near_any(residue, (atom_name,)) < expected
+        ]
+        if missing:
+            raise HistidineGeometryError(
+                f"xTB cluster residue {residue.id.display()} is assigned ARG, "
+                f"but guanidinium hydrogens are incomplete: {', '.join(missing)}."
+            )
+
+
+def _validate_histidine_fragment_hydrogens(
+    residue: ResidueRecord,
+    *,
+    residue_state: str,
+    target_histidine: bool,
+    tautomer: str | None,
+) -> None:
+    missing_atoms = [name for name in ("CG", "ND1", "CE1", "NE2", "CD2") if _atom_by_name(residue, name) is None]
+    if missing_atoms:
+        raise HistidineGeometryError(
+            f"Histidine {residue.id.display()} is missing required atoms: {', '.join(missing_atoms)}."
+        )
+    carbon_missing = [
+        name
+        for name in ("CE1", "CD2")
+        if _hydrogen_count_near_any(residue, (name,)) < 1
+    ]
+    if carbon_missing:
+        raise HistidineGeometryError(
+            f"Histidine {residue.id.display()} lacks ring carbon hydrogens on {', '.join(carbon_missing)}; "
+            "the xTB tautomer cluster would have an inconsistent valence."
+        )
+    if target_histidine:
+        if tautomer not in {"HID", "HIE"}:
+            raise HistidineGeometryError("Target histidine tautomer must be HID or HIE.")
+        return
+
+    nd1_h = _hydrogen_count_near_any(residue, ("ND1",))
+    ne2_h = _hydrogen_count_near_any(residue, ("NE2",))
+    expected = {
+        "HID": (1, 0),
+        "HIE": (0, 1),
+        "HIP": (1, 1),
+    }.get(residue_state)
+    if expected is None:
+        total = nd1_h + ne2_h
+        if total != 1:
+            raise HistidineGeometryError(
+                f"Neighbor histidine {residue.id.display()} is unresolved in the xTB cluster; "
+                f"found {total} imidazole N-H hydrogens. Assign it manually to HID/HIE/HIP."
+            )
+        return
+    if nd1_h != expected[0] or ne2_h != expected[1]:
+        raise HistidineGeometryError(
+            f"Histidine {residue.id.display()} is assigned {residue_state}, "
+            f"but has ND1 hydrogens={nd1_h} and NE2 hydrogens={ne2_h}; "
+            f"expected {expected[0]} and {expected[1]}."
+        )
+
+
+def _skip_hydrogen_for_cluster_state(
+    atom: AtomRecord,
+    residue: ResidueRecord,
+    *,
+    residue_state: str,
+    target_histidine: bool,
+) -> bool:
+    if not is_hydrogen_like(atom):
+        return False
+    if target_histidine and _hydrogen_is_near_any(atom, residue, ("ND1", "NE2")):
+        return True
+    if residue_state in {"ASP", "GLU"}:
+        anchors = ("OD1", "OD2") if residue_state == "ASP" else ("OE1", "OE2")
+        return _hydrogen_is_near_any(atom, residue, anchors)
+    if residue_state in {"CYM", "CYX"}:
+        return _hydrogen_is_near_any(atom, residue, ("SG",))
+    return False
+
+
 def _require_retained_hydrogens(residue: ResidueRecord, fragment_atoms: list[XyzAtom]) -> None:
     non_cap_hydrogens = [
         atom for atom in fragment_atoms if atom.element.upper() == "H" and atom.source != "cap"
@@ -445,6 +596,39 @@ def _element(atom: AtomRecord) -> str:
     return atom.element or atom.name.strip()[0].upper()
 
 
+def _atom_by_name(residue: ResidueRecord, name: str) -> AtomRecord | None:
+    return next((atom for atom in residue.atoms if atom.name.strip() == name), None)
+
+
+def _hydrogen_count_near_any(
+    residue: ResidueRecord,
+    atom_names: tuple[str, ...],
+    *,
+    cutoff_angstrom: float = 1.25,
+) -> int:
+    return sum(
+        1
+        for atom in residue.atoms
+        if is_hydrogen_like(atom) and _hydrogen_is_near_any(atom, residue, atom_names, cutoff_angstrom=cutoff_angstrom)
+    )
+
+
+def _hydrogen_is_near_any(
+    hydrogen: AtomRecord,
+    residue: ResidueRecord,
+    atom_names: tuple[str, ...],
+    *,
+    cutoff_angstrom: float = 1.25,
+) -> bool:
+    for name in atom_names:
+        anchor = _atom_by_name(residue, name)
+        if anchor is None:
+            continue
+        if dist((hydrogen.x, hydrogen.y, hydrogen.z), (anchor.x, anchor.y, anchor.z)) <= cutoff_angstrom:
+            return True
+    return False
+
+
 def _is_oxygen_atom(atom: AtomRecord) -> bool:
     element = _element(atom).upper()
     return element == "O"
@@ -457,7 +641,7 @@ def _nearby_nonwater_heavy_atoms(
 ) -> list[AtomRecord]:
     nearby: list[AtomRecord] = []
     for residue in cluster_residues:
-        if residue is water or is_water_residue(residue):
+        if residue is water:
             continue
         for atom in residue.atoms:
             if not is_hydrogen_like(atom):

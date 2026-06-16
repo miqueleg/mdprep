@@ -62,6 +62,21 @@ def test_solvent_adds_alpb_and_extra_args_are_last():
     assert command[-2:] == ["--parallel", "2"]
 
 
+def test_scf_iterations_and_optional_etemp_are_included():
+    command = build_xtb_command(
+        config=HistidineXtbConfig(
+            scf_iterations=750,
+            electronic_temperature_kelvin=1000.0,
+        ),
+        xyz_path="HID.xyz",
+        cluster_charge=0,
+        executable="xtb",
+    )
+
+    assert command[command.index("--iterations") + 1] == "750"
+    assert command[command.index("--etemp") + 1] == "1000.0"
+
+
 def test_opt_command_can_include_xcontrol_input_before_extra_args():
     command = build_xtb_command(
         config=HistidineXtbConfig(model="gfn2", mode="opt", extra_args=["--parallel", "2"]),

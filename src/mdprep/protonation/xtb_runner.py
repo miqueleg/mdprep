@@ -49,6 +49,9 @@ def build_xtb_command(
     if config.mode == "opt":
         command.extend(["--opt", config.opt_level])
     command.extend(["--chrg", str(cluster_charge), "--uhf", "0"])
+    command.extend(["--iterations", str(config.scf_iterations)])
+    if config.electronic_temperature_kelvin is not None:
+        command.extend(["--etemp", str(config.electronic_temperature_kelvin)])
     if config.solvent is not None and not _extra_args_define_solvent(extra_args):
         command.extend(["--alpb", config.solvent])
     if input_path is not None:

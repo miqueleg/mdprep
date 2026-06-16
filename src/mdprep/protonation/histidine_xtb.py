@@ -88,6 +88,7 @@ def select_histidine_tautomer(
     hie_xyz = hist_dir / "HIE.xyz"
     try:
         cluster_kwargs = {
+            "residue_states": planned_states,
             "add_missing_water_hydrogens": config.add_missing_water_hydrogens,
             "water_oh_distance_angstrom": config.water_oh_distance_angstrom,
             "water_hoh_angle_degrees": config.water_hoh_angle_degrees,
