@@ -3,14 +3,16 @@ from dataclasses import replace
 
 from mdprep.protonation.histidine_geometry import (
     HistidineGeometryError,
+    build_tautomer_cluster_model,
     build_tautomer_xyz_atoms,
     place_histidine_tautomer_hydrogen,
+    write_xcontrol_fix_file,
 )
 from mdprep.structure.pdb import read_pdb
 
 
 def histidine():
-    structure = read_pdb("tests/data/protein_histidine_ring.pdb")
+    structure = read_pdb("tests/data/protein_histidine_ring_hydrogenated.pdb")
     return next(residue for residue in structure.residues if residue.id.resname == "HIS")
 
 
@@ -52,13 +54,44 @@ def test_degenerate_geometry_fails_clearly():
         place_histidine_tautomer_hydrogen(residue, tautomer="HID")
 
 
-def test_generated_xyz_has_one_added_hydrogen_and_preserves_heavy_coordinates():
+def test_generated_cluster_preserves_input_hydrogens_adds_caps_and_tautomer_h():
     residue = histidine()
-    atoms = build_tautomer_xyz_atoms([residue], residue, tautomer="HID")
-    heavy = [atom for atom in residue.atoms if atom.element != "H"]
+    model = build_tautomer_cluster_model([residue], residue, tautomer="HID")
+    names = [atom.name for atom in model.atoms]
 
-    assert len(atoms) == len(heavy) + 1
-    assert atoms[-1].element == "H"
-    assert [(atom.x, atom.y, atom.z) for atom in atoms[:-1]] == [
-        (atom.x, atom.y, atom.z) for atom in heavy
-    ]
+    assert "HA" in names
+    assert "HB2" in names
+    assert "HB3" in names
+    assert "HD1" in names
+    assert "HE2" not in names
+    assert "HCA_NCAP" in names
+    assert "HCA_CCAP" in names
+    assert len(model.fixed_atom_indices) == 3
+    assert len(model.cap_atom_indices) == 2
+    assert len(model.anchor_atom_indices) == 1
+
+
+def test_generated_xyz_uses_saturated_cluster_model():
+    residue = histidine()
+    atoms = build_tautomer_xyz_atoms([residue], residue, tautomer="HIE")
+    names = [atom.name for atom in atoms]
+
+    assert "HE2" in names
+    assert "HD1" not in names
+    assert "HCA_NCAP" in names
+    assert "HCA_CCAP" in names
+
+
+def test_dehydrogenated_cluster_fails_clearly():
+    structure = read_pdb("tests/data/protein_histidine_ring.pdb")
+    residue = next(residue for residue in structure.residues if residue.id.resname == "HIS")
+
+    with pytest.raises(HistidineGeometryError, match="requires a hydrogenated protein model"):
+        build_tautomer_cluster_model([residue], residue, tautomer="HID")
+
+
+def test_xcontrol_fix_file_contains_fixed_atoms(tmp_path):
+    path = tmp_path / "xtb.inp"
+    write_xcontrol_fix_file([3, 17, 18], path)
+
+    assert path.read_text(encoding="utf-8") == "$fix\n atoms: 3,17,18\n$end\n"

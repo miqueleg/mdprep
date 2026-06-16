@@ -37,6 +37,7 @@ def build_xtb_command(
     xyz_path: str | Path,
     cluster_charge: int,
     executable: str | None = None,
+    input_path: str | Path | None = None,
 ) -> list[str]:
     exe = executable or config.executable
     command = [exe, str(xyz_path)]
@@ -50,6 +51,8 @@ def build_xtb_command(
     command.extend(["--chrg", str(cluster_charge), "--uhf", "0"])
     if config.solvent is not None and not _extra_args_define_solvent(extra_args):
         command.extend(["--alpb", config.solvent])
+    if input_path is not None:
+        command.extend(["--input", str(input_path)])
     command.extend(extra_args)
     return command
 
@@ -62,6 +65,7 @@ def run_xtb(
     cluster_charge: int,
     stdout_path: str | Path,
     stderr_path: str | Path,
+    input_path: str | Path | None = None,
 ) -> XtbRunResult:
     executable = resolve_xtb_executable(config)
     command = build_xtb_command(
@@ -69,6 +73,7 @@ def run_xtb(
         xyz_path=Path(xyz_path).name,
         cluster_charge=cluster_charge,
         executable=executable,
+        input_path=Path(input_path).name if input_path is not None else None,
     )
     result = run_command(command, cwd=work_dir)
     stdout = Path(stdout_path)
@@ -82,4 +87,3 @@ def run_xtb(
 
 def _extra_args_define_solvent(extra_args: list[str]) -> bool:
     return any(arg in {"--alpb", "--gbsa"} for arg in extra_args)
-

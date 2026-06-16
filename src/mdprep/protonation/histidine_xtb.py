@@ -9,9 +9,10 @@ from pathlib import Path
 from mdprep.config.models import ManifestConfig
 from mdprep.protonation.histidine_geometry import (
     HistidineGeometryError,
-    build_tautomer_xyz_atoms,
+    build_tautomer_cluster_model,
     heavy_atom_distance,
     is_hydrogen_like,
+    write_xcontrol_fix_file,
     write_xyz,
 )
 from mdprep.protonation.xtb_parser import XtbEnergyComparison, compare_hid_hie_energies, parse_xtb_energy_file
@@ -79,8 +80,14 @@ def select_histidine_tautomer(
     hid_xyz = hist_dir / "HID.xyz"
     hie_xyz = hist_dir / "HIE.xyz"
     try:
-        write_xyz(build_tautomer_xyz_atoms(cluster_residues, histidine, tautomer="HID"), hid_xyz, comment="HID")
-        write_xyz(build_tautomer_xyz_atoms(cluster_residues, histidine, tautomer="HIE"), hie_xyz, comment="HIE")
+        hid_model = build_tautomer_cluster_model(cluster_residues, histidine, tautomer="HID")
+        hie_model = build_tautomer_cluster_model(cluster_residues, histidine, tautomer="HIE")
+        write_xyz(hid_model.atoms, hid_xyz, comment="HID")
+        write_xyz(hie_model.atoms, hie_xyz, comment="HIE")
+        hid_input = hist_dir / "HID_xtb.inp"
+        hie_input = hist_dir / "HIE_xtb.inp"
+        write_xcontrol_fix_file(hid_model.fixed_atom_indices, hid_input)
+        write_xcontrol_fix_file(hie_model.fixed_atom_indices, hie_input)
     except HistidineGeometryError as exc:
         raise HistidineXtbError(str(exc)) from exc
 
@@ -96,6 +103,7 @@ def select_histidine_tautomer(
             cluster_charge=cluster_charge,
             stdout_path=hid_stdout,
             stderr_path=hid_stderr,
+            input_path=hid_input if config.mode == "opt" and hid_model.fixed_atom_indices else None,
         )
         hie_run = run_xtb(
             config=config,
@@ -104,6 +112,7 @@ def select_histidine_tautomer(
             cluster_charge=cluster_charge,
             stdout_path=hie_stdout,
             stderr_path=hie_stderr,
+            input_path=hie_input if config.mode == "opt" and hie_model.fixed_atom_indices else None,
         )
         hid_energy = parse_xtb_energy_file(hid_stdout)
         hie_energy = parse_xtb_energy_file(hie_stdout)
@@ -128,6 +137,15 @@ def select_histidine_tautomer(
         executable=hid_run.command_result.command[0],
         cluster_charge=cluster_charge,
         output_dir=hist_dir,
+    )
+    cluster_summary = {
+        "HID": hid_model.to_dict(),
+        "HIE": hie_model.to_dict(),
+        "model": "CA-truncated hydrogen-preserving cluster with fixed CA/capping atoms",
+    }
+    (hist_dir / "cluster_model.json").write_text(
+        json.dumps(cluster_summary, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
     )
     (hist_dir / "energies.json").write_text(
         json.dumps(selection.to_dict(), indent=2, sort_keys=True) + "\n",
@@ -219,4 +237,3 @@ def _ligand_charge_by_residue(
 def _histidine_dir_name(residue: ResidueRecord) -> str:
     chain = residue.id.chain_id if residue.id.chain_id else "blank"
     return f"{chain}_HIS{residue.id.resid}{residue.id.icode or ''}"
-

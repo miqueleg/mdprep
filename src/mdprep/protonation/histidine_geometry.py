@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from math import dist, sqrt
 from pathlib import Path
 
+from mdprep.structure.classify import is_standard_protein_residue, is_water_residue
 from mdprep.structure.models import AtomRecord, ResidueRecord
 
 
@@ -20,6 +21,25 @@ class XyzAtom:
     y: float
     z: float
     name: str
+    source: str = "input"
+
+
+@dataclass(frozen=True)
+class TautomerClusterModel:
+    atoms: list[XyzAtom]
+    fixed_atom_indices: list[int]
+    cap_atom_indices: list[int]
+    anchor_atom_indices: list[int]
+    warnings: list[str]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "atom_count": len(self.atoms),
+            "fixed_atom_indices": self.fixed_atom_indices,
+            "cap_atom_indices": self.cap_atom_indices,
+            "anchor_atom_indices": self.anchor_atom_indices,
+            "warnings": self.warnings,
+        }
 
 
 def place_histidine_tautomer_hydrogen(
@@ -63,6 +83,7 @@ def place_histidine_tautomer_hydrogen(
         y=nitrogen.y + unit[1] * bond_length,
         z=nitrogen.z + unit[2] * bond_length,
         name=atom_name,
+        source="histidine_tautomer",
     )
 
 
@@ -72,14 +93,57 @@ def build_tautomer_xyz_atoms(
     *,
     tautomer: str,
 ) -> list[XyzAtom]:
+    return build_tautomer_cluster_model(cluster_residues, histidine, tautomer=tautomer).atoms
+
+
+def build_tautomer_cluster_model(
+    cluster_residues: list[ResidueRecord],
+    histidine: ResidueRecord,
+    *,
+    tautomer: str,
+) -> TautomerClusterModel:
     atoms: list[XyzAtom] = []
+    fixed_atom_indices: list[int] = []
+    cap_atom_indices: list[int] = []
+    anchor_atom_indices: list[int] = []
+    warnings: list[str] = []
     for residue in cluster_residues:
-        for atom in residue.atoms:
-            if is_hydrogen_like(atom):
-                continue
-            atoms.append(XyzAtom(element=_element(atom), x=atom.x, y=atom.y, z=atom.z, name=atom.name))
+        if is_standard_protein_residue(residue):
+            before = len(atoms)
+            fixed = _append_truncated_protein_residue(
+                atoms,
+                residue,
+                target_histidine=residue is histidine,
+            )
+            fixed_atom_indices.extend(fixed["fixed"])
+            cap_atom_indices.extend(fixed["caps"])
+            anchor_atom_indices.extend(fixed["anchors"])
+            _require_retained_hydrogens(residue, atoms[before:])
+            continue
+        if is_water_residue(residue):
+            before = len(atoms)
+            _append_full_residue(atoms, residue)
+            _require_water_hydrogens(residue, atoms[before:])
+            continue
+        _append_full_residue(atoms, residue)
+
     atoms.append(place_histidine_tautomer_hydrogen(histidine, tautomer=tautomer))
-    return atoms
+    return TautomerClusterModel(
+        atoms=atoms,
+        fixed_atom_indices=sorted(set(fixed_atom_indices)),
+        cap_atom_indices=sorted(set(cap_atom_indices)),
+        anchor_atom_indices=sorted(set(anchor_atom_indices)),
+        warnings=warnings,
+    )
+
+
+def write_xcontrol_fix_file(fixed_atom_indices: list[int], path: str | Path) -> None:
+    path_obj = Path(path)
+    if not fixed_atom_indices:
+        path_obj.write_text("", encoding="utf-8")
+        return
+    atom_text = ",".join(str(index) for index in sorted(set(fixed_atom_indices)))
+    path_obj.write_text(f"$fix\n atoms: {atom_text}\n$end\n", encoding="utf-8")
 
 
 def write_xyz(atoms: list[XyzAtom], path: str | Path, *, comment: str = "mdprep histidine tautomer") -> None:
@@ -111,6 +175,90 @@ def heavy_atom_distance(a: AtomRecord, b: AtomRecord) -> float:
     return dist((a.x, a.y, a.z), (b.x, b.y, b.z))
 
 
+BACKBONE_ATOMS = {"N", "H", "H1", "H2", "H3", "C", "O", "OXT"}
+TAUTOMER_HYDROGENS = {"HD1", "HE2", "1HD1", "2HD1", "1HE2", "2HE2"}
+
+
+def _append_truncated_protein_residue(
+    atoms: list[XyzAtom],
+    residue: ResidueRecord,
+    *,
+    target_histidine: bool,
+) -> dict[str, list[int]]:
+    atom_by_name = {atom.name.strip(): atom for atom in residue.atoms}
+    ca = atom_by_name.get("CA")
+    if ca is None:
+        raise HistidineGeometryError(
+            f"Protein residue {residue.id.display()} is missing CA; cannot build capped xTB cluster."
+        )
+    fixed: list[int] = []
+    caps: list[int] = []
+    anchors: list[int] = []
+    for atom in residue.atoms:
+        name = atom.name.strip()
+        if name in BACKBONE_ATOMS:
+            continue
+        if target_histidine and name in TAUTOMER_HYDROGENS:
+            continue
+        atoms.append(_xyz_from_atom(atom))
+        if name == "CA":
+            fixed.append(len(atoms))
+            anchors.append(len(atoms))
+
+    for boundary_name, cap_name in [("N", "HCA_NCAP"), ("C", "HCA_CCAP")]:
+        boundary = atom_by_name.get(boundary_name)
+        if boundary is None:
+            continue
+        cap = _cap_hydrogen_from_ca(ca, boundary, cap_name)
+        atoms.append(cap)
+        fixed.append(len(atoms))
+        caps.append(len(atoms))
+    return {"fixed": fixed, "caps": caps, "anchors": anchors}
+
+
+def _append_full_residue(atoms: list[XyzAtom], residue: ResidueRecord) -> None:
+    for atom in residue.atoms:
+        atoms.append(_xyz_from_atom(atom))
+
+
+def _require_retained_hydrogens(residue: ResidueRecord, fragment_atoms: list[XyzAtom]) -> None:
+    non_cap_hydrogens = [
+        atom for atom in fragment_atoms if atom.element.upper() == "H" and atom.source != "cap"
+    ]
+    if not non_cap_hydrogens:
+        raise HistidineGeometryError(
+            f"xTB histidine cluster requires a hydrogenated protein model; "
+            f"residue {residue.id.display()} has no retained hydrogens after CA truncation. "
+            "Provide an input structure with hydrogens or add a manual HIS override."
+        )
+
+
+def _require_water_hydrogens(residue: ResidueRecord, atoms: list[XyzAtom]) -> None:
+    hydrogens = [atom for atom in atoms if atom.element.upper() == "H"]
+    if len(hydrogens) < 2:
+        raise HistidineGeometryError(
+            f"Water residue {residue.id.display()} is in the xTB histidine cluster but lacks hydrogens. "
+            "Use a hydrogenated input structure, remove nearby waters, or add a manual HIS override."
+        )
+
+
+def _xyz_from_atom(atom: AtomRecord) -> XyzAtom:
+    return XyzAtom(element=_element(atom), x=atom.x, y=atom.y, z=atom.z, name=atom.name, source="input")
+
+
+def _cap_hydrogen_from_ca(ca: AtomRecord, boundary: AtomRecord, name: str, bond_length: float = 1.09) -> XyzAtom:
+    direction = (boundary.x - ca.x, boundary.y - ca.y, boundary.z - ca.z)
+    unit = _normalize(direction)
+    return XyzAtom(
+        element="H",
+        x=ca.x + unit[0] * bond_length,
+        y=ca.y + unit[1] * bond_length,
+        z=ca.z + unit[2] * bond_length,
+        name=name,
+        source="cap",
+    )
+
+
 def _normalize(vector: tuple[float, float, float]) -> tuple[float, float, float]:
     norm = sqrt(sum(value * value for value in vector))
     if norm < 1.0e-8:
@@ -120,4 +268,3 @@ def _normalize(vector: tuple[float, float, float]) -> tuple[float, float, float]
 
 def _element(atom: AtomRecord) -> str:
     return atom.element or atom.name.strip()[0].upper()
-

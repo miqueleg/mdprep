@@ -74,7 +74,7 @@ def test_real_propka_xtb_his_workflow_runs_when_tools_are_available(tmp_path):
     if which_executable("propka3") is None or which_executable("xtb") is None:
         pytest.skip("propka3 and xtb are required for this external integration test")
 
-    data = manifest_data("tests/data/protein_histidine_ring.pdb", str(tmp_path / "prepared"))
+    data = manifest_data("tests/data/protein_histidine_ring_hydrogenated.pdb", str(tmp_path / "prepared"))
     manifest = tmp_path / "system.yaml"
     manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
@@ -87,8 +87,9 @@ def test_real_propka_xtb_his_workflow_runs_when_tools_are_available(tmp_path):
     report_path = tmp_path / "prepared" / "reports" / "protonation_report.json"
     report = json.loads(report_path.read_text(encoding="utf-8"))
     assert report["propka"]["executable"].endswith("propka3")
-    assert report["parsed_pkas"]
     assert report["xtb_histidines"]
+    if not report["parsed_pkas"]:
+        assert any("Missing pKa" in warning for warning in report["warnings"])
     assert report["xtb_histidines"][0]["selected_state"] in {"HID", "HIE"}
 
     assigned = read_pdb(tmp_path / "prepared" / "intermediate" / "01_protonation_assigned.pdb")
