@@ -115,18 +115,18 @@ A compact manifest:
 #   - Protein force field: ff14SB
 #   - Water model: TIP3P
 #   - Ligand/substrate: 5NB
-#   - Ligand net charge: +1
+#   - Ligand net charge: +0
 #   - Ligand atom types: GAFF2
 #   - Ligand charges: PySCF QMMESP-like embedded RESP/ESP charges
-#   - QM level for 5NB charges: HF/6-31G*
+#   - QM level for SUB charges: HF/6-31G*
 #   - Protonation: PropKa + xTB HID/HIE selection, following the protonation-optimizer logic
 #   - Histidine tautomer ranking: xTB/GFN2 single-point, no implicit solvent
 #   - Solvation: rectangular water box
 
 project:
-  name: 5nb_ff14sb_tip3p_gaff2_qmmesp
-  input_structure: input/complex_with_5NB.pdb
-  output_dir: prepared_5nb_ff14sb_tip3p_gaff2_qmmesp
+  name: SYSTEM_NAME
+  input_structure: input/SYSTEM.pdb
+  output_dir: out/SYSTEM_ff14sb_tip3p_gaff2_qmmesp
 
 structure:
   keep_crystal_waters: true
@@ -148,7 +148,6 @@ protonation:
     executable: null
     candidate_executables:
       - propka3
-      - propka
     pka_margin: 1.0
     keep_output: true
 
@@ -165,9 +164,6 @@ protonation:
       opt_level: loose
       solvent: null
       cutoff_angstrom: 5.0
-      add_missing_water_hydrogens: true
-      water_oh_distance_angstrom: 0.9572
-      water_hoh_angle_degrees: 104.52
       extra_args: []
       energy_tie_tolerance_kcal_mol: 0.5
       low_confidence_threshold_kcal_mol: 1.0
@@ -201,18 +197,18 @@ disulfides:
   forbid: []
 
 ligands:
-  - id: substrate_5nb
+  - id: substrate_SUB
 
     # IMPORTANT:
-    # Replace chain/resid/icode below with the actual residue identity of 5NB
+    # Replace chain/resid/icode below with the actual residue identity of SUB
     # in your input PDB.
     selector:
       chain: A
-      resname: "5NB"
+      resname: "SUB"
       resid: 1
       icode: null
 
-    net_charge: 1
+    net_charge: 0
     multiplicity: 1
     atom_types: gaff2
     charge_method: qmmesp_pyscf
@@ -225,10 +221,10 @@ ligands:
     # QMMESP-like PySCF charge derivation:
     #
     # mdprep first builds a provisional Amber system.
-    # 5NB is then treated as the QM region.
+    # SUB is then treated as the QM region.
     # The protein, retained crystal waters, and other allowed non-target atoms
-    # are used as MM point charges to polarize the 5NB QM density.
-    # The RESP/ESP fit is performed only on the 5NB atoms.
+    # are used as MM point charges to polarize the SUB QM density.
+    # The RESP/ESP fit is performed only on the SUB atoms.
     qmmesp:
       qm_engine: pyscf
       method: HF
@@ -284,6 +280,7 @@ validation:
   fail_on_warnings: false
   fail_on_missing_parameters: true
   fail_on_noninteger_ligand_charge: true
+
 ```
 
 All examples in `examples/*.yaml` are schema-validated by the test suite.
