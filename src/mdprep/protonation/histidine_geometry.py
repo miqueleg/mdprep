@@ -282,6 +282,7 @@ def heavy_atom_distance(a: AtomRecord, b: AtomRecord) -> float:
 
 
 BACKBONE_ATOMS = {"N", "H", "H1", "H2", "H3", "C", "O", "OXT"}
+REMOVED_BACKBONE_HEAVY_ATOMS = ("N", "C", "O", "OXT")
 TAUTOMER_HYDROGENS = {"HD1", "HE2", "1HD1", "2HD1", "1HE2", "2HE2"}
 
 
@@ -310,7 +311,7 @@ def _append_truncated_protein_residue(
     anchors: list[int] = []
     for atom in residue.atoms:
         name = atom.name.strip()
-        if name in BACKBONE_ATOMS:
+        if _is_removed_backbone_atom_or_hydrogen(atom, residue):
             continue
         if _skip_hydrogen_for_cluster_state(
             atom,
@@ -334,6 +335,15 @@ def _append_truncated_protein_residue(
         fixed.append(len(atoms))
         caps.append(len(atoms))
     return {"fixed": fixed, "caps": caps, "anchors": anchors}
+
+
+def _is_removed_backbone_atom_or_hydrogen(atom: AtomRecord, residue: ResidueRecord) -> bool:
+    name = atom.name.strip()
+    if name in BACKBONE_ATOMS:
+        return True
+    if not is_hydrogen_like(atom):
+        return False
+    return _hydrogen_is_near_any(atom, residue, REMOVED_BACKBONE_HEAVY_ATOMS)
 
 
 def _append_full_residue(atoms: list[XyzAtom], residue: ResidueRecord) -> list[int]:

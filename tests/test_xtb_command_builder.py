@@ -1,5 +1,5 @@
 from mdprep.config.models import HistidineXtbConfig
-from mdprep.protonation.xtb_runner import build_xtb_command
+from mdprep.protonation.xtb_runner import _tail, build_xtb_command
 
 
 def test_gfn2_opt_command_contains_gfn_and_opt():
@@ -99,3 +99,9 @@ def test_duplicate_gxtb_is_not_added():
     )
 
     assert command.count("--gxtb") == 1
+
+
+def test_tail_helper_limits_failure_snippet():
+    text = "\n".join(f"line {index}" for index in range(30))
+
+    assert _tail(text, max_lines=3) == "line 27\nline 28\nline 29"

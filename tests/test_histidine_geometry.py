@@ -88,6 +88,19 @@ def test_generated_xyz_uses_saturated_cluster_model():
     assert "HCA_CCAP" in names
 
 
+def test_backbone_hydrogen_named_hn_is_removed_with_truncated_backbone():
+    structure = read_pdb("tests/data/protein_histidine_ring_hydrogenated.pdb")
+    residue = next(residue for residue in structure.residues if residue.id.resname == "HIS")
+    h_index = next(index for index, atom in enumerate(residue.atoms) if atom.name == "H")
+    residue.atoms[h_index] = replace(residue.atoms[h_index], name="HN")
+
+    model = build_tautomer_cluster_model([residue], residue, tautomer="HID")
+    names = [atom.name for atom in model.atoms]
+
+    assert "HN" not in names
+    assert "HA" in names
+
+
 def test_dehydrogenated_cluster_fails_clearly():
     structure = read_pdb("tests/data/protein_histidine_ring.pdb")
     residue = next(residue for residue in structure.residues if residue.id.resname == "HIS")

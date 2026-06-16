@@ -84,9 +84,25 @@ def run_xtb(
     stdout.write_text(result.stdout, encoding="utf-8")
     stderr.write_text(result.stderr, encoding="utf-8")
     if result.returncode != 0:
-        raise XtbExecutionError(f"xTB failed with exit code {result.returncode}. See {stdout} and {stderr}.")
+        raise XtbExecutionError(
+            "xTB failed with exit code "
+            f"{result.returncode}. Command: {' '.join(result.command)}. "
+            f"See {stdout} and {stderr}.\n"
+            f"stdout tail:\n{_tail(result.stdout)}\n"
+            f"stderr tail:\n{_tail(result.stderr)}"
+        )
     return XtbRunResult(command_result=result, stdout_path=stdout, stderr_path=stderr)
 
 
 def _extra_args_define_solvent(extra_args: list[str]) -> bool:
     return any(arg in {"--alpb", "--gbsa"} for arg in extra_args)
+
+
+def _tail(text: str, *, max_lines: int = 20, max_chars: int = 4000) -> str:
+    if not text:
+        return "<empty>"
+    lines = text.rstrip().splitlines()[-max_lines:]
+    tail = "\n".join(lines)
+    if len(tail) > max_chars:
+        return tail[-max_chars:]
+    return tail
