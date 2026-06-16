@@ -45,6 +45,9 @@ def run_tleap(
         raise TLeapRunError(f"AmberTools executable not found: {executable}")
     work = Path(work_dir)
     script = Path(input_path)
+    for stale_log in (work / "leap.log", work / "tleap.log"):
+        if stale_log.exists():
+            stale_log.unlink()
     result = run_command([exe, "-f", script.name], cwd=work)
     generated_log = work / "leap.log"
     log_path = work / "tleap.log"

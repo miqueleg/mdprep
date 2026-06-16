@@ -61,6 +61,35 @@ def test_dry_tleap_script_contains_required_commands(tmp_path):
     assert script.rstrip().endswith("quit")
 
 
+def test_tleap_script_paths_are_relative_to_work_dir(tmp_path):
+    output_dir = tmp_path / "prepared"
+    work_dir = output_dir / "leap" / "dry"
+    input_dir = output_dir / "leap" / "input"
+    input_dir.mkdir(parents=True)
+    work_dir.mkdir(parents=True)
+    sources = forcefield_sources(protein_forcefield="ff19SB", water_model="TIP3P", ligands=[])
+    outputs = TLeapOutputs(
+        prmtop=work_dir / "system.dry.prmtop",
+        inpcrd=work_dir / "system.dry.inpcrd",
+        pdb=work_dir / "system.dry.pdb",
+    )
+    parameter_dir = output_dir / "ligands" / "sub_501" / "parameters"
+    parameter_dir.mkdir(parents=True)
+
+    script = build_tleap_script(
+        sources=sources,
+        ligands=ligand_files(parameter_dir),
+        input_pdb=input_dir / "system.leap_input.pdb",
+        disulfide_bonds=[],
+        outputs=outputs,
+        work_dir=work_dir,
+    )
+
+    assert "loadmol2 ../../ligands/sub_501/parameters/lig.final.mol2" in script
+    assert "loadamberparams ../../ligands/sub_501/parameters/lig.frcmod" in script
+    assert "system = loadpdb ../input/system.leap_input.pdb" in script
+
+
 def test_solvation_commands():
     assert solvation_command(box="truncated_octahedron", water_box="OPCBOX", buffer_angstrom=10.0).startswith(
         "solvateOct"

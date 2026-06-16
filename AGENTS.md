@@ -47,13 +47,17 @@ preparation.
 - QMMESP charges must fit only target ligand atom charges.
 - MM point charges are only for density polarization.
 - Never include environment point charges as ligand charge centers.
+- Never write environment point charges into ligand mol2 files.
+- Final Amber builds must use final fitted ligand mol2 files, not provisional
+  mol2 files.
 - External PySCF tests must skip cleanly if PySCF is unavailable.
 - All user-facing features need tests and docs.
 - All example YAML files must validate in tests.
 
 ## Current v0.1 Limits
 
-Do not implement QM charge derivation beyond the currently requested task.
+Do not add new scientific features without a focused task, tests, examples
+where practical, and documentation.
 
 Explicitly unsupported for v0.1:
 

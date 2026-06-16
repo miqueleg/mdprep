@@ -1,0 +1,70 @@
+project:
+  name: minimal_user_mol2
+  input_structure: input.pdb
+  output_dir: prepared
+
+structure:
+  keep_crystal_waters: true
+  altloc_policy: highest_occupancy
+  remove_unknown_heterogens: false
+  preserve_chain_ids: true
+  remove_input_hydrogens: true
+
+protein:
+  forcefield: ff19SB
+  water_model: TIP3P
+
+protonation:
+  ph: 7.0
+  method: manual_only
+  overrides: []
+  histidine:
+    neutral_tautomer_method: xtb
+    xtb:
+      executable: xtb
+      model: gfn2
+      mode: opt
+      opt_level: loose
+      solvent: water
+      cutoff_angstrom: 5.0
+      extra_args: []
+
+disulfides:
+  auto_detect: true
+  detection_cutoff_angstrom: 2.2
+  force: []
+  forbid: []
+
+ligands:
+  - id: sub_501
+    selector:
+      chain: B
+      resname: SUB
+      resid: 501
+      icode: null
+    net_charge: 0
+    multiplicity: 1
+    atom_types: gaff2
+    charge_method: user_mol2
+    user_mol2: ligand.mol2
+    user_frcmod: ligand.frcmod
+    preserve_atom_names: true
+    preserve_coordinates: true
+    allow_atom_renaming: false
+    allow_coordinate_changes: false
+    qmmesp: null
+
+solvation:
+  enabled: false
+  box: truncated_octahedron
+  buffer_angstrom: 10.0
+  neutralize: true
+  salt_concentration_molar: 0.0
+  positive_ion: Na+
+  negative_ion: Cl-
+
+validation:
+  run_openmm_energy_check: false
+  fail_on_warnings: false
+  fail_on_missing_parameters: true
+  fail_on_noninteger_ligand_charge: true

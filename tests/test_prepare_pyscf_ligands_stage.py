@@ -87,5 +87,15 @@ def test_prepare_tleap_uses_mocked_qmmesp_final_mol2(monkeypatch, tmp_path):
     assert result.exit_code == 0, result.output
     ligand_report = json.loads((output_dir / "reports" / "ligand_report.json").read_text(encoding="utf-8"))
     tleap_script = output_dir / "leap" / "dry" / "tleap.in"
-    assert ligand_report["ligands"][0]["final_mol2_path"] in tleap_script.read_text(encoding="utf-8")
+    loadmol2_path = _loadmol2_path(tleap_script)
+    assert (tleap_script.parent / loadmol2_path).resolve() == Path(
+        ligand_report["ligands"][0]["final_mol2_path"]
+    ).resolve()
     assert (output_dir / "final" / "system.prmtop").exists()
+
+
+def _loadmol2_path(script_path: Path) -> Path:
+    for line in script_path.read_text(encoding="utf-8").splitlines():
+        if " = loadmol2 " in line:
+            return Path(line.split("loadmol2", 1)[1].strip())
+    raise AssertionError("tleap script did not contain a loadmol2 command")

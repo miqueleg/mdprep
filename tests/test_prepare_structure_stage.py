@@ -44,6 +44,8 @@ def test_prepare_structure_stage_writes_outputs(tmp_path):
     assert [residue.id.resname for residue in reparsed.residues] == ["ALA", "SUB", "COF"]
     report = json.loads((output_dir / "reports" / "structure_report.json").read_text(encoding="utf-8"))
     assert report["atom_count_after"] == 7
+    lock = yaml.safe_load((output_dir / "manifest.lock.yaml").read_text(encoding="utf-8"))
+    assert lock["resolved"]["input_manifest_path"] == str(manifest)
 
 
 def test_prepare_output_dir_not_overwritten_without_flag(tmp_path):
@@ -72,4 +74,3 @@ def test_prepare_overwrite_works(tmp_path):
 
     assert result.exit_code == 0
     assert (output_dir / "intermediate" / "00_input_normalized.pdb").exists()
-

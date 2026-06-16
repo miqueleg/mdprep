@@ -97,6 +97,7 @@ def prepare_system(
         manifest=manifest,
         structure_report=report,
         path=output_dir / "manifest.lock.yaml",
+        input_manifest_path=manifest_file,
     )
     _write_versions(output_dir / "versions.json")
 
@@ -126,6 +127,7 @@ def prepare_system(
             manifest=manifest,
             structure_report=report,
             path=output_dir / "manifest.lock.yaml",
+            input_manifest_path=manifest_file,
             protonation_report=protonation_report,
         )
         _write_versions(
@@ -151,6 +153,7 @@ def prepare_system(
             manifest=manifest,
             structure_report=report,
             path=output_dir / "manifest.lock.yaml",
+            input_manifest_path=manifest_file,
             protonation_report=protonation_report,
             ligand_report=ligand_report,
         )
@@ -194,6 +197,7 @@ def prepare_system(
             manifest=manifest,
             structure_report=report,
             path=output_dir / "manifest.lock.yaml",
+            input_manifest_path=manifest_file,
             protonation_report=protonation_report,
             ligand_report=ligand_report,
             tleap_report=tleap_report,
@@ -225,6 +229,7 @@ def _write_manifest_lock(
     manifest: object,
     structure_report: dict[str, object],
     path: Path,
+    input_manifest_path: Path,
     protonation_report: dict[str, object] | None = None,
     ligand_report: dict[str, object] | None = None,
     tleap_report: dict[str, object] | None = None,
@@ -235,6 +240,7 @@ def _write_manifest_lock(
         "mdprep_version": __version__,
         "manifest": manifest_data,
         "resolved": {
+            "input_manifest_path": str(input_manifest_path),
             "input_structure": manifest_data["project"]["input_structure"],
             "selected_altloc_policy": manifest_data["structure"]["altloc_policy"],
             "keep_crystal_waters": manifest_data["structure"]["keep_crystal_waters"],

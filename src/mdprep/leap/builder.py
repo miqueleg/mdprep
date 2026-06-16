@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import shutil
 from dataclasses import dataclass
+import os
 from pathlib import Path
 
 from mdprep.config.models import ManifestConfig
@@ -132,6 +133,7 @@ def run_tleap_stage(
             input_pdb=leap_input.path,
             disulfide_bonds=disulfide_bonds,
             outputs=dry_outputs,
+            work_dir=dry_dir,
         )
         dry_input = dry_dir / "tleap.in"
         dry_input.write_text(dry_script, encoding="utf-8")
@@ -200,6 +202,7 @@ def build_tleap_script(
     input_pdb: str | Path,
     disulfide_bonds: list[DisulfideBondCommand],
     outputs: TLeapOutputs,
+    work_dir: str | Path | None = None,
     solvation_command: str | None = None,
     ion_commands: list[str] | None = None,
 ) -> str:
@@ -207,11 +210,13 @@ def build_tleap_script(
     for source in sources.all_sources:
         lines.append(f"source {source}")
     for ligand in ligands:
-        lines.append(f"{ligand.variable_name} = loadmol2 {ligand.final_mol2_path}")
+        mol2_path = _tleap_path(ligand.final_mol2_path, work_dir)
+        frcmod_path = _tleap_path(ligand.final_frcmod_path, work_dir)
+        lines.append(f"{ligand.variable_name} = loadmol2 {mol2_path}")
         if ligand.variable_name != ligand.residue_name:
             lines.append(f"{ligand.residue_name} = {ligand.variable_name}")
-        lines.append(f"loadamberparams {ligand.final_frcmod_path}")
-    lines.append(f"system = loadpdb {Path(input_pdb)}")
+        lines.append(f"loadamberparams {frcmod_path}")
+    lines.append(f"system = loadpdb {_tleap_path(input_pdb, work_dir)}")
     lines.extend(bond.command for bond in disulfide_bonds)
     if solvation_command is not None:
         lines.append(solvation_command)
@@ -227,6 +232,17 @@ def build_tleap_script(
         ]
     )
     return "\n".join(lines)
+
+
+def _tleap_path(path: str | Path, work_dir: str | Path | None) -> str:
+    """Return a path that tleap can resolve from its execution directory."""
+    path_obj = Path(path)
+    if work_dir is None:
+        return str(path_obj)
+    base = Path(work_dir)
+    base_abs = base if base.is_absolute() else Path.cwd() / base
+    target_abs = path_obj if path_obj.is_absolute() else Path.cwd() / path_obj
+    return os.path.relpath(target_abs.resolve(), base_abs.resolve())
 
 
 def solvation_command(*, box: str, water_box: str, buffer_angstrom: float) -> str:
@@ -277,6 +293,7 @@ def _run_solvated_build(
                 input_pdb=input_pdb,
                 disulfide_bonds=disulfide_bonds,
                 outputs=pre_outputs,
+                work_dir=solv_dir,
                 solvation_command=solvate,
             ),
             encoding="utf-8",
@@ -308,6 +325,7 @@ def _run_solvated_build(
         input_pdb=input_pdb,
         disulfide_bonds=disulfide_bonds,
         outputs=final_outputs,
+        work_dir=solv_dir,
         solvation_command=solvate,
         ion_commands=ion_plan.commands,
     )

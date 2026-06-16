@@ -5,7 +5,7 @@ from typer.testing import CliRunner
 
 from mdprep.cli import app
 from tests.test_ligand_workflow_mocked import fake_point_charges, fake_pyscf_derivation, fake_tleap
-from tests.test_prepare_pyscf_ligands_stage import write_pyscf_manifest
+from tests.test_prepare_pyscf_ligands_stage import _loadmol2_path, write_pyscf_manifest
 from tests.test_prepare_tleap_stage import fake_validation
 from tests.test_qmmesp_correctness import fake_qmmesp_antechamber, fake_qmmesp_parmchk2
 from tests.test_tleap_workflow_mocked import fake_tleap as fake_final_tleap
@@ -28,10 +28,11 @@ def test_final_tleap_uses_final_fitted_mol2_not_provisional(monkeypatch, tmp_pat
     ligand = ligand_report["ligands"][0]
     final_mol2 = ligand["final_mol2_path"]
     provisional_mol2 = ligand["provisional_mol2_path"]
-    tleap_script = Path(output_dir / "leap" / "dry" / "tleap.in").read_text(encoding="utf-8")
+    tleap_script_path = Path(output_dir / "leap" / "dry" / "tleap.in")
+    tleap_script = tleap_script_path.read_text(encoding="utf-8")
     lock = json_like_yaml(output_dir / "manifest.lock.yaml")
 
-    assert final_mol2 in tleap_script
+    assert (tleap_script_path.parent / _loadmol2_path(tleap_script_path)).resolve() == Path(final_mol2).resolve()
     assert provisional_mol2 not in tleap_script
     assert lock["resolved"]["ligands"][0]["final_mol2_path"] == final_mol2
     assert lock["resolved"]["ligands"][0]["provisional_mol2_path"] == provisional_mol2

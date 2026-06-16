@@ -1,281 +1,314 @@
 # mdprep
 
 `mdprep` is a Python package for reproducible Amber molecular-dynamics
-preparation of standard proteins plus independent ligands and cofactors.
-The YAML manifest is the source of truth: every preparation decision should be
-recorded, validated, and reproduced.
+preparation of standard proteins plus independent ligands and cofactors. A
+YAML manifest is the source of truth: structure cleanup, protonation decisions,
+ligand charge methods, `tleap` settings, and validation outputs are recorded so
+the same preparation can be reviewed and repeated.
 
-## v0.1 Scope
+## What mdprep Does
 
-This initial version provides the package scaffold, manifest validation, CLI
-entry points, examples, self-test checks, PDB inspection, safe structure
-normalization, manual protonation handling, PropKa-based automatic residue
-state assignment, xTB-based neutral histidine tautomer ranking, ligand
-extraction plus AmberTools ligand parameter generation, and final `tleap`
-Amber topology generation.
+mdprep automates the first usable Amber preparation workflow:
 
-Planned supported chemistry includes standard amino-acid proteins,
-crystallographic waters, manual and detected disulfides, ASP/GLU/LYS/ARG/HIS
-protonation assignment, manual protonation overrides, HID/HIE histidine
-selection through xTB/GFN2, independent ligands, GAFF/GAFF2 ligand setup,
-AM1-BCC charges, PySCF-based embedded ligand charge derivation, and final
-`tleap` generation of `prmtop` and `inpcrd` files.
+- inspects PDB files and reports protein, water, heterogen, ligand, histidine,
+  titratable-residue, and disulfide content
+- generates starter YAML manifests
+- normalizes structures without silently deleting unknown chemistry
+- applies manual protonation overrides
+- runs PropKa-based pH protonation assignment when requested
+- selects neutral HID/HIE histidine tautomers with xTB/GFN2 by default
+- supports g-xTB single-point and optimization modes
+- assigns disulfide-linked cysteines to `CYX`
+- keeps or removes crystal waters according to the manifest
+- extracts multiple independent ligands/cofactors
+- parameterizes ligands with AM1-BCC, user mol2/frcmod, PySCF gas RESP/ESP, or
+  PySCF QMMESP-style embedded charges
+- builds final Amber `prmtop`, `inpcrd`, and PDB files with `tleap`
+- supports solvation, neutralization, approximate salt-pair addition, and final
+  sanity checks
 
-## Unsupported Chemistry
+## Supported Workflows In 0.1.0
 
-The v0.1 design intentionally rejects noncanonical amino acids inside peptide
-chains, covalent ligands, bonded metal centers, MCPB.py-style metal models,
-ORCA backends, and required Multiwfn workflows. Chemically sensitive states
-must not be guessed silently.
+- PDB input inspection
+- starter manifest generation with `mdprep init`
+- structure-only normalization
+- manual protonation state overrides
+- PropKa protonation
+- xTB/GFN2 HID/HIE selection for neutral histidines
+- g-xTB histidine tautomer ranking, including optimization mode
+- disulfide detection and `CYX` assignment
+- crystal-water retention/removal
+- multiple independent ligands/cofactors
+- GAFF/GAFF2 ligand setup with AmberTools
+- AM1-BCC ligand charges
+- user-provided mol2/frcmod ligand parameters
+- PySCF gas-phase RESP/ESP-like ligand charges
+- PySCF QMMESP-style environment-polarized ligand charges
+- final `tleap` Amber build
+- optional solvation, neutralization, and salt
+- final validation reports
+
+## Explicitly Unsupported
+
+mdprep 0.1.0 intentionally does not support:
+
+- noncanonical amino acids inside polymer chains
+- covalent ligands
+- bonded metal-center parameterization
+- MCPB-like workflows
+- ORCA backend
+- Multiwfn backend
+- mmCIF input
+- automatic loop modeling
+- production minimization or MD
+
+Chemically sensitive states are not guessed silently. Unsupported chemistry
+should fail with a clear error.
 
 The legacy molecule-conversion toolkit identified by the dedicated ban test is
-intentionally prohibited. Use RDKit, AmberTools, ParmEd, MDTraj, BioPython, and
-direct file parsers instead.
+intentionally prohibited. mdprep uses direct parsers and domain-specific tools
+instead of molecule-conversion fallbacks.
 
 ## Installation
 
-Create the development environment with conda or mamba:
+The recommended path is conda or mamba:
 
 ```bash
 mamba env create -f environment.yml
 conda activate mdprep
-```
-
-The conda environment includes the optional PropKa and xTB executables used by
-`protonation.method: propka` and `protonation.method: propka_xtb_his`, plus
-AmberTools for `antechamber`/`parmchk2` ligand parameter generation and
-`tleap` final system building. ParmEd and OpenMM are included for optional
-final topology sanity checks.
-
-For a lighter local install:
-
-```bash
-python -m pip install -e ".[test]"
-```
-
-## Quick Start
-
-Validate the bundled examples:
-
-```bash
-mdprep config-check examples/*.yaml
-```
-
-Run package-level checks:
-
-```bash
+pip install -e .
 mdprep selftest --quick
 ```
 
-Inspect a PDB structure:
+For development and packaging tools:
+
+```bash
+mamba env create -f environment-dev.yml
+conda activate mdprep-dev
+```
+
+The conda environment includes AmberTools, PropKa, xTB, OpenMM, ParmEd, and
+PySCF. A lighter pip-only install can run the pure unit tests, but external
+chemistry workflows require the corresponding command-line tools and optional
+Python libraries.
+
+## Quick Start
 
 ```bash
 mdprep inspect input.pdb
-```
-
-`mdprep inspect` is functional for PDB input. It reports atom and residue
-counts, chains, waters, likely ligands or cofactors, histidines, titratable
-residues, possible disulfides, alternate-location handling, and multi-model
-warnings. Machine-readable output is available with:
-
-```bash
-mdprep inspect input.pdb --json
-```
-
-Create a starter manifest:
-
-```bash
 mdprep init input.pdb -o system.yaml
 mdprep config-check system.yaml
+mdprep prepare system.yaml
+mdprep validate prepared/final/system.prmtop prepared/final/system.inpcrd
 ```
 
-Run the currently supported safe preparation stage:
+Use `mdprep --version` to confirm the installed release.
+
+## YAML Manifest Overview
+
+A compact manifest:
+
+```yaml
+project:
+  name: example
+  input_structure: input.pdb
+  output_dir: prepared/example
+
+structure:
+  keep_crystal_waters: true
+  altloc_policy: highest_occupancy
+  remove_unknown_heterogens: false
+  preserve_chain_ids: true
+  remove_input_hydrogens: true
+
+protein:
+  forcefield: ff19SB
+  water_model: TIP3P
+
+protonation:
+  ph: 7.0
+  method: manual_only
+  overrides: []
+  histidine:
+    neutral_tautomer_method: xtb
+    xtb:
+      executable: xtb
+      model: gfn2
+      mode: opt
+      opt_level: loose
+      solvent: water
+      cutoff_angstrom: 5.0
+      extra_args: []
+
+disulfides:
+  auto_detect: true
+  detection_cutoff_angstrom: 2.2
+  force: []
+  forbid: []
+
+ligands: []
+
+solvation:
+  enabled: true
+  box: truncated_octahedron
+  buffer_angstrom: 10.0
+  neutralize: true
+  salt_concentration_molar: 0.15
+  positive_ion: Na+
+  negative_ion: Cl-
+
+validation:
+  run_openmm_energy_check: true
+  fail_on_warnings: false
+  fail_on_missing_parameters: true
+  fail_on_noninteger_ligand_charge: true
+```
+
+All examples in `examples/*.yaml` are schema-validated by the test suite.
+
+## Stop Stages
+
+Run only part of the workflow when debugging:
 
 ```bash
 mdprep prepare system.yaml --stop-after structure
-```
-
-This stage resolves alternate locations, keeps or removes crystal waters
-according to the manifest, validates configured ligand selectors, refuses
-unknown heterogens unless the manifest explicitly allows removing them, writes
-a normalized PDB, and produces structure reports.
-
-This stage does not assign protonation states, parameterize ligands, derive
-QM-based charges, run AmberTools, or build Amber files.
-
-Run the protonation stage:
-
-```bash
 mdprep prepare system.yaml --stop-after protonation
-```
-
-Supported protonation modes are:
-
-- `manual_only`: applies only user overrides and disulfide `CYX` assignment.
-- `propka`: runs PropKa and assigns pH-dependent ASP/GLU/CYS/LYS/HIS states,
-  but requires every neutral HIS to already be HID/HIE by input state or manual
-  override.
-- `propka_xtb_his`: runs PropKa, assigns HIP for protonated HIS, and ranks
-  neutral HID/HIE tautomers with xTB/GFN2 by default.
-
-Manual overrides always win over PropKa and xTB. Input Amber-specific residue
-states such as `ASH`, `GLH`, `HID`, `HIE`, `HIP`, `LYN`, `CYM`, and `CYX` are
-preserved unless explicitly overridden. The protonation stage assigns
-disulfide-linked cysteines to `CYX` from configured or detected pairs,
-optionally removes input hydrogens according to
-`structure.remove_input_hydrogens`, writes
-`intermediate/01_protonation_assigned.pdb`, and produces JSON, CSV, and
-Markdown protonation reports.
-
-No hydrogens are added to the final prepared PDB. Temporary xTB tautomer
-hydrogens are written only to local HID/HIE comparison XYZ files and are never
-propagated to `01_protonation_assigned.pdb`. g-xTB can be used in single-point
-or optimization mode through the `histidine.xtb` manifest block.
-
-PropKa and xTB remain optional external tools. Unit tests do not require them;
-requested automated workflows fail clearly if an executable is unavailable.
-The external integration test is marked `external` and skips cleanly unless
-`propka3` and `xtb` are installed.
-
-Run the ligand stage:
-
-```bash
 mdprep prepare system.yaml --stop-after ligands
-```
-
-The ligand stage supports four ligand charge/parameter input modes:
-
-- `am1bcc`: extracts each configured ligand residue, runs AmberTools
-  `antechamber`, validates the generated mol2, then runs `parmchk2`.
-- `user_mol2`: validates a user-provided mol2 against the extracted ligand.
-  If `user_frcmod` is provided it is copied; otherwise `parmchk2` is required.
-- `gas_resp_pyscf`: uses AmberTools only for GAFF/GAFF2 atom types and bonded
-  terms, then replaces provisional AM1-BCC charges with native RESP/ESP-like
-  charges fitted from a PySCF gas-phase ligand calculation.
-- `qmmesp_pyscf`: builds a provisional dry Amber system, extracts non-target
-  MM point charges with ParmEd, polarizes the target ligand density with PySCF,
-  fits charges only on target ligand atoms, and rebuilds later stages with the
-  fitted target charges.
-
-Multiple configured ligands are processed independently; mdprep does not reuse
-charges between ligand instances in this stage. The user must provide the
-correct `net_charge` for every ligand. Atom count, atom names, element order,
-coordinates, residue identity, and charge sum are validated, and small mol2
-charge residuals are corrected only within a strict tolerance.
-
-PySCF ligand-charge workflows use a `qmmesp:` manifest block for QM method,
-basis, ESP-grid, fitting, and environment settings. For gas-phase RESP, the
-environment options are ignored. For QMMESP-like charges, the MM environment is
-used only to polarize the target ligand electron density; environment point
-charges are never fitted as ligand charge centers and are never written into
-the ligand mol2. The fitting target is the polarized target-ligand QM ESP, not
-the total protein-plus-ligand electrostatic field compressed into ligand
-charges. AM1-BCC charges are provisional for PySCF workflows and are replaced
-in the final mol2.
-
-The ligand stage writes extracted ligand PDBs, identity files, final mol2
-files, frcmod files, charge CSVs, validation JSON files, and ligand reports.
-
-Ligand troubleshooting:
-
-- If AmberTools is unavailable, install the conda environment from
-  `environment.yml` or add `antechamber` and `parmchk2` to `PATH`.
-- If `antechamber` fails, inspect the ligand-specific stdout/stderr files in
-  `prepared/ligands/<ligand_id>/parameters/`.
-- If charge validation fails, check the manifest `net_charge` and mol2 charges.
-- If atom-name validation fails, verify that the mol2 atom order matches the
-  extracted ligand PDB.
-- If coordinate validation fails, provide a mol2 generated from the same
-  coordinates or explicitly allow coordinate changes in the manifest.
-- Missing ligand hydrogens may cause parameterization failure; provide a
-  chemically complete ligand input when needed.
-- If PySCF is unavailable, install the conda environment from
-  `environment.yml` or add PySCF to the active Python environment.
-- If SCF fails to converge, inspect the ligand-specific `qm/` directory and
-  consider a smaller test basis or a corrected ligand structure.
-- If ESP-grid generation fails, adjust the manifest grid settings or inspect
-  ligand atom elements.
-- If the ESP fit is poor, inspect `fit_report.json`; equivalent-atom
-  constraints are not implemented in v0.1.
-- If QMMESP mapping is ambiguous, use unique ligand residue names/selectors.
-- If ParmEd is unavailable, `qmmesp_pyscf` cannot extract reliable MM point
-  charges.
-- If too few MM point charges are included, increase the embedding cutoff or
-  check environment include/exclude settings.
-
-Run the final Amber build:
-
-```bash
-mdprep prepare system.yaml
 mdprep prepare system.yaml --stop-after tleap
 ```
 
-Both commands run the currently supported full workflow through structure
-normalization, protonation assignment, ligand parameterization, `tleap`, and
-final validation. The generated final files are:
+Without `--stop-after`, `mdprep prepare system.yaml` runs the full supported
+workflow through final `tleap` and validation.
+
+## Protonation
+
+Supported protonation modes:
+
+- `manual_only`: applies only user overrides, input-state preservation, and
+  disulfide `CYX` assignment.
+- `propka`: runs PropKa and assigns pH-dependent states. Neutral HIS residues
+  must already be HID/HIE by input state or manual override.
+- `propka_xtb_his`: runs PropKa, assigns HIP for protonated HIS, and ranks
+  neutral HID/HIE tautomers with xTB.
+
+Manual overrides always win. HIP is assigned by PropKa/pH or explicit manual
+override. HID/HIE are selected by xTB only for neutral, non-overridden HIS
+residues under `propka_xtb_his`. mdprep does not guess catalytic chemistry.
+
+No hydrogens are added to the final prepared PDB. Input hydrogens can be
+removed before the protonation-stage PDB is written, letting Amber assign final
+hydrogens later from residue names.
+
+## Ligands
+
+Every ligand entry must provide a selector and `net_charge`. Ligands are
+processed independently.
+
+Supported charge methods:
+
+- `am1bcc`: AmberTools `antechamber` plus `parmchk2`.
+- `user_mol2`: validate user mol2, copy user frcmod or run `parmchk2`.
+- `gas_resp_pyscf`: AmberTools for atom types/bonded terms, PySCF gas-phase
+  RESP/ESP-like charges.
+- `qmmesp_pyscf`: provisional Amber system, PySCF embedded single point, and
+  target-ligand-only RESP/ESP-like fitting.
+
+mdprep validates ligand atom count, atom order, atom names, element order,
+coordinates, residue identity, and total charge. If a ligand operation changes
+identity unexpectedly, it fails unless the manifest explicitly allows that
+behavior.
+
+## Correct QMMESP Interpretation
+
+For `qmmesp_pyscf`, mdprep first builds a provisional Amber system. The
+selected ligand is treated as the QM region. The surrounding protein, retained
+waters, ions, and optionally other ligands are represented as MM point charges.
+These MM point charges polarize the ligand QM density during the PySCF
+calculation. The RESP/ESP fit is then performed only on the selected ligand
+atoms, using the polarized ligand QM electrostatic potential. Environment point
+charges are not fitted and are not written into the ligand mol2. The final
+Amber system is rebuilt with the fitted ligand charges.
+
+This is different from fitting the total protein-plus-ligand electrostatic
+field into ligand charges.
+
+## Output Layout
+
+Typical output:
 
 ```text
-final/system.prmtop
-final/system.inpcrd
-final/system.pdb
+prepared/
+  manifest.input.yaml
+  manifest.lock.yaml
+  versions.json
+  intermediate/
+    00_input_normalized.pdb
+    01_protonation_assigned.pdb
+  ligands/
+    <ligand_id>/
+      input/
+      parameters/
+      qm/
+  qmmesp/
+    provisional_leap/
+  leap/
+    input/
+    dry/
+    solvated/
+  final/
+    system.prmtop
+    system.inpcrd
+    system.pdb
+  reports/
+    structure_report.*
+    protonation_report.*
+    ligand_report.*
+    tleap_report.*
+    validation_report.*
 ```
 
-The final build uses explicit force-field mappings: `ff14SB` or `ff19SB` for
-protein, `TIP3P` or `OPC` for water, and `gaff` or `gaff2` for ligands. Ligand
-mol2/frcmod files from the ligand stage are loaded into `tleap`; residue names
-and atom names are checked before the script is written. Disulfide-linked
-`CYX` residues generate explicit `bond system.<idx>.SG system.<idx>.SG`
-commands based on the loaded PDB residue order.
+`manifest.lock.yaml` records resolved stage metadata and final output paths.
+`versions.json` records mdprep, Python, platform, optional executable versions,
+and optional Python package versions where available.
 
-If `solvation.enabled: false`, the dry build is copied to `final/`. If
-solvation is enabled, mdprep writes a solvated `tleap` script using either
-`solvateOct` or `solvateBox`, applies configured ion names for neutralization,
-and adds salt ion pairs when the solvated box volume can be determined. The
-requested salt concentration is converted with:
+## Troubleshooting
 
-```text
-n_pairs = round(molarity * volume_A3 * 0.000602214076)
+- Unknown heterogens: add them to `ligands:` or set
+  `structure.remove_unknown_heterogens: true`.
+- Missing ligand net charge: set `ligands[].net_charge` explicitly.
+- PropKa not found: install the conda environment or set
+  `protonation.propka.executable`.
+- xTB not found: install the conda environment or set
+  `protonation.histidine.xtb.executable`.
+- AmberTools not found: ensure `antechamber`, `parmchk2`, and `tleap` are on
+  `PATH`.
+- `antechamber` failed: inspect ligand-specific stdout/stderr files under
+  `ligands/<id>/parameters/`.
+- `tleap` unknown residue: configure the ligand or fix residue names so they
+  match loaded mol2 templates.
+- Missing atom type/parameter: inspect ligand mol2/frcmod consistency.
+- `CYX` without disulfide pair: add the pair under `disulfides.force` or use
+  `CYS`/`CYM` if the residue is not disulfide-bonded.
+- OpenMM validation warning: inspect `reports/validation_report.json`.
+- PySCF SCF did not converge: inspect the ligand `qm/` output and use a
+  chemically valid ligand geometry/charge/multiplicity.
+- Poor RESP fit: inspect `fit_report.json`; equivalent-atom constraints are
+  not implemented in v0.1.
+- Ambiguous QMMESP ligand mapping: use unique ligand residue names/selectors.
+
+## Testing
+
+```bash
+pytest -q
+pytest -q -m "external"
+pytest -q -m "external or ambertools or tleap or pyscf or qmmesp"
+python -m mdprep.cli config-check examples/*.yaml
+python -m mdprep.cli selftest --quick
 ```
 
-Final validation always checks file existence, file sizes, final PDB
-parseability, configured ligand presence, ligand atom names, water presence
-relative to solvation settings, and basic disulfide consistency. ParmEd is used
-when importable to load the topology and coordinates and record total charge.
-OpenMM is used when requested and importable to compute a finite potential
-energy sanity check; no minimization or production simulation is run.
+External tests skip cleanly when required tools are unavailable.
 
-PySCF is the only QM backend in v0.1. ORCA and Multiwfn are not required.
-Noncanonical residues, covalent ligands, and bonded metal centers remain
-unsupported.
+## Citation And License
 
-Final-build troubleshooting:
-
-- If `tleap` is unavailable, install the conda environment from
-  `environment.yml` or add `tleap` to `PATH`.
-- Unknown residues usually mean the manifest did not configure a ligand or the
-  PDB residue name does not match a loaded mol2 template.
-- Missing atom types or parameters usually mean the ligand mol2/frcmod is
-  incomplete or inconsistent with the PDB.
-- Ligand atom-name mismatch means the final mol2 atom order/names do not match
-  the extracted ligand PDB.
-- A `CYX` residue without a disulfide pair requires a `disulfides.force` entry
-  or a residue-state change to `CYS`/`CYM`.
-- OpenMM validation warnings are reported in `reports/validation_report.json`
-  and `reports/validation_report.md`.
-
-## Planned Workflow
-
-The intended preparation flow is:
-
-1. Normalize and inspect the input structure.
-2. Apply manual overrides before automated decisions.
-3. Assign protein protonation states with PropKa-like logic and xTB/GFN2
-   neutral histidine tautomer selection where requested.
-4. Parameterize independent ligands while preserving atom names, atom order,
-   coordinates, residue identity, and total charge.
-5. Build final Amber topology and coordinate files with `tleap`, solvation,
-   ions, and validation.
-6. For embedded ligand charges, run provisional Amber setup, PySCF QM
-   evaluation, RESP/ESP-like fitting, and final Amber rebuild.
-7. Generate reproducible manifests, versions, intermediate structures, reports,
-   and final Amber topology/coordinate files.
+See `CITATION.cff` for citation metadata and `LICENSE` for license terms.
+Maintainers should update citation author metadata before archival publication.

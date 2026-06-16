@@ -1,0 +1,31 @@
+name: mdprep-dev
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - hatchling
+  - typer
+  - rich
+  - pydantic
+  - pydantic-settings
+  - pyyaml
+  - numpy
+  - scipy
+  - pandas
+  - pytest
+  - build
+  - twine
+  - ruff
+  - mypy
+  - propka
+  - xtb
+  - ambertools
+  - parmed
+  - openmm
+  - pyscf
+  - rdkit
+  - biopython
+  - mdtraj
+  - pip:
+      - -e .

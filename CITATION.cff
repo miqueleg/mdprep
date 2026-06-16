@@ -1,0 +1,9 @@
+cff-version: 1.2.0
+message: "If you use mdprep, please cite this software. Maintainers should update author metadata before archival publication."
+title: "mdprep: reproducible Amber MD preparation for proteins and independent ligands"
+version: "0.1.0"
+date-released: "2026-06-15"
+license: "MIT"
+authors:
+  - name: "Miquel Estévez-Gay"
+repository-code: "https://github.com/miqueleg/mdprep"
