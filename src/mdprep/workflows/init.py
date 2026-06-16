@@ -116,7 +116,7 @@ def _render_manifest(
             "      water_oh_distance_angstrom: 0.9572",
             "      water_hoh_angle_degrees: 104.52",
             "      scf_iterations: 500",
-            "      electronic_temperature_kelvin: null",
+            "      electronic_temperature_kelvin: 1000.0",
             "",
             "disulfides:",
             "  auto_detect: true",

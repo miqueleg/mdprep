@@ -83,7 +83,8 @@ def select_histidine_tautomer(
         histidine,
         cutoff_angstrom=config.cutoff_angstrom,
     )
-    cluster_charge = estimate_cluster_charge(cluster_residues, manifest, planned_states)
+    charge_breakdown = cluster_charge_breakdown(cluster_residues, manifest, planned_states)
+    cluster_charge = sum(int(item["charge"]) for item in charge_breakdown)
     hid_xyz = hist_dir / "HID.xyz"
     hie_xyz = hist_dir / "HIE.xyz"
     try:
@@ -172,6 +173,12 @@ def select_histidine_tautomer(
         "HID": hid_model.to_dict(),
         "HIE": hie_model.to_dict(),
         "model": "CA-truncated hydrogen-preserving cluster with fixed CA/capping atoms",
+        "cluster_charge": cluster_charge,
+        "charge_breakdown": charge_breakdown,
+        "HID_element_counts": _element_counts(hid_model.atoms),
+        "HIE_element_counts": _element_counts(hie_model.atoms),
+        "HID_min_interatomic_distance": _min_interatomic_distance(hid_model.atoms),
+        "HIE_min_interatomic_distance": _min_interatomic_distance(hie_model.atoms),
         "temporary_water_hydrogens_for_xtb_only": {
             "hydrogens_added": selection.temporary_water_hydrogens_added,
             "waters_modified": selection.waters_modified_for_xtb_only,
@@ -217,20 +224,43 @@ def estimate_cluster_charge(
     manifest: ManifestConfig,
     planned_states: dict[int, str],
 ) -> int:
-    charge = 0
+    return sum(int(item["charge"]) for item in cluster_charge_breakdown(cluster_residues, manifest, planned_states))
+
+
+def cluster_charge_breakdown(
+    cluster_residues: list[ResidueRecord],
+    manifest: ManifestConfig,
+    planned_states: dict[int, str],
+) -> list[dict[str, object]]:
     ligand_charges = _ligand_charge_by_residue(cluster_residues, manifest)
+    terms: list[dict[str, object]] = []
     for residue in cluster_residues:
         if id(residue) in ligand_charges:
-            charge += ligand_charges[id(residue)]
+            terms.append(
+                {
+                    "residue": residue.id.display(),
+                    "state": residue.id.resname,
+                    "charge": ligand_charges[id(residue)],
+                    "source": "configured_ligand",
+                }
+            )
             continue
         resname = planned_states.get(id(residue), residue.id.resname)
         if is_water_residue(residue):
+            terms.append(
+                {
+                    "residue": residue.id.display(),
+                    "state": resname,
+                    "charge": 0,
+                    "source": "water",
+                }
+            )
             continue
         if is_likely_ligand_or_cofactor(residue):
             raise HistidineXtbError(
                 f"Unknown heterogen {residue.id.display()} encountered in xTB cluster; configure it under ligands."
             )
-        charge += {
+        residue_charge = {
             "ASP": -1,
             "GLU": -1,
             "CYM": -1,
@@ -246,7 +276,15 @@ def estimate_cluster_charge(
             "HIP": 1,
             "LYN": 0,
         }.get(resname, 0)
-    return int(charge)
+        terms.append(
+            {
+                "residue": residue.id.display(),
+                "state": resname,
+                "charge": residue_charge,
+                "source": "planned_state" if id(residue) in planned_states else "input_state_or_default",
+            }
+        )
+    return terms
 
 
 def _ligand_charge_by_residue(
@@ -282,3 +320,35 @@ def _unique_strings(values) -> list[str]:
             seen.add(value)
             result.append(value)
     return result
+
+
+def _element_counts(atoms) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for atom in atoms:
+        counts[atom.element] = counts.get(atom.element, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _min_interatomic_distance(atoms) -> dict[str, object] | None:
+    if len(atoms) < 2:
+        return None
+    best = None
+    best_pair = None
+    for left_index, left in enumerate(atoms):
+        for right_index in range(left_index + 1, len(atoms)):
+            right = atoms[right_index]
+            distance = (
+                (left.x - right.x) ** 2
+                + (left.y - right.y) ** 2
+                + (left.z - right.z) ** 2
+            ) ** 0.5
+            if best is None or distance < best:
+                best = distance
+                best_pair = (left_index + 1, left.name, left.element, right_index + 1, right.name, right.element)
+    if best_pair is None:
+        return None
+    return {
+        "distance_angstrom": best,
+        "atom1": {"index": best_pair[0], "name": best_pair[1], "element": best_pair[2]},
+        "atom2": {"index": best_pair[3], "name": best_pair[4], "element": best_pair[5]},
+    }

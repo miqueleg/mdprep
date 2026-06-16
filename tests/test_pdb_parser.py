@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from mdprep.structure.inspect import inspect_pdb_structure
-from mdprep.structure.pdb import read_pdb
+from mdprep.structure.pdb import infer_element, read_pdb
 
 
 DATA = Path("tests/data")
@@ -48,3 +48,13 @@ def test_reports_model_count_and_uses_first_model():
     assert structure.atoms[-1].serial == 18
     assert "using MODEL 1 only" in structure.warnings[0]
 
+
+def test_infers_alpha_carbon_as_carbon_for_standard_protein_atoms():
+    assert infer_element("CA", resname="ALA", record_name="ATOM") == "C"
+    assert infer_element("CD1", resname="ILE", record_name="ATOM") == "C"
+    assert infer_element("NE2", resname="HIS", record_name="ATOM") == "N"
+    assert infer_element("SG", resname="CYS", record_name="ATOM") == "S"
+
+
+def test_infers_calcium_for_heterogen_ca_when_element_column_missing():
+    assert infer_element("CA", resname="CA", record_name="HETATM") == "Ca"

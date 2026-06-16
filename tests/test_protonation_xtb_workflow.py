@@ -1,4 +1,5 @@
 from pathlib import Path
+import json
 
 import pytest
 
@@ -58,7 +59,13 @@ def test_propka_xtb_his_runs_hid_hie_comparison_and_selects_lower_hid(monkeypatc
     assert result.xtb_selections[0].selected_state == "HID"
     assert (tmp_path / "prepared" / "protonation" / "histidine_xtb" / "A_HIS2" / "HID.xyz").exists()
     assert (tmp_path / "prepared" / "protonation" / "histidine_xtb" / "A_HIS2" / "HID_xtb.inp").exists()
-    assert (tmp_path / "prepared" / "protonation" / "histidine_xtb" / "A_HIS2" / "cluster_model.json").exists()
+    cluster_model_path = tmp_path / "prepared" / "protonation" / "histidine_xtb" / "A_HIS2" / "cluster_model.json"
+    assert cluster_model_path.exists()
+    cluster_model = json.loads(cluster_model_path.read_text(encoding="utf-8"))
+    assert cluster_model["cluster_charge"] == 0
+    assert cluster_model["charge_breakdown"]
+    assert "C" in cluster_model["HID_element_counts"]
+    assert "Ca" not in cluster_model["HID_element_counts"]
 
 
 def test_propka_xtb_his_selects_lower_hie(monkeypatch, tmp_path):

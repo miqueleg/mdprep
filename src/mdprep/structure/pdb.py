@@ -97,7 +97,7 @@ def _parse_atom_line(line: str) -> AtomRecord:
     bfactor = _parse_float(line[60:66])
     element = _blank_to_none(line[76:78] if len(line) >= 78 else "")
     if element is None:
-        element = infer_element(name)
+        element = infer_element(name, resname=resname, record_name=record_name)
 
     return AtomRecord(
         serial=serial,
@@ -118,7 +118,85 @@ def _parse_atom_line(line: str) -> AtomRecord:
     )
 
 
-def infer_element(atom_name: str) -> str | None:
+STANDARD_ELEMENT_BY_PROTEIN_ATOM = {
+    "C": "C",
+    "CA": "C",
+    "CB": "C",
+    "CG": "C",
+    "CG1": "C",
+    "CG2": "C",
+    "CD": "C",
+    "CD1": "C",
+    "CD2": "C",
+    "CE": "C",
+    "CE1": "C",
+    "CE2": "C",
+    "CE3": "C",
+    "CH2": "C",
+    "CZ": "C",
+    "CZ2": "C",
+    "CZ3": "C",
+    "N": "N",
+    "ND1": "N",
+    "ND2": "N",
+    "NE": "N",
+    "NE1": "N",
+    "NE2": "N",
+    "NH1": "N",
+    "NH2": "N",
+    "NZ": "N",
+    "O": "O",
+    "OD1": "O",
+    "OD2": "O",
+    "OE1": "O",
+    "OE2": "O",
+    "OG": "O",
+    "OG1": "O",
+    "OH": "O",
+    "OXT": "O",
+    "S": "S",
+    "SD": "S",
+    "SG": "S",
+}
+
+STANDARD_PROTEIN_RESNAMES = {
+    "ALA",
+    "ARG",
+    "ASN",
+    "ASP",
+    "ASH",
+    "CYS",
+    "CYM",
+    "CYX",
+    "GLN",
+    "GLU",
+    "GLH",
+    "GLY",
+    "HIS",
+    "HID",
+    "HIE",
+    "HIP",
+    "ILE",
+    "LEU",
+    "LYS",
+    "LYN",
+    "MET",
+    "PHE",
+    "PRO",
+    "SER",
+    "THR",
+    "TRP",
+    "TYR",
+    "VAL",
+}
+
+
+def infer_element(
+    atom_name: str,
+    *,
+    resname: str | None = None,
+    record_name: str | None = None,
+) -> str | None:
     stripped = atom_name.strip()
     if not stripped:
         return None
@@ -127,6 +205,13 @@ def infer_element(atom_name: str) -> str | None:
     if not stripped:
         return None
     upper = stripped.upper()
+    if resname in STANDARD_PROTEIN_RESNAMES:
+        if upper.startswith("H"):
+            return "H"
+        mapped = STANDARD_ELEMENT_BY_PROTEIN_ATOM.get(upper)
+        if mapped is not None:
+            return mapped
+        return upper[0]
     if len(upper) >= 2 and upper[:2] in {"CL", "BR", "NA", "MG", "FE", "ZN", "CU", "MN", "CO", "NI", "CA"}:
         return upper[:2].capitalize()
     return upper[0]
@@ -222,4 +307,3 @@ def _parse_float_required(text: str, field_name: str, line: str) -> float:
 def _blank_to_none(text: str) -> str | None:
     stripped = text.strip()
     return stripped if stripped else None
-

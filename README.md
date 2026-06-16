@@ -164,14 +164,11 @@ protonation:
       opt_level: loose
       solvent: null
       cutoff_angstrom: 5.0
-<<<<<<< HEAD
-=======
       add_missing_water_hydrogens: true
       water_oh_distance_angstrom: 0.9572
       water_hoh_angle_degrees: 104.52
       scf_iterations: 500
-      electronic_temperature_kelvin: null
->>>>>>> 810753e (Prepare mdprep 0.1.0 release)
+      electronic_temperature_kelvin: 1000.0
       extra_args: []
       energy_tie_tolerance_kcal_mol: 0.5
       low_confidence_threshold_kcal_mol: 1.0
