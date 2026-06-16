@@ -109,10 +109,24 @@ Use `mdprep --version` to confirm the installed release.
 A compact manifest:
 
 ```yaml
+# mdprep reference manifest for an ff14SB/TIP3P/GAFF2 protein-substrate system.
+#
+# System:
+#   - Protein force field: ff14SB
+#   - Water model: TIP3P
+#   - Ligand/substrate: 5NB
+#   - Ligand net charge: +1
+#   - Ligand atom types: GAFF2
+#   - Ligand charges: PySCF QMMESP-like embedded RESP/ESP charges
+#   - QM level for 5NB charges: HF/6-31G*
+#   - Protonation: PropKa + xTB HID/HIE selection, following the protonation-optimizer logic
+#   - Histidine tautomer ranking: xTB/GFN2 single-point, no implicit solvent
+#   - Solvation: rectangular water box
+
 project:
-  name: example
-  input_structure: input.pdb
-  output_dir: prepared/example
+  name: 5nb_ff14sb_tip3p_gaff2_qmmesp
+  input_structure: input/complex_with_5NB.pdb
+  output_dir: prepared_5nb_ff14sb_tip3p_gaff2_qmmesp
 
 structure:
   keep_crystal_waters: true
@@ -122,23 +136,60 @@ structure:
   remove_input_hydrogens: true
 
 protein:
-  forcefield: ff19SB
+  forcefield: ff14SB
   water_model: TIP3P
 
 protonation:
   ph: 7.0
-  method: manual_only
-  overrides: []
+  method: propka_xtb_his
+
+  # PropKa handles pH-dependent protonation states.
+  propka:
+    executable: null
+    candidate_executables:
+      - propka3
+      - propka
+    pka_margin: 1.0
+    keep_output: true
+
+  # Neutral HIS residues are resolved as HID/HIE using xTB,
+  # following the protonation-optimizer philosophy.
+  #
+  # Here we request GFN2 single-point calculations with no implicit solvent.
   histidine:
     neutral_tautomer_method: xtb
     xtb:
       executable: xtb
       model: gfn2
-      mode: opt
+      mode: sp
       opt_level: loose
-      solvent: water
+      solvent: null
       cutoff_angstrom: 5.0
       extra_args: []
+      energy_tie_tolerance_kcal_mol: 0.5
+      low_confidence_threshold_kcal_mol: 1.0
+
+  # Manual overrides always win over PropKa/xTB.
+  # Add catalytic residues here when the automated pH-based assignment is not chemically correct.
+  #
+  # Example:
+  # overrides:
+  #   - selector:
+  #       chain: A
+  #       resname: ASP
+  #       resid: 199
+  #       icode: null
+  #     state: ASH
+  #     reason: "Catalytic acid; force protonated"
+  #
+  #   - selector:
+  #       chain: A
+  #       resname: HIS
+  #       resid: 164
+  #       icode: null
+  #     state: HIE
+  #     reason: "Catalytic histidine; force epsilon tautomer"
+  overrides: []
 
 disulfides:
   auto_detect: true
@@ -146,12 +197,80 @@ disulfides:
   force: []
   forbid: []
 
-ligands: []
+ligands:
+  - id: substrate_5nb
+
+    # IMPORTANT:
+    # Replace chain/resid/icode below with the actual residue identity of 5NB
+    # in your input PDB.
+    selector:
+      chain: A
+      resname: "5NB"
+      resid: 1
+      icode: null
+
+    net_charge: 1
+    multiplicity: 1
+    atom_types: gaff2
+    charge_method: qmmesp_pyscf
+
+    preserve_atom_names: true
+    preserve_coordinates: true
+    allow_atom_renaming: false
+    allow_coordinate_changes: false
+
+    # QMMESP-like PySCF charge derivation:
+    #
+    # mdprep first builds a provisional Amber system.
+    # 5NB is then treated as the QM region.
+    # The protein, retained crystal waters, and other allowed non-target atoms
+    # are used as MM point charges to polarize the 5NB QM density.
+    # The RESP/ESP fit is performed only on the 5NB atoms.
+    qmmesp:
+      qm_engine: pyscf
+      method: HF
+      basis: "6-31G*"
+
+      # Defaults to ligand net_charge and multiplicity - 1 if null.
+      scf_charge: null
+      scf_spin: null
+
+      max_cycle: 100
+      conv_tol: 1.0e-9
+
+      embedding_cutoff_angstrom: 12.0
+
+      environment:
+        include_protein: true
+        include_waters: true
+        include_other_ligands: true
+        exclude_self_ligand: true
+
+      grid:
+        type: connolly
+        vdw_scale_factors:
+          - 1.4
+          - 1.6
+          - 1.8
+          - 2.0
+        points_per_atom_per_shell: 60
+        exclude_inside_vdw_scale: 1.2
+        max_points: 8000
+
+      resp_fitting:
+        backend: native
+        total_charge_constraint: true
+        restraint: resp
+        restraint_a: 0.0005
+        restraint_b: 0.1
+        max_iter: 25
+        convergence: 1.0e-6
+        stage_2: true
 
 solvation:
   enabled: true
-  box: truncated_octahedron
-  buffer_angstrom: 10.0
+  box: rectangular
+  buffer_angstrom: 12.0
   neutralize: true
   salt_concentration_molar: 0.15
   positive_ion: Na+
