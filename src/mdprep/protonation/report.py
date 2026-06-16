@@ -77,6 +77,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
     lines.extend(_record_lines(report.get("input_state_assignments_applied", [])))
     lines.extend(["", "## xTB Histidine Selections", ""])
     lines.extend(_xtb_lines(report.get("xtb_histidines", [])))
+    lines.extend(["", "## Temporary Water Hydrogens For xTB Clusters", ""])
+    lines.extend(_temporary_water_hydrogen_lines(report.get("temporary_water_hydrogens_for_xtb_clusters", [])))
     lines.extend(["", "## Hydrogens Removed", ""])
     lines.append(f"- {report['hydrogen_atoms_removed']}")
     lines.extend(["", "## Remaining HIS Residues", ""])
@@ -119,6 +121,26 @@ def _xtb_lines(selections: list[dict[str, Any]]) -> list[str]:
             f"(delta HID-HIE {selection['delta_kcal_mol']:.3f} kcal/mol, "
             f"model `{selection['model']}`, mode `{selection['mode']}`)"
         )
+    return lines
+
+
+def _temporary_water_hydrogen_lines(clusters: list[dict[str, Any]]) -> list[str]:
+    if not clusters:
+        return ["- None"]
+    lines: list[str] = []
+    for cluster in clusters:
+        lines.append(
+            f"- {cluster['histidine']}: added {cluster['temporary_water_hydrogens_added']} "
+            "temporary water hydrogens for xTB tautomer ranking only; final PDB modified: "
+            f"{cluster['final_pdb_modified']}"
+        )
+        for water in cluster["waters_modified_for_xtb_only"]:
+            chain = water["chain"] or "<blank>"
+            icode = water["icode"] or ""
+            lines.append(
+                f"  - {chain}:{water['resname']}{water['resid']}{icode}: "
+                f"{water['hydrogens_added']} added"
+            )
     return lines
 
 

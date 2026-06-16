@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import dist, sqrt
+from math import cos, dist, radians, sin, sqrt
 from pathlib import Path
 
 from mdprep.structure.classify import is_standard_protein_residue, is_water_residue
@@ -25,11 +25,34 @@ class XyzAtom:
 
 
 @dataclass(frozen=True)
+class TemporaryWaterHydrogenRecord:
+    chain: str
+    resname: str
+    resid: int
+    icode: str | None
+    hydrogens_added: int
+    final_hydrogen_count: int
+    orientation: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "chain": self.chain,
+            "resname": self.resname,
+            "resid": self.resid,
+            "icode": self.icode,
+            "hydrogens_added": self.hydrogens_added,
+            "final_hydrogen_count": self.final_hydrogen_count,
+            "orientation": self.orientation,
+        }
+
+
+@dataclass(frozen=True)
 class TautomerClusterModel:
     atoms: list[XyzAtom]
     fixed_atom_indices: list[int]
     cap_atom_indices: list[int]
     anchor_atom_indices: list[int]
+    temporary_water_hydrogens: list[TemporaryWaterHydrogenRecord]
     warnings: list[str]
 
     def to_dict(self) -> dict[str, object]:
@@ -38,6 +61,13 @@ class TautomerClusterModel:
             "fixed_atom_indices": self.fixed_atom_indices,
             "cap_atom_indices": self.cap_atom_indices,
             "anchor_atom_indices": self.anchor_atom_indices,
+            "temporary_water_hydrogens_added": sum(
+                item.hydrogens_added for item in self.temporary_water_hydrogens
+            ),
+            "waters_modified_for_xtb_only": [
+                item.to_dict() for item in self.temporary_water_hydrogens
+            ],
+            "final_pdb_modified": False,
             "warnings": self.warnings,
         }
 
@@ -92,8 +122,18 @@ def build_tautomer_xyz_atoms(
     histidine: ResidueRecord,
     *,
     tautomer: str,
+    add_missing_water_hydrogens: bool = True,
+    water_oh_distance_angstrom: float = 0.9572,
+    water_hoh_angle_degrees: float = 104.52,
 ) -> list[XyzAtom]:
-    return build_tautomer_cluster_model(cluster_residues, histidine, tautomer=tautomer).atoms
+    return build_tautomer_cluster_model(
+        cluster_residues,
+        histidine,
+        tautomer=tautomer,
+        add_missing_water_hydrogens=add_missing_water_hydrogens,
+        water_oh_distance_angstrom=water_oh_distance_angstrom,
+        water_hoh_angle_degrees=water_hoh_angle_degrees,
+    ).atoms
 
 
 def build_tautomer_cluster_model(
@@ -101,11 +141,15 @@ def build_tautomer_cluster_model(
     histidine: ResidueRecord,
     *,
     tautomer: str,
+    add_missing_water_hydrogens: bool = True,
+    water_oh_distance_angstrom: float = 0.9572,
+    water_hoh_angle_degrees: float = 104.52,
 ) -> TautomerClusterModel:
     atoms: list[XyzAtom] = []
     fixed_atom_indices: list[int] = []
     cap_atom_indices: list[int] = []
     anchor_atom_indices: list[int] = []
+    temporary_water_hydrogens: list[TemporaryWaterHydrogenRecord] = []
     warnings: list[str] = []
     for residue in cluster_residues:
         if is_standard_protein_residue(residue):
@@ -121,9 +165,17 @@ def build_tautomer_cluster_model(
             _require_retained_hydrogens(residue, atoms[before:])
             continue
         if is_water_residue(residue):
-            before = len(atoms)
-            _append_full_residue(atoms, residue)
-            _require_water_hydrogens(residue, atoms[before:])
+            record = _append_water_residue(
+                atoms,
+                residue,
+                cluster_residues=cluster_residues,
+                add_missing_hydrogens=add_missing_water_hydrogens,
+                oh_distance=water_oh_distance_angstrom,
+                hoh_angle_degrees=water_hoh_angle_degrees,
+                warnings=warnings,
+            )
+            if record is not None:
+                temporary_water_hydrogens.append(record)
             continue
         _append_full_residue(atoms, residue)
 
@@ -133,6 +185,7 @@ def build_tautomer_cluster_model(
         fixed_atom_indices=sorted(set(fixed_atom_indices)),
         cap_atom_indices=sorted(set(cap_atom_indices)),
         anchor_atom_indices=sorted(set(anchor_atom_indices)),
+        temporary_water_hydrogens=temporary_water_hydrogens,
         warnings=warnings,
     )
 
@@ -169,6 +222,52 @@ def is_hydrogen_like(atom: AtomRecord) -> bool:
     while stripped and stripped[0].isdigit():
         stripped = stripped[1:]
     return stripped.upper().startswith("H")
+
+
+def has_water_oxygen(residue: ResidueRecord) -> bool:
+    return any(_is_oxygen_atom(atom) for atom in residue.atoms)
+
+
+def count_water_hydrogens(residue: ResidueRecord) -> int:
+    return sum(1 for atom in residue.atoms if is_hydrogen_like(atom))
+
+
+def build_water_hydrogen_coordinates(
+    residue: ResidueRecord,
+    cluster_residues: list[ResidueRecord],
+    *,
+    oh_distance: float = 0.9572,
+    hoh_angle_degrees: float = 104.52,
+) -> list[tuple[float, float, float]]:
+    oxygen_atoms = [atom for atom in residue.atoms if _is_oxygen_atom(atom)]
+    if not oxygen_atoms:
+        raise HistidineGeometryError(
+            f"Water residue {residue.id.display()} is in the xTB histidine cluster but has no oxygen atom."
+        )
+    if len(oxygen_atoms) > 1:
+        raise HistidineGeometryError(
+            f"Water residue {residue.id.display()} has multiple oxygen atoms; cannot add temporary xTB hydrogens."
+        )
+    existing_hydrogens = [atom for atom in residue.atoms if is_hydrogen_like(atom)]
+    if len(existing_hydrogens) >= 2:
+        return []
+    nearby_heavy = _nearby_nonwater_heavy_atoms(cluster_residues, water=residue)
+    if not existing_hydrogens:
+        coordinates, _ = _build_two_water_hydrogens(
+            oxygen_atoms[0],
+            nearby_heavy=nearby_heavy,
+            oh_distance=oh_distance,
+            hoh_angle_degrees=hoh_angle_degrees,
+        )
+        return coordinates
+    coordinates, _ = _build_second_water_hydrogen(
+        oxygen_atoms[0],
+        existing_hydrogens[0],
+        nearby_heavy=nearby_heavy,
+        oh_distance=oh_distance,
+        hoh_angle_degrees=hoh_angle_degrees,
+    )
+    return coordinates
 
 
 def heavy_atom_distance(a: AtomRecord, b: AtomRecord) -> float:
@@ -221,6 +320,81 @@ def _append_full_residue(atoms: list[XyzAtom], residue: ResidueRecord) -> None:
         atoms.append(_xyz_from_atom(atom))
 
 
+def _append_water_residue(
+    atoms: list[XyzAtom],
+    residue: ResidueRecord,
+    *,
+    cluster_residues: list[ResidueRecord],
+    add_missing_hydrogens: bool,
+    oh_distance: float,
+    hoh_angle_degrees: float,
+    warnings: list[str],
+) -> TemporaryWaterHydrogenRecord | None:
+    oxygen_atoms = [atom for atom in residue.atoms if _is_oxygen_atom(atom)]
+    if not oxygen_atoms:
+        raise HistidineGeometryError(
+            f"Water residue {residue.id.display()} is in the xTB histidine cluster but has no oxygen atom."
+        )
+    if len(oxygen_atoms) > 1:
+        raise HistidineGeometryError(
+            f"Water residue {residue.id.display()} has multiple oxygen atoms; cannot add temporary xTB hydrogens."
+        )
+    existing_hydrogens = [atom for atom in residue.atoms if is_hydrogen_like(atom)]
+    _append_full_residue(atoms, residue)
+    if len(existing_hydrogens) >= 2:
+        return None
+    if not add_missing_hydrogens:
+        _require_water_hydrogens(residue, [_xyz_from_atom(atom) for atom in residue.atoms])
+        return None
+
+    oxygen = oxygen_atoms[0]
+    nearby_heavy = _nearby_nonwater_heavy_atoms(cluster_residues, water=residue)
+    if not existing_hydrogens:
+        coordinates, orientation = _build_two_water_hydrogens(
+            oxygen,
+            nearby_heavy=nearby_heavy,
+            oh_distance=oh_distance,
+            hoh_angle_degrees=hoh_angle_degrees,
+        )
+    elif len(existing_hydrogens) == 1:
+        coordinates, orientation = _build_second_water_hydrogen(
+            oxygen,
+            existing_hydrogens[0],
+            nearby_heavy=nearby_heavy,
+            oh_distance=oh_distance,
+            hoh_angle_degrees=hoh_angle_degrees,
+        )
+    else:
+        coordinates = []
+        orientation = "input"
+    existing_names = {atom.name.strip().upper() for atom in residue.atoms}
+    for coordinate in coordinates:
+        atoms.append(
+            XyzAtom(
+                element="H",
+                x=coordinate[0],
+                y=coordinate[1],
+                z=coordinate[2],
+                name=_next_water_hydrogen_name(existing_names),
+                source="temporary_water_hydrogen",
+            )
+        )
+    if orientation == "deterministic_fallback":
+        warnings.append(
+            f"Water residue {residue.id.display()} received temporary xTB-only hydrogens "
+            "with an arbitrary deterministic orientation because no non-water heavy atoms were available."
+        )
+    return TemporaryWaterHydrogenRecord(
+        chain=residue.id.chain_id,
+        resname=residue.id.resname,
+        resid=residue.id.resid,
+        icode=residue.id.icode,
+        hydrogens_added=len(coordinates),
+        final_hydrogen_count=len(existing_hydrogens) + len(coordinates),
+        orientation=orientation,
+    )
+
+
 def _require_retained_hydrogens(residue: ResidueRecord, fragment_atoms: list[XyzAtom]) -> None:
     non_cap_hydrogens = [
         atom for atom in fragment_atoms if atom.element.upper() == "H" and atom.source != "cap"
@@ -238,7 +412,8 @@ def _require_water_hydrogens(residue: ResidueRecord, atoms: list[XyzAtom]) -> No
     if len(hydrogens) < 2:
         raise HistidineGeometryError(
             f"Water residue {residue.id.display()} is in the xTB histidine cluster but lacks hydrogens. "
-            "Use a hydrogenated input structure, remove nearby waters, or add a manual HIS override."
+            "Enable protonation.histidine.xtb.add_missing_water_hydrogens, remove nearby waters, "
+            "or add a manual HIS override."
         )
 
 
@@ -268,3 +443,237 @@ def _normalize(vector: tuple[float, float, float]) -> tuple[float, float, float]
 
 def _element(atom: AtomRecord) -> str:
     return atom.element or atom.name.strip()[0].upper()
+
+
+def _is_oxygen_atom(atom: AtomRecord) -> bool:
+    element = _element(atom).upper()
+    return element == "O"
+
+
+def _nearby_nonwater_heavy_atoms(
+    cluster_residues: list[ResidueRecord],
+    *,
+    water: ResidueRecord,
+) -> list[AtomRecord]:
+    nearby: list[AtomRecord] = []
+    for residue in cluster_residues:
+        if residue is water or is_water_residue(residue):
+            continue
+        for atom in residue.atoms:
+            if not is_hydrogen_like(atom):
+                nearby.append(atom)
+    return nearby
+
+
+def _build_two_water_hydrogens(
+    oxygen: AtomRecord,
+    *,
+    nearby_heavy: list[AtomRecord],
+    oh_distance: float,
+    hoh_angle_degrees: float,
+) -> tuple[list[tuple[float, float, float]], str]:
+    half_angle = radians(hoh_angle_degrees / 2.0)
+    candidates: list[tuple[list[tuple[float, float, float]], str]] = []
+    for bisector in _candidate_bisectors(oxygen, nearby_heavy):
+        basis_a, basis_b = _perpendicular_basis(bisector)
+        for phi_degrees in (0.0, 45.0, 90.0, 135.0):
+            phi = radians(phi_degrees)
+            perpendicular = _add(
+                _scale(basis_a, cos(phi)),
+                _scale(basis_b, sin(phi)),
+            )
+            direction1 = _normalize_vec(
+                _add(_scale(bisector, cos(half_angle)), _scale(perpendicular, sin(half_angle)))
+            )
+            direction2 = _normalize_vec(
+                _add(_scale(bisector, cos(half_angle)), _scale(perpendicular, -sin(half_angle)))
+            )
+            candidates.append(
+                (
+                    [
+                        _point_from_atom(oxygen, direction1, oh_distance),
+                        _point_from_atom(oxygen, direction2, oh_distance),
+                    ],
+                    "clash_aware" if nearby_heavy else "deterministic_fallback",
+                )
+            )
+    return _best_water_candidate(candidates, nearby_heavy)
+
+
+def _build_second_water_hydrogen(
+    oxygen: AtomRecord,
+    existing_hydrogen: AtomRecord,
+    *,
+    nearby_heavy: list[AtomRecord],
+    oh_distance: float,
+    hoh_angle_degrees: float,
+) -> tuple[list[tuple[float, float, float]], str]:
+    existing_direction = (
+        existing_hydrogen.x - oxygen.x,
+        existing_hydrogen.y - oxygen.y,
+        existing_hydrogen.z - oxygen.z,
+    )
+    try:
+        existing_unit = _normalize_vec(existing_direction)
+    except HistidineGeometryError as exc:
+        raise HistidineGeometryError(
+            f"Water residue {oxygen.chain_id}:{oxygen.resname}{oxygen.resid}{oxygen.icode or ''} "
+            "has a degenerate existing O-H vector."
+        ) from exc
+    basis_a, basis_b = _perpendicular_basis(existing_unit)
+    angle = radians(hoh_angle_degrees)
+    candidates: list[tuple[list[tuple[float, float, float]], str]] = []
+    for phi_degrees in (0.0, 45.0, 90.0, 135.0, 180.0, 225.0, 270.0, 315.0):
+        phi = radians(phi_degrees)
+        perpendicular = _add(_scale(basis_a, cos(phi)), _scale(basis_b, sin(phi)))
+        direction = _normalize_vec(
+            _add(_scale(existing_unit, cos(angle)), _scale(perpendicular, sin(angle)))
+        )
+        candidates.append(
+            (
+                [_point_from_atom(oxygen, direction, oh_distance)],
+                "clash_aware" if nearby_heavy else "deterministic_fallback",
+            )
+        )
+    return _best_water_candidate(candidates, nearby_heavy)
+
+
+def _candidate_bisectors(
+    oxygen: AtomRecord,
+    nearby_heavy: list[AtomRecord],
+) -> list[tuple[float, float, float]]:
+    candidates: list[tuple[float, float, float]] = []
+    if nearby_heavy:
+        nearest = min(
+            nearby_heavy,
+            key=lambda atom: dist((oxygen.x, oxygen.y, oxygen.z), (atom.x, atom.y, atom.z)),
+        )
+        candidates.append(
+            _normalize_vec((oxygen.x - nearest.x, oxygen.y - nearest.y, oxygen.z - nearest.z))
+        )
+        summed = (0.0, 0.0, 0.0)
+        for atom in nearby_heavy:
+            direction = _normalize_vec((oxygen.x - atom.x, oxygen.y - atom.y, oxygen.z - atom.z))
+            summed = _add(summed, direction)
+        try:
+            candidates.append(_normalize_vec(summed))
+        except HistidineGeometryError:
+            pass
+    candidates.extend(
+        [
+            (1.0, 0.0, 0.0),
+            (0.0, 1.0, 0.0),
+            (0.0, 0.0, 1.0),
+            (-1.0, 0.0, 0.0),
+            (0.0, -1.0, 0.0),
+            (0.0, 0.0, -1.0),
+        ]
+    )
+    unique: list[tuple[float, float, float]] = []
+    seen: set[tuple[int, int, int]] = set()
+    for candidate in candidates:
+        key = tuple(round(value * 1000) for value in candidate)
+        if key not in seen:
+            seen.add(key)
+            unique.append(candidate)
+    return unique
+
+
+def _best_water_candidate(
+    candidates: list[tuple[list[tuple[float, float, float]], str]],
+    nearby_heavy: list[AtomRecord],
+) -> tuple[list[tuple[float, float, float]], str]:
+    if not candidates:
+        raise HistidineGeometryError("No candidate water hydrogen coordinates were generated.")
+    best_coordinates, best_orientation = candidates[0]
+    best_score = _score_water_candidate(best_coordinates, nearby_heavy)
+    for coordinates, orientation in candidates[1:]:
+        score = _score_water_candidate(coordinates, nearby_heavy)
+        if score > best_score:
+            best_coordinates = coordinates
+            best_orientation = orientation
+            best_score = score
+    return best_coordinates, best_orientation
+
+
+def _score_water_candidate(
+    coordinates: list[tuple[float, float, float]],
+    nearby_heavy: list[AtomRecord],
+) -> float:
+    if not nearby_heavy:
+        return float("inf")
+    return min(
+        dist(coordinate, (atom.x, atom.y, atom.z))
+        for coordinate in coordinates
+        for atom in nearby_heavy
+    )
+
+
+def _next_water_hydrogen_name(existing_names: set[str]) -> str:
+    for name in ("H1", "H2", "H3", "HW1", "HW2"):
+        if name not in existing_names:
+            existing_names.add(name)
+            return name
+    index = 1
+    while True:
+        name = f"HT{index}"
+        if name not in existing_names:
+            existing_names.add(name)
+            return name
+        index += 1
+
+
+def _point_from_atom(
+    atom: AtomRecord,
+    direction: tuple[float, float, float],
+    distance_angstrom: float,
+) -> tuple[float, float, float]:
+    return (
+        atom.x + direction[0] * distance_angstrom,
+        atom.y + direction[1] * distance_angstrom,
+        atom.z + direction[2] * distance_angstrom,
+    )
+
+
+def _perpendicular_basis(
+    vector: tuple[float, float, float],
+) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
+    reference = (1.0, 0.0, 0.0)
+    if abs(_dot(vector, reference)) > 0.8:
+        reference = (0.0, 1.0, 0.0)
+    basis_a = _normalize_vec(_cross(vector, reference))
+    basis_b = _normalize_vec(_cross(vector, basis_a))
+    return basis_a, basis_b
+
+
+def _normalize_vec(vector: tuple[float, float, float]) -> tuple[float, float, float]:
+    norm = sqrt(sum(value * value for value in vector))
+    if norm < 1.0e-8:
+        raise HistidineGeometryError("Degenerate geometry; cannot place temporary hydrogen.")
+    return (vector[0] / norm, vector[1] / norm, vector[2] / norm)
+
+
+def _add(
+    a: tuple[float, float, float],
+    b: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
+def _scale(vector: tuple[float, float, float], factor: float) -> tuple[float, float, float]:
+    return (vector[0] * factor, vector[1] * factor, vector[2] * factor)
+
+
+def _dot(a: tuple[float, float, float], b: tuple[float, float, float]) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _cross(
+    a: tuple[float, float, float],
+    b: tuple[float, float, float],
+) -> tuple[float, float, float]:
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )

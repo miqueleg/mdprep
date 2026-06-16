@@ -21,5 +21,12 @@ also supported in single-point or optimization mode. Temporary tautomer
 hydrogens used for ranking are written only to local XYZ files and never to the
 final prepared PDB.
 
+If a retained crystallographic water enters the histidine xTB cluster without
+hydrogens, mdprep adds deterministic temporary water hydrogens only to the HID
+and HIE candidate XYZ files. These temporary atoms are reported and are not
+written to `01_protonation_assigned.pdb` or final Amber files. Set
+`protonation.histidine.xtb.add_missing_water_hydrogens: false` to preserve the
+strict requirement for pre-hydrogenated cluster waters.
+
 Disulfide-linked cysteines are assigned `CYX` from forced or detected SG-SG
 pairs unless forbidden by the manifest.

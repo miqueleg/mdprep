@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from itertools import chain
 import json
 from pathlib import Path
 
@@ -40,6 +41,9 @@ class HistidineXtbSelection:
     executable: str
     cluster_charge: int
     output_dir: Path
+    temporary_water_hydrogens_added: int
+    waters_modified_for_xtb_only: list[dict[str, object]]
+    final_pdb_modified_by_temporary_water_hydrogens: bool
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -57,6 +61,9 @@ class HistidineXtbSelection:
             "executable": self.executable,
             "cluster_charge": self.cluster_charge,
             "output_dir": str(self.output_dir),
+            "temporary_water_hydrogens_added": self.temporary_water_hydrogens_added,
+            "waters_modified_for_xtb_only": self.waters_modified_for_xtb_only,
+            "final_pdb_modified_by_temporary_water_hydrogens": self.final_pdb_modified_by_temporary_water_hydrogens,
         }
 
 
@@ -80,8 +87,23 @@ def select_histidine_tautomer(
     hid_xyz = hist_dir / "HID.xyz"
     hie_xyz = hist_dir / "HIE.xyz"
     try:
-        hid_model = build_tautomer_cluster_model(cluster_residues, histidine, tautomer="HID")
-        hie_model = build_tautomer_cluster_model(cluster_residues, histidine, tautomer="HIE")
+        cluster_kwargs = {
+            "add_missing_water_hydrogens": config.add_missing_water_hydrogens,
+            "water_oh_distance_angstrom": config.water_oh_distance_angstrom,
+            "water_hoh_angle_degrees": config.water_hoh_angle_degrees,
+        }
+        hid_model = build_tautomer_cluster_model(
+            cluster_residues,
+            histidine,
+            tautomer="HID",
+            **cluster_kwargs,
+        )
+        hie_model = build_tautomer_cluster_model(
+            cluster_residues,
+            histidine,
+            tautomer="HIE",
+            **cluster_kwargs,
+        )
         write_xyz(hid_model.atoms, hid_xyz, comment="HID")
         write_xyz(hie_model.atoms, hie_xyz, comment="HIE")
         hid_input = hist_dir / "HID_xtb.inp"
@@ -124,6 +146,8 @@ def select_histidine_tautomer(
         hie_energy_hartree=hie_energy,
         close_call_kcal_mol=config.energy_close_call_kcal_mol,
     )
+    temporary_water_records = [record.to_dict() for record in hid_model.temporary_water_hydrogens]
+    model_warnings = _unique_strings(chain(hid_model.warnings, hie_model.warnings))
     selection = HistidineXtbSelection(
         residue=histidine,
         hid_energy_hartree=comparison.hid_energy_hartree,
@@ -131,17 +155,27 @@ def select_histidine_tautomer(
         delta_kcal_mol=comparison.delta_kcal_mol,
         selected_state=comparison.selected_state,
         close_call=comparison.close_call,
-        warnings=comparison.warnings,
+        warnings=comparison.warnings + model_warnings,
         mode=config.mode,
         model=config.model,
         executable=hid_run.command_result.command[0],
         cluster_charge=cluster_charge,
         output_dir=hist_dir,
+        temporary_water_hydrogens_added=sum(
+            int(record["hydrogens_added"]) for record in temporary_water_records
+        ),
+        waters_modified_for_xtb_only=temporary_water_records,
+        final_pdb_modified_by_temporary_water_hydrogens=False,
     )
     cluster_summary = {
         "HID": hid_model.to_dict(),
         "HIE": hie_model.to_dict(),
         "model": "CA-truncated hydrogen-preserving cluster with fixed CA/capping atoms",
+        "temporary_water_hydrogens_for_xtb_only": {
+            "hydrogens_added": selection.temporary_water_hydrogens_added,
+            "waters_modified": selection.waters_modified_for_xtb_only,
+            "final_pdb_modified": False,
+        },
     }
     (hist_dir / "cluster_model.json").write_text(
         json.dumps(cluster_summary, indent=2, sort_keys=True) + "\n",
@@ -237,3 +271,13 @@ def _ligand_charge_by_residue(
 def _histidine_dir_name(residue: ResidueRecord) -> str:
     chain = residue.id.chain_id if residue.id.chain_id else "blank"
     return f"{chain}_HIS{residue.id.resid}{residue.id.icode or ''}"
+
+
+def _unique_strings(values) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result

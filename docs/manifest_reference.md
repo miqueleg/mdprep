@@ -38,6 +38,10 @@ Top-level keys:
 - `method`: `manual_only`, `propka`, or `propka_xtb_his`.
 - `overrides`: manual residue-state assignments.
 - `histidine.xtb`: xTB/g-xTB settings for HID/HIE ranking.
+  - `add_missing_water_hydrogens`: add temporary xTB-only hydrogens to
+    oxygen-only cluster waters.
+  - `water_oh_distance_angstrom`: O-H distance for temporary cluster waters.
+  - `water_hoh_angle_degrees`: H-O-H angle for temporary cluster waters.
 
 ## disulfides
 

@@ -114,6 +114,16 @@ class ProtonationResult:
             "propka": propka,
             "parsed_pkas": parsed_pkas,
             "xtb_histidines": [selection.to_dict() for selection in self.xtb_selections],
+            "temporary_water_hydrogens_for_xtb_clusters": [
+                {
+                    "histidine": _histidine_label(selection.residue),
+                    "temporary_water_hydrogens_added": selection.temporary_water_hydrogens_added,
+                    "waters_modified_for_xtb_only": selection.waters_modified_for_xtb_only,
+                    "final_pdb_modified": selection.final_pdb_modified_by_temporary_water_hydrogens,
+                }
+                for selection in self.xtb_selections
+                if selection.temporary_water_hydrogens_added
+            ],
             "manual_overrides_applied": [record.to_dict() for record in self.manual_overrides_applied],
             "disulfide_assignments_applied": [
                 record.to_dict() for record in self.disulfide_assignments_applied
@@ -441,3 +451,9 @@ def _residue_dict(residue: ResidueRecord) -> dict[str, object]:
         "record_names": sorted(residue.record_names),
         "original_index": residue.original_index,
     }
+
+
+def _histidine_label(residue: ResidueRecord) -> str:
+    chain = residue.id.chain_id if residue.id.chain_id else "<blank>"
+    icode = residue.id.icode or ""
+    return f"{chain}:{residue.id.resname}{residue.id.resid}{icode}"

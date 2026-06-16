@@ -72,6 +72,9 @@ class HistidineXtbConfig(StrictModel):
     cutoff_angstrom: float = Field(default=5.0, gt=0)
     extra_args: list[str] = Field(default_factory=list)
     energy_close_call_kcal_mol: float = Field(default=0.5, ge=0)
+    add_missing_water_hydrogens: bool = True
+    water_oh_distance_angstrom: float = Field(default=0.9572, gt=0)
+    water_hoh_angle_degrees: float = Field(default=104.52, gt=0, lt=180)
 
 
 class HistidineConfig(StrictModel):

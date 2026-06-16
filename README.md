@@ -165,6 +165,9 @@ protonation:
       opt_level: loose
       solvent: null
       cutoff_angstrom: 5.0
+      add_missing_water_hydrogens: true
+      water_oh_distance_angstrom: 0.9572
+      water_hoh_angle_degrees: 104.52
       extra_args: []
       energy_tie_tolerance_kcal_mol: 0.5
       low_confidence_threshold_kcal_mol: 1.0
@@ -317,6 +320,12 @@ residues under `propka_xtb_his`. mdprep does not guess catalytic chemistry.
 No hydrogens are added to the final prepared PDB. Input hydrogens can be
 removed before the protonation-stage PDB is written, letting Amber assign final
 hydrogens later from residue names.
+
+For xTB histidine ranking, retained crystallographic waters in the local xTB
+cluster may be oxygen-only. By default mdprep adds deterministic temporary
+water hydrogens only to the HID/HIE candidate XYZ files and records them in the
+protonation report. Set `protonation.histidine.xtb.add_missing_water_hydrogens:
+false` to require pre-hydrogenated cluster waters instead.
 
 ## Ligands
 
