@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from mdprep.structure.inspect import inspect_pdb_structure
 from mdprep.structure.pdb import infer_element, read_pdb
 
@@ -58,3 +60,23 @@ def test_infers_alpha_carbon_as_carbon_for_standard_protein_atoms():
 
 def test_infers_calcium_for_heterogen_ca_when_element_column_missing():
     assert infer_element("CA", resname="CA", record_name="HETATM") == "Ca"
+
+
+def test_pdb_atom_name_alignment_disambiguates_blank_element_ca():
+    assert infer_element("CA", resname="LIG", record_name="HETATM", atom_field=" CA ") == "C"
+    assert infer_element("CA", resname="CA", record_name="HETATM", atom_field="CA  ") == "Ca"
+
+
+@pytest.mark.parametrize(
+    ("atom_name", "atom_field", "element"),
+    [
+        ("CL1", "CL1 ", "Cl"),
+        ("BR1", "BR1 ", "Br"),
+        ("I1", " I1 ", "I"),
+        ("FE", "FE  ", "Fe"),
+        ("AU", "AU  ", "Au"),
+        ("ZN", "ZN  ", "Zn"),
+    ],
+)
+def test_pdb_blank_element_fallback_handles_common_ligand_elements(atom_name, atom_field, element):
+    assert infer_element(atom_name, resname="LIG", record_name="HETATM", atom_field=atom_field) == element

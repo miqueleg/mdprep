@@ -1,6 +1,6 @@
 import pytest
 
-from mdprep.ambertools.mol2 import Mol2Error, read_mol2, write_mol2
+from mdprep.ambertools.mol2 import Mol2Error, _element_from_atom_type, read_mol2, write_mol2
 
 
 def test_parse_mol2_atom_records_and_charge_sum():
@@ -30,3 +30,32 @@ def test_bad_mol2_fails_clearly(tmp_path):
         read_mol2(bad)
 
     assert "missing @<TRIPOS>ATOM" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("atom_type", "element"),
+    [
+        ("ca", "C"),
+        ("cu", "C"),
+        ("na", "N"),
+        ("n2", "N"),
+        ("oh", "O"),
+        ("ss", "S"),
+        ("p5", "P"),
+        ("cl", "CL"),
+        ("br", "BR"),
+        ("i", "I"),
+        ("f", "F"),
+        ("Fe", "FE"),
+        ("FE", "FE"),
+        ("fe", "FE"),
+        ("Au", "AU"),
+        ("AU", "AU"),
+        ("au", "AU"),
+        ("Zn", "ZN"),
+        ("SI", "SI"),
+        ("si", "SI"),
+    ],
+)
+def test_mol2_atom_type_to_element_is_forcefield_and_periodic_aware(atom_type, element):
+    assert _element_from_atom_type(atom_type) == element

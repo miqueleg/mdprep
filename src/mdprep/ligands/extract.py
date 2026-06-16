@@ -73,7 +73,13 @@ def extract_ligand(
     fixed_atoms = []
     for atom in residue.atoms:
         if atom.element is None:
-            inferred = infer_element(atom.name)
+            atom_field = atom.original_line[12:16] if len(atom.original_line) >= 16 else None
+            inferred = infer_element(
+                atom.name,
+                resname=atom.resname,
+                record_name=atom.record_name,
+                atom_field=atom_field,
+            )
             warnings.append(f"Inferred missing element for ligand {ligand.id} atom {atom.name}: {inferred}")
             fixed_atoms.append(atom.__class__(**{**atom.__dict__, "element": inferred}))
         else:
@@ -109,4 +115,3 @@ def extract_ligand(
         encoding="utf-8",
     )
     return extracted
-

@@ -80,3 +80,58 @@ def test_renamed_atoms_are_restored_when_order_is_compatible(tmp_path):
 
     assert [atom.name for atom in final.atoms] == ["C1", "O1"]
     assert result.atom_names_preserved
+
+
+def test_gaff_aromatic_carbon_type_ca_is_carbon_not_calcium(tmp_path):
+    mol2 = tmp_path / "gaff_ca.mol2"
+    mol2.write_text(
+        "\n".join(
+            [
+                "@<TRIPOS>MOLECULE",
+                "SUB",
+                " 2 1 0 0 0",
+                "SMALL",
+                "USER_CHARGES",
+                "",
+                "@<TRIPOS>ATOM",
+                "      1 C1           5.0000     5.0000     5.0000 ca          1 SUB        0.100000",
+                "      2 O1           6.0000     5.0000     5.0000 o           1 SUB       -0.100000",
+                "@<TRIPOS>BOND",
+                "     1    1    2 1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = validate(tmp_path, mol2)
+
+    assert result.charge_sum_final == pytest.approx(0.0)
+
+
+def test_gaff_aromatic_nitrogen_type_na_is_nitrogen_not_sodium(tmp_path):
+    mol2 = tmp_path / "gaff_na.mol2"
+    mol2.write_text(
+        "\n".join(
+            [
+                "@<TRIPOS>MOLECULE",
+                "SUB",
+                " 2 1 0 0 0",
+                "SMALL",
+                "USER_CHARGES",
+                "",
+                "@<TRIPOS>ATOM",
+                "      1 C1           5.0000     5.0000     5.0000 c3          1 SUB        0.100000",
+                "      2 O1           6.0000     5.0000     5.0000 na          1 SUB       -0.100000",
+                "@<TRIPOS>BOND",
+                "     1    1    2 1",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(Mol2Error) as excinfo:
+        validate(tmp_path, mol2)
+
+    assert "['C', 'O'] != ['C', 'N']" in str(excinfo.value)

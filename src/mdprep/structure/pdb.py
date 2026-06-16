@@ -97,7 +97,12 @@ def _parse_atom_line(line: str) -> AtomRecord:
     bfactor = _parse_float(line[60:66])
     element = _blank_to_none(line[76:78] if len(line) >= 78 else "")
     if element is None:
-        element = infer_element(name, resname=resname, record_name=record_name)
+        element = infer_element(
+            name,
+            resname=resname,
+            record_name=record_name,
+            atom_field=line[12:16],
+        )
 
     return AtomRecord(
         serial=serial,
@@ -190,12 +195,134 @@ STANDARD_PROTEIN_RESNAMES = {
     "VAL",
 }
 
+PERIODIC_ELEMENTS = {
+    "H",
+    "HE",
+    "LI",
+    "BE",
+    "B",
+    "C",
+    "N",
+    "O",
+    "F",
+    "NE",
+    "NA",
+    "MG",
+    "AL",
+    "SI",
+    "P",
+    "S",
+    "CL",
+    "AR",
+    "K",
+    "CA",
+    "SC",
+    "TI",
+    "V",
+    "CR",
+    "MN",
+    "FE",
+    "CO",
+    "NI",
+    "CU",
+    "ZN",
+    "GA",
+    "GE",
+    "AS",
+    "SE",
+    "BR",
+    "KR",
+    "RB",
+    "SR",
+    "Y",
+    "ZR",
+    "NB",
+    "MO",
+    "TC",
+    "RU",
+    "RH",
+    "PD",
+    "AG",
+    "CD",
+    "IN",
+    "SN",
+    "SB",
+    "TE",
+    "I",
+    "XE",
+    "CS",
+    "BA",
+    "LA",
+    "CE",
+    "PR",
+    "ND",
+    "PM",
+    "SM",
+    "EU",
+    "GD",
+    "TB",
+    "DY",
+    "HO",
+    "ER",
+    "TM",
+    "YB",
+    "LU",
+    "HF",
+    "TA",
+    "W",
+    "RE",
+    "OS",
+    "IR",
+    "PT",
+    "AU",
+    "HG",
+    "TL",
+    "PB",
+    "BI",
+    "PO",
+    "AT",
+    "RN",
+    "FR",
+    "RA",
+    "AC",
+    "TH",
+    "PA",
+    "U",
+    "NP",
+    "PU",
+    "AM",
+    "CM",
+    "BK",
+    "CF",
+    "ES",
+    "FM",
+    "MD",
+    "NO",
+    "LR",
+    "RF",
+    "DB",
+    "SG",
+    "BH",
+    "HS",
+    "MT",
+    "DS",
+    "RG",
+    "CN",
+    "NH",
+    "FL",
+    "MC",
+    "LV",
+    "TS",
+    "OG",
+}
+
 
 def infer_element(
     atom_name: str,
     *,
     resname: str | None = None,
     record_name: str | None = None,
+    atom_field: str | None = None,
 ) -> str | None:
     stripped = atom_name.strip()
     if not stripped:
@@ -212,9 +339,22 @@ def infer_element(
         if mapped is not None:
             return mapped
         return upper[0]
-    if len(upper) >= 2 and upper[:2] in {"CL", "BR", "NA", "MG", "FE", "ZN", "CU", "MN", "CO", "NI", "CA"}:
-        return upper[:2].capitalize()
+    if atom_field:
+        aligned = atom_field.rstrip()
+        if aligned.startswith(" ") and upper[0] in PERIODIC_ELEMENTS:
+            return _canonical_element(upper[0])
+        if not aligned.startswith(" ") and len(upper) >= 2 and upper[:2] in PERIODIC_ELEMENTS:
+            return _canonical_element(upper[:2])
+    if len(upper) >= 2 and upper[:2] in PERIODIC_ELEMENTS:
+        return _canonical_element(upper[:2])
+    if upper[0] in PERIODIC_ELEMENTS:
+        return _canonical_element(upper[0])
     return upper[0]
+
+
+def _canonical_element(symbol: str) -> str:
+    upper = symbol.upper()
+    return upper[0] + upper[1:].lower()
 
 
 def _apply_altloc_policy(atoms: list[AtomRecord], policy: AltlocPolicy) -> list[AtomRecord]:

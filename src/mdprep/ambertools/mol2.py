@@ -10,6 +10,7 @@ from pathlib import Path
 
 from mdprep.config.models import LigandConfig
 from mdprep.structure.models import AtomRecord
+from mdprep.structure.pdb import PERIODIC_ELEMENTS, infer_element
 
 
 class Mol2Error(ValueError):
@@ -250,7 +251,7 @@ def _molecule_name(lines: list[str]) -> str | None:
 
 def _validate_element_order(mol2_atoms: list[Mol2Atom], pdb_atoms: list[AtomRecord], ligand_id: str) -> None:
     mol2_elements = [_element_from_mol2(atom) for atom in mol2_atoms]
-    pdb_elements = [(atom.element or _element_from_atom_name(atom.name) or "").upper() for atom in pdb_atoms]
+    pdb_elements = [_element_from_pdb_atom(atom) for atom in pdb_atoms]
     if mol2_elements != pdb_elements:
         raise Mol2Error(
             f"Ligand {ligand_id} element-order mismatch between extracted PDB and mol2: "
@@ -259,10 +260,127 @@ def _validate_element_order(mol2_atoms: list[Mol2Atom], pdb_atoms: list[AtomReco
 
 
 def _element_from_mol2(atom: Mol2Atom) -> str:
-    token = atom.atom_type.split(".", 1)[0].strip()
+    return _element_from_atom_type(atom.atom_type, fallback_name=atom.name)
+
+
+GAFF_LIKE_ATOM_TYPE_ELEMENTS = {
+    **{
+        atom_type: "C"
+        for atom_type in {
+            "c",
+            "c1",
+            "c2",
+            "c3",
+            "c5",
+            "c6",
+            "ca",
+            "cc",
+            "cd",
+            "ce",
+            "cf",
+            "cg",
+            "ch",
+            "cp",
+            "cq",
+            "cu",
+            "cv",
+            "cx",
+            "cy",
+            "cz",
+        }
+    },
+    **{
+        atom_type: "H"
+        for atom_type in {
+            "h",
+            "h1",
+            "h2",
+            "h3",
+            "h4",
+            "h5",
+            "ha",
+            "hc",
+            "hn",
+            "ho",
+            "hp",
+            "hs",
+            "hw",
+            "hx",
+        }
+    },
+    **{
+        atom_type: "N"
+        for atom_type in {
+            "n",
+            "n1",
+            "n2",
+            "n3",
+            "n4",
+            "na",
+            "nb",
+            "nc",
+            "nd",
+            "ne",
+            "nf",
+            "nh",
+            "ni",
+            "nj",
+            "nk",
+            "nl",
+            "nm",
+            "nn",
+            "no",
+            "np",
+            "nq",
+            "ns",
+            "nt",
+            "nx",
+            "ny",
+            "nz",
+        }
+    },
+    **{atom_type: "O" for atom_type in {"o", "oh", "os", "ow"}},
+    **{
+        atom_type: "P"
+        for atom_type in {"p", "p2", "p3", "p4", "p5", "pb", "pc", "pd", "pe", "pf", "px", "py"}
+    },
+    **{atom_type: "S" for atom_type in {"s", "s2", "s4", "s6", "sh", "ss", "sp", "sx", "sy"}},
+}
+
+LOWERCASE_ELEMENT_ATOM_TYPES = {
+    "cl": "CL",
+    "br": "BR",
+    "f": "F",
+    "i": "I",
+}
+
+
+def _element_from_atom_type(atom_type: str, *, fallback_name: str = "") -> str:
+    token = atom_type.split(".", 1)[0].strip()
     if not token:
-        token = atom.name
-    return _element_from_atom_name(token).upper()
+        return _element_from_atom_name(fallback_name)
+    lower = token.lower()
+    if lower in LOWERCASE_ELEMENT_ATOM_TYPES:
+        return LOWERCASE_ELEMENT_ATOM_TYPES[lower]
+    if token.islower():
+        if lower in GAFF_LIKE_ATOM_TYPE_ELEMENTS:
+            return GAFF_LIKE_ATOM_TYPE_ELEMENTS[lower]
+        if lower.upper() in PERIODIC_ELEMENTS:
+            return lower.upper()
+    return _element_from_atom_name(token)
+
+
+def _element_from_pdb_atom(atom: AtomRecord) -> str:
+    if atom.element:
+        return atom.element.upper()
+    atom_field = atom.original_line[12:16] if len(atom.original_line) >= 16 else None
+    inferred = infer_element(
+        atom.name,
+        resname=atom.resname,
+        record_name=atom.record_name,
+        atom_field=atom_field,
+    )
+    return (inferred or "").upper()
 
 
 def _element_from_atom_name(name: str) -> str:
@@ -270,10 +388,12 @@ def _element_from_atom_name(name: str) -> str:
     while stripped and stripped[0].isdigit():
         stripped = stripped[1:]
     upper = stripped.upper()
-    if upper[:2] in {"CL", "BR", "NA", "MG", "FE", "ZN", "CU", "MN", "CO", "NI", "CA"}:
+    if len(upper) >= 2 and upper[:2] in PERIODIC_ELEMENTS:
         return upper[:2]
     if not upper:
         return ""
+    if upper[0] in PERIODIC_ELEMENTS:
+        return upper[0]
     return upper[0]
 
 
