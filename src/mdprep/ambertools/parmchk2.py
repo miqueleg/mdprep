@@ -42,10 +42,11 @@ def run_parmchk2(
     work = Path(work_dir)
     stdout_path = work / "parmchk2_stdout.txt"
     stderr_path = work / "parmchk2_stderr.txt"
-    output = Path(output_frcmod)
+    input_path = Path(input_mol2).resolve()
+    output = Path(output_frcmod).resolve()
     command = build_parmchk2_command(
         executable=exe,
-        input_mol2=input_mol2,
+        input_mol2=input_path,
         output_frcmod=output,
         ligand=ligand,
     )
@@ -54,7 +55,15 @@ def run_parmchk2(
     stderr_path.write_text(result.stderr, encoding="utf-8")
     if result.returncode != 0:
         raise AmberToolsError(
-            f"parmchk2 failed with exit code {result.returncode}. See {stdout_path} and {stderr_path}."
+            "\n".join(
+                [
+                    f"parmchk2 failed with exit code {result.returncode}.",
+                    f"Command: {' '.join(result.command)}",
+                    f"See {stdout_path} and {stderr_path}.",
+                    f"stdout tail:\n{_tail(result.stdout)}",
+                    f"stderr tail:\n{_tail(result.stderr)}",
+                ]
+            )
         )
     if not output.exists():
         raise AmberToolsError(f"parmchk2 did not produce expected frcmod file: {output}")
@@ -72,3 +81,9 @@ def _resolve_executable(name: str) -> str:
         return found
     raise AmberToolsError(f"AmberTools executable not found: {name}")
 
+
+def _tail(text: str, *, lines: int = 20) -> str:
+    stripped = text.strip()
+    if not stripped:
+        return "<empty>"
+    return "\n".join(stripped.splitlines()[-lines:])

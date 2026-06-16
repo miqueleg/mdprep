@@ -77,3 +77,59 @@ def test_antechamber_failure_includes_command_and_log_tails(monkeypatch, tmp_pat
     assert "stdout 29" in message
     assert "stderr tail:" in message
     assert "missing bond information" in message
+
+
+def test_antechamber_run_uses_absolute_paths_when_workdir_differs(monkeypatch, tmp_path):
+    ligand = ligand_config()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("mdprep.ambertools.antechamber.which_executable", lambda name: "/bin/antechamber")
+    input_pdb = tmp_path / "out" / "prepared" / "ligands" / "sub" / "input" / "sub.pdb"
+    output_mol2 = tmp_path / "out" / "prepared" / "ligands" / "sub" / "parameters" / "sub.mol2"
+    input_pdb.parent.mkdir(parents=True)
+    output_mol2.parent.mkdir(parents=True)
+    input_pdb.write_text("END\n", encoding="utf-8")
+
+    def fake_run_command(command, *, cwd=None, **kwargs):
+        assert command[command.index("-i") + 1] == str(input_pdb)
+        assert command[command.index("-o") + 1] == str(output_mol2)
+        assert str(command[command.index("-i") + 1]).startswith("/")
+        output_mol2.write_text("@<TRIPOS>MOLECULE\n", encoding="utf-8")
+        return CommandResult(tuple(command), str(cwd), 0, "", "", 0.1)
+
+    monkeypatch.setattr("mdprep.ambertools.antechamber.run_command", fake_run_command)
+
+    run_antechamber(
+        ligand=ligand,
+        input_pdb="out/prepared/ligands/sub/input/sub.pdb",
+        output_mol2="out/prepared/ligands/sub/parameters/sub.mol2",
+        residue_name="SUB",
+        work_dir="out/prepared/ligands/sub/parameters",
+    )
+
+
+def test_parmchk2_run_uses_absolute_paths_when_workdir_differs(monkeypatch, tmp_path):
+    ligand = ligand_config()
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("mdprep.ambertools.parmchk2.which_executable", lambda name: "/bin/parmchk2")
+    input_mol2 = tmp_path / "out" / "prepared" / "ligands" / "sub" / "parameters" / "sub.mol2"
+    output_frcmod = tmp_path / "out" / "prepared" / "ligands" / "sub" / "parameters" / "sub.frcmod"
+    input_mol2.parent.mkdir(parents=True)
+    input_mol2.write_text("@<TRIPOS>MOLECULE\n", encoding="utf-8")
+
+    def fake_run_command(command, *, cwd=None, **kwargs):
+        assert command[command.index("-i") + 1] == str(input_mol2)
+        assert command[command.index("-o") + 1] == str(output_frcmod)
+        assert str(command[command.index("-i") + 1]).startswith("/")
+        output_frcmod.write_text("MASS\n", encoding="utf-8")
+        return CommandResult(tuple(command), str(cwd), 0, "", "", 0.1)
+
+    monkeypatch.setattr("mdprep.ambertools.parmchk2.run_command", fake_run_command)
+
+    from mdprep.ambertools.parmchk2 import run_parmchk2
+
+    run_parmchk2(
+        ligand=ligand,
+        input_mol2="out/prepared/ligands/sub/parameters/sub.mol2",
+        output_frcmod="out/prepared/ligands/sub/parameters/sub.frcmod",
+        work_dir="out/prepared/ligands/sub/parameters",
+    )

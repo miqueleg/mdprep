@@ -56,10 +56,11 @@ def run_antechamber(
     work = Path(work_dir)
     stdout_path = work / "antechamber_stdout.txt"
     stderr_path = work / "antechamber_stderr.txt"
-    output = Path(output_mol2)
+    input_path = Path(input_pdb).resolve()
+    output = Path(output_mol2).resolve()
     command = build_antechamber_command(
         executable=exe,
-        input_pdb=input_pdb,
+        input_pdb=input_path,
         output_mol2=output,
         residue_name=residue_name,
         ligand=ligand,
