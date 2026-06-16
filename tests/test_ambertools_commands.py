@@ -1,5 +1,9 @@
-from mdprep.ambertools.antechamber import build_antechamber_command
+import pytest
+
+from mdprep.ambertools.antechamber import build_antechamber_command, run_antechamber
+from mdprep.ambertools.commands import AmberToolsError
 from mdprep.ambertools.parmchk2 import build_parmchk2_command
+from mdprep.external.runner import CommandResult
 from tests.test_structure_normalize import ligand_entry, make_manifest, manifest_data
 
 
@@ -39,3 +43,37 @@ def test_parmchk2_command_contains_required_flags():
 
     assert command[command.index("-f") + 1] == "mol2"
     assert command[command.index("-s") + 1] == "gaff2"
+
+
+def test_antechamber_failure_includes_command_and_log_tails(monkeypatch, tmp_path):
+    ligand = ligand_config()
+
+    monkeypatch.setattr("mdprep.ambertools.antechamber.which_executable", lambda name: "/bin/antechamber")
+
+    def fake_run_command(command, *, cwd=None, **kwargs):
+        return CommandResult(
+            command=tuple(command),
+            cwd=str(cwd),
+            returncode=1,
+            stdout="\n".join(f"stdout {index}" for index in range(30)),
+            stderr="bad chemistry\nmissing bond information",
+            runtime_seconds=0.1,
+        )
+
+    monkeypatch.setattr("mdprep.ambertools.antechamber.run_command", fake_run_command)
+
+    with pytest.raises(AmberToolsError) as excinfo:
+        run_antechamber(
+            ligand=ligand,
+            input_pdb=tmp_path / "ligand.pdb",
+            output_mol2=tmp_path / "ligand.mol2",
+            residue_name="SUB",
+            work_dir=tmp_path,
+        )
+
+    message = str(excinfo.value)
+    assert "Command: /bin/antechamber" in message
+    assert "stdout tail:" in message
+    assert "stdout 29" in message
+    assert "stderr tail:" in message
+    assert "missing bond information" in message

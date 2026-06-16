@@ -69,7 +69,15 @@ def run_antechamber(
     stderr_path.write_text(result.stderr, encoding="utf-8")
     if result.returncode != 0:
         raise AmberToolsError(
-            f"antechamber failed with exit code {result.returncode}. See {stdout_path} and {stderr_path}."
+            "\n".join(
+                [
+                    f"antechamber failed with exit code {result.returncode}.",
+                    f"Command: {' '.join(result.command)}",
+                    f"See {stdout_path} and {stderr_path}.",
+                    f"stdout tail:\n{_tail(result.stdout)}",
+                    f"stderr tail:\n{_tail(result.stderr)}",
+                ]
+            )
         )
     if not output.exists():
         raise AmberToolsError(f"antechamber did not produce expected mol2 file: {output}")
@@ -87,3 +95,9 @@ def _resolve_executable(name: str) -> str:
         return found
     raise AmberToolsError(f"AmberTools executable not found: {name}")
 
+
+def _tail(text: str, *, lines: int = 20) -> str:
+    stripped = text.strip()
+    if not stripped:
+        return "<empty>"
+    return "\n".join(stripped.splitlines()[-lines:])

@@ -27,6 +27,7 @@ from mdprep.protonation.propka import (
 from mdprep.protonation.propka_parser import PropkaParseError, PropkaRecord, map_propka_records
 from mdprep.structure.classify import is_histidine, is_titratable_residue
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord
+from mdprep.structure.selectors import SelectorError, resolve_residue_selector
 
 
 class ProtonationApplicationError(ValueError):
@@ -282,8 +283,18 @@ def apply_protonation_stage(
     hydrogen_atoms_removed = 0
     if manifest.structure.remove_input_hydrogens:
         before = len(renamed_atoms)
-        renamed_atoms = [atom for atom in renamed_atoms if not is_hydrogen_atom(atom)]
+        protected_ligand_keys = _configured_ligand_atom_keys(structure, manifest)
+        renamed_atoms = [
+            atom
+            for atom in renamed_atoms
+            if not (is_hydrogen_atom(atom) and _atom_residue_key(atom) not in protected_ligand_keys)
+        ]
         hydrogen_atoms_removed = before - len(renamed_atoms)
+        if protected_ligand_keys:
+            warnings.append(
+                "Configured ligand residues were excluded from structure.remove_input_hydrogens so ligand "
+                "parameterization sees the submitted ligand hydrogenation."
+            )
 
     protonated_structure = PdbStructure(
         path=Path(output_protonation_pdb_path),
@@ -372,6 +383,26 @@ def is_hydrogen_atom(atom: AtomRecord) -> bool:
     while stripped and stripped[0].isdigit():
         stripped = stripped[1:]
     return stripped.upper().startswith("H")
+
+
+def _configured_ligand_atom_keys(
+    structure: PdbStructure,
+    manifest: ManifestConfig,
+) -> set[tuple[str, str, int, str | None]]:
+    keys: set[tuple[str, str, int, str | None]] = set()
+    for ligand in manifest.ligands:
+        try:
+            residue = resolve_residue_selector(structure, ligand.selector.model_dump())
+        except SelectorError as exc:
+            raise ProtonationApplicationError(
+                f"Ligand {ligand.id} selector did not resolve exactly one residue before hydrogen removal: {exc}"
+            ) from exc
+        keys.add((residue.id.chain_id, residue.id.resname, residue.id.resid, residue.id.icode))
+    return keys
+
+
+def _atom_residue_key(atom: AtomRecord) -> tuple[str, str, int, str | None]:
+    return (atom.chain_id, atom.resname, atom.resid, atom.icode)
 
 
 def _validate_disulfide_manual_compatibility(
