@@ -390,6 +390,7 @@ def _build_qmmesp_provisional_system(
         input_pdb=leap_input.path,
         disulfide_bonds=disulfides,
         outputs=outputs,
+        work_dir=work_dir,
     )
     script_path = work_dir / "tleap.in"
     script_path.write_text(script, encoding="utf-8")

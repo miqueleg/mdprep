@@ -26,3 +26,26 @@ def test_fail_on_warnings_behavior():
     assert_tleap_success(summary, fail_on_warnings=False, context="dry")
     with pytest.raises(LeapLogError):
         assert_tleap_success(summary, fail_on_warnings=True, context="dry")
+
+
+def test_nonzero_returncode_error_includes_log_tail():
+    summary = parse_tleap_log_text(
+        "\n".join(
+            [
+                "Loading parameters",
+                "Could not find type: ca",
+                "Fatal Error!",
+                "Quit",
+            ]
+        ),
+        returncode=31,
+    )
+
+    with pytest.raises(LeapLogError) as excinfo:
+        assert_tleap_success(summary, fail_on_warnings=False, context="QMMESP provisional")
+
+    message = str(excinfo.value)
+    assert "QMMESP provisional tleap exited with code 31" in message
+    assert "missing atom types" in message
+    assert "tleap log tail" in message
+    assert "Fatal Error!" in message

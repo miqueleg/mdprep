@@ -22,6 +22,7 @@ class LeapLogSummary:
     atoms_created: list[str] = field(default_factory=list)
     total_charge: float | None = None
     check_output: list[str] = field(default_factory=list)
+    log_tail: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -34,6 +35,7 @@ class LeapLogSummary:
             "atoms_created": self.atoms_created,
             "total_charge": self.total_charge,
             "check_output": self.check_output,
+            "log_tail": self.log_tail,
         }
 
 
@@ -101,6 +103,7 @@ def parse_tleap_log_text(text: str, *, returncode: int = 0) -> LeapLogSummary:
         atoms_created=atoms_created,
         total_charge=total_charge,
         check_output=check_output,
+        log_tail=_tail_lines(text),
     )
 
 
@@ -111,7 +114,14 @@ def assert_tleap_success(
     context: str,
 ) -> None:
     if summary.returncode != 0:
-        raise LeapLogError(f"{context} tleap exited with code {summary.returncode}.")
+        raise LeapLogError(
+            "\n".join(
+                [
+                    f"{context} tleap exited with code {summary.returncode}.",
+                    *_summary_details(summary),
+                ]
+            )
+        )
     if summary.unknown_residues:
         raise LeapLogError(f"{context} tleap reported unknown residues: {summary.unknown_residues}")
     if summary.missing_atom_types:
@@ -133,3 +143,28 @@ def _dedupe(values: list[str]) -> list[str]:
         seen.add(value)
         deduped.append(value)
     return deduped
+
+
+def _summary_details(summary: LeapLogSummary) -> list[str]:
+    details: list[str] = []
+    if summary.errors:
+        details.append(f"errors: {summary.errors}")
+    if summary.unknown_residues:
+        details.append(f"unknown residues: {summary.unknown_residues}")
+    if summary.missing_atom_types:
+        details.append(f"missing atom types: {summary.missing_atom_types}")
+    if summary.missing_parameters:
+        details.append(f"missing parameters: {summary.missing_parameters}")
+    if summary.warnings:
+        details.append(f"warnings: {summary.warnings}")
+    if summary.log_tail:
+        details.append("tleap log tail:")
+        details.extend(summary.log_tail)
+    return details
+
+
+def _tail_lines(text: str, *, lines: int = 30) -> list[str]:
+    stripped = text.strip()
+    if not stripped:
+        return []
+    return stripped.splitlines()[-lines:]

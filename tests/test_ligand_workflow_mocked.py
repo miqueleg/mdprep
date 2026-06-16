@@ -275,6 +275,7 @@ def test_qmmesp_pyscf_uses_embedding_and_replaces_provisional_charges(monkeypatc
     assert item.qm.embedding_summary["point_charge_count_after_cutoff"] == 1
     final = read_mol2(item.final_mol2_path)
     assert [atom.charge for atom in final.atoms] == pytest.approx([0.25, -0.25])
+    _assert_tleap_script_paths_resolve(tmp_path / "qmmesp" / "provisional_leap" / "tleap.in")
 
 
 def test_qmmesp_requires_protonation_result(monkeypatch, tmp_path):
@@ -291,3 +292,18 @@ def test_qmmesp_requires_protonation_result(monkeypatch, tmp_path):
         run_ligand_stage(normalized_structure(manifest), manifest, output_dir=tmp_path)
 
     assert "requires a protonation result" in str(excinfo.value)
+
+
+def _assert_tleap_script_paths_resolve(script_path: Path) -> None:
+    script_dir = script_path.parent
+    for line in script_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if " = loadmol2 " in stripped:
+            path = Path(stripped.split("loadmol2", 1)[1].strip())
+        elif stripped.startswith("loadamberparams "):
+            path = Path(stripped.split("loadamberparams", 1)[1].strip())
+        elif stripped.startswith("system = loadpdb "):
+            path = Path(stripped.split("loadpdb", 1)[1].strip())
+        else:
+            continue
+        assert (script_dir / path).resolve().exists(), stripped
