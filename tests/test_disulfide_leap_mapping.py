@@ -31,6 +31,7 @@ def test_residue_index_map_and_disulfide_bond_command():
 
 def test_cyx_without_pair_fails():
     data = manifest_data("tests/data/protein_cyx_disulfide.pdb")
+    data["protonation"]["method"] = "manual_only"
     data["disulfides"]["auto_detect"] = False
     manifest = make_manifest(data)
     structure = read_pdb("tests/data/protein_cyx_disulfide.pdb")
