@@ -103,6 +103,18 @@ def extract_ligand(
         model_count=1,
     )
     write_pdb(ligand_structure, pdb_path)
+    conect_lines = _ligand_conect_lines(structure.path, residue.atoms)
+    if conect_lines:
+        _insert_conect_before_end(pdb_path, conect_lines)
+        warnings.append(
+            f"Preserved {len(conect_lines)} ligand CONECT record(s) for {ligand.id} in the extracted PDB."
+        )
+    elif _requires_pdb_chemistry_perception(ligand):
+        warnings.append(
+            "No ligand CONECT records were found in the input PDB. AmberTools will infer ligand "
+            "connectivity from coordinates; for chemically sensitive or complex substrates, provide "
+            "a curated user_mol2/user_frcmod so atom types and bonded terms are not inferred from PDB geometry."
+        )
     extracted = ExtractedLigand(
         config=ligand,
         residue=residue,
@@ -115,3 +127,59 @@ def extract_ligand(
         encoding="utf-8",
     )
     return extracted
+
+
+def _requires_pdb_chemistry_perception(ligand: LigandConfig) -> bool:
+    if ligand.charge_method == "am1bcc":
+        return True
+    if ligand.charge_method in {"gas_resp_pyscf", "qmmesp_pyscf"}:
+        return ligand.user_mol2 is None
+    return False
+
+
+def _ligand_conect_lines(input_path: Path, atoms: list) -> list[str]:
+    serials = {atom.serial for atom in atoms if atom.serial is not None}
+    if not serials or not input_path.exists():
+        return []
+
+    lines: list[str] = []
+    seen: set[str] = set()
+    for line in input_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if not line.startswith("CONECT"):
+            continue
+        numbers = _parse_conect_numbers(line)
+        if not numbers:
+            continue
+        source, *targets = numbers
+        if source not in serials:
+            continue
+        selected_targets = [target for target in targets if target in serials]
+        for offset in range(0, len(selected_targets), 4):
+            conect = _format_conect(source, selected_targets[offset : offset + 4])
+            if conect not in seen:
+                seen.add(conect)
+                lines.append(conect)
+    return lines
+
+
+def _parse_conect_numbers(line: str) -> list[int]:
+    numbers: list[int] = []
+    for field in line[6:].split():
+        try:
+            numbers.append(int(field))
+        except ValueError:
+            continue
+    return numbers
+
+
+def _format_conect(source: int, targets: list[int]) -> str:
+    return "CONECT" + f"{source:5d}" + "".join(f"{target:5d}" for target in targets) + "\n"
+
+
+def _insert_conect_before_end(path: Path, conect_lines: list[str]) -> None:
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    insert_at = len(lines)
+    if lines and lines[-1].strip() == "END":
+        insert_at = len(lines) - 1
+    lines[insert_at:insert_at] = conect_lines
+    path.write_text("".join(lines), encoding="utf-8")

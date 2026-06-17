@@ -162,14 +162,21 @@ def _process_ligand(extracted: ExtractedLigand, *, output_dir: str | Path) -> Li
     warnings = list(extracted.warnings)
 
     if ligand.charge_method in {"am1bcc", "gas_resp_pyscf"}:
-        working_mol2 = parameters_dir / f"{ligand.id}.antechamber.mol2"
-        antechamber_run = run_antechamber(
-            ligand=ligand,
-            input_pdb=extracted.pdb_path,
-            output_mol2=working_mol2,
-            residue_name=extracted.residue.id.resname,
-            work_dir=parameters_dir,
-        )
+        if ligand.charge_method == "gas_resp_pyscf" and ligand.user_mol2:
+            working_mol2 = _copy_user_mol2(ligand, parameters_dir, suffix="provisional_user")
+            warnings.append(
+                "User mol2 supplied provisional atom types and bonded topology for gas_resp_pyscf; "
+                "its charges will be replaced by PySCF-fitted gas-phase charges."
+            )
+        else:
+            working_mol2 = parameters_dir / f"{ligand.id}.antechamber.mol2"
+            antechamber_run = run_antechamber(
+                ligand=ligand,
+                input_pdb=extracted.pdb_path,
+                output_mol2=working_mol2,
+                residue_name=extracted.residue.id.resname,
+                work_dir=parameters_dir,
+            )
         if ligand.charge_method == "gas_resp_pyscf":
             provisional_mol2_path = working_mol2
             pyscf_mol2 = parameters_dir / f"{ligand.id}.pyscf_charges.mol2"
@@ -182,14 +189,12 @@ def _process_ligand(extracted: ExtractedLigand, *, output_dir: str | Path) -> Li
                 point_charges=None,
             )
             working_mol2 = pyscf_mol2
-            warnings.append("AM1-BCC charges were provisional and replaced by PySCF-fitted gas-phase charges.")
+            if antechamber_run is None:
+                warnings.append("User mol2 charges were provisional and replaced by PySCF-fitted gas-phase charges.")
+            else:
+                warnings.append("AM1-BCC charges were provisional and replaced by PySCF-fitted gas-phase charges.")
     elif ligand.charge_method == "user_mol2":
-        assert ligand.user_mol2 is not None
-        source = Path(ligand.user_mol2)
-        if not source.exists():
-            raise FileNotFoundError(f"Ligand {ligand.id} user_mol2 does not exist: {source}")
-        working_mol2 = parameters_dir / f"{ligand.id}.user.mol2"
-        shutil.copyfile(source, working_mol2)
+        working_mol2 = _copy_user_mol2(ligand, parameters_dir, suffix="user")
     elif ligand.charge_method == "qmmesp_pyscf":
         raise LigandWorkflowError("qmmesp_pyscf is processed in the QMMESP two-pass ligand workflow.")
     else:
@@ -250,30 +255,49 @@ def _prepare_provisional_qm_ligand(
     ligand = extracted.config
     parameters_dir = Path(output_dir) / "ligands" / ligand.id / "parameters"
     parameters_dir.mkdir(parents=True, exist_ok=True)
-    antechamber_mol2 = parameters_dir / f"{ligand.id}.provisional_antechamber.mol2"
-    antechamber_run = run_antechamber(
-        ligand=ligand,
-        input_pdb=extracted.pdb_path,
-        output_mol2=antechamber_mol2,
-        residue_name=extracted.residue.id.resname,
-        work_dir=parameters_dir,
-    )
+    warnings = list(extracted.warnings)
+    antechamber_run: AmberToolRun | None = None
+    parmchk2_run: AmberToolRun | None = None
+    if ligand.user_mol2:
+        source_mol2 = _copy_user_mol2(ligand, parameters_dir, suffix="provisional_user")
+        warnings.append(
+            "User mol2 supplied provisional atom types and bonded topology for QMMESP; "
+            "its charges will be replaced by PySCF-fitted QMMESP charges."
+        )
+    else:
+        source_mol2 = parameters_dir / f"{ligand.id}.provisional_antechamber.mol2"
+        antechamber_run = run_antechamber(
+            ligand=ligand,
+            input_pdb=extracted.pdb_path,
+            output_mol2=source_mol2,
+            residue_name=extracted.residue.id.resname,
+            work_dir=parameters_dir,
+        )
+        warnings.append("AM1-BCC charges are provisional for QMMESP and will be replaced by PySCF-fitted charges.")
     provisional_mol2 = parameters_dir / f"{ligand.id}.provisional.mol2"
     validation = validate_and_write_final_mol2(
-        mol2_path=antechamber_mol2,
+        mol2_path=source_mol2,
         extracted_atoms=extracted.atoms,
         ligand=ligand,
         final_mol2_path=provisional_mol2,
         charges_csv_path=parameters_dir / "provisional_charges.csv",
         validation_json_path=parameters_dir / "provisional_validation.json",
     )
+    warnings.extend(validation.warnings)
     provisional_frcmod = parameters_dir / f"{ligand.id}.frcmod"
-    parmchk2_run = run_parmchk2(
-        ligand=ligand,
-        input_mol2=provisional_mol2,
-        output_frcmod=provisional_frcmod,
-        work_dir=parameters_dir,
-    )
+    if ligand.user_frcmod:
+        source_frcmod = Path(ligand.user_frcmod)
+        if not source_frcmod.exists():
+            raise FileNotFoundError(f"Ligand {ligand.id} user_frcmod does not exist: {source_frcmod}")
+        shutil.copyfile(source_frcmod, provisional_frcmod)
+        warnings.append("User frcmod supplied provisional bonded parameters for QMMESP.")
+    else:
+        parmchk2_run = run_parmchk2(
+            ligand=ligand,
+            input_mol2=provisional_mol2,
+            output_frcmod=provisional_frcmod,
+            work_dir=parameters_dir,
+        )
     return LigandWorkflowItem(
         ligand_id=ligand.id,
         selector=ligand.selector.model_dump(mode="json"),
@@ -290,8 +314,8 @@ def _prepare_provisional_qm_ligand(
         validation=validation,
         antechamber=antechamber_run,
         parmchk2=parmchk2_run,
-        provisional_mol2_path=antechamber_mol2,
-        warnings=["AM1-BCC charges are provisional for QMMESP and will be replaced by PySCF-fitted charges."],
+        provisional_mol2_path=source_mol2,
+        warnings=warnings,
     )
 
 
@@ -406,3 +430,13 @@ def _coordinates(extracted: ExtractedLigand):
     import numpy as np
 
     return np.asarray([[atom.x, atom.y, atom.z] for atom in extracted.atoms], dtype=float)
+
+
+def _copy_user_mol2(ligand, parameters_dir: Path, *, suffix: str) -> Path:
+    assert ligand.user_mol2 is not None
+    source = Path(ligand.user_mol2)
+    if not source.exists():
+        raise FileNotFoundError(f"Ligand {ligand.id} user_mol2 does not exist: {source}")
+    target = parameters_dir / f"{ligand.id}.{suffix}.mol2"
+    shutil.copyfile(source, target)
+    return target

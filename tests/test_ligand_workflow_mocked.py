@@ -211,6 +211,32 @@ def test_gas_resp_pyscf_replaces_provisional_charges(monkeypatch, tmp_path):
     assert "replaced by PySCF-fitted gas-phase charges" in " ".join(item.warnings)
 
 
+def test_gas_resp_pyscf_can_use_user_mol2_as_provisional_scaffold(monkeypatch, tmp_path):
+    entry = {
+        **ligand_entry("sub_501", "B", "SUB", 501),
+        "charge_method": "gas_resp_pyscf",
+        "user_mol2": "tests/data/ligands/ligand_sub.good.mol2",
+        "user_frcmod": "tests/data/ligands/ligand_sub.frcmod",
+        "qmmesp": qmmesp_block(),
+    }
+    manifest = manifest_with_ligand(entry)
+    monkeypatch.setattr(
+        "mdprep.ligands.workflow.run_antechamber",
+        lambda **kwargs: (_ for _ in ()).throw(AmberToolsError("should not run")),
+    )
+    monkeypatch.setattr("mdprep.ligands.workflow.derive_pyscf_charges", fake_pyscf_derivation)
+
+    result = run_ligand_stage(normalized_structure(manifest), manifest, output_dir=tmp_path)
+
+    item = result.ligands[0]
+    assert item.antechamber is None
+    assert item.parmchk2 is None
+    assert item.provisional_mol2_path and item.provisional_mol2_path.name.endswith(".provisional_user.mol2")
+    final = read_mol2(item.final_mol2_path)
+    assert [atom.charge for atom in final.atoms] == pytest.approx([0.25, -0.25])
+    assert "User mol2 supplied provisional atom types" in " ".join(item.warnings)
+
+
 def fake_tleap(input_path, *, work_dir, executable="tleap"):
     work = Path(work_dir)
     for suffix in ["prmtop", "inpcrd", "pdb"]:
@@ -276,6 +302,45 @@ def test_qmmesp_pyscf_uses_embedding_and_replaces_provisional_charges(monkeypatc
     final = read_mol2(item.final_mol2_path)
     assert [atom.charge for atom in final.atoms] == pytest.approx([0.25, -0.25])
     _assert_tleap_script_paths_resolve(tmp_path / "qmmesp" / "provisional_leap" / "tleap.in")
+
+
+def test_qmmesp_pyscf_can_use_user_mol2_as_provisional_scaffold(monkeypatch, tmp_path):
+    entry = {
+        **ligand_entry("sub_501", "B", "SUB", 501),
+        "charge_method": "qmmesp_pyscf",
+        "user_mol2": "tests/data/ligands/ligand_sub.good.mol2",
+        "user_frcmod": "tests/data/ligands/ligand_sub.frcmod",
+        "qmmesp": qmmesp_block(),
+    }
+    manifest = manifest_with_ligand(entry)
+    protonation = protonation_result(manifest, tmp_path)
+    monkeypatch.setattr(
+        "mdprep.ligands.workflow.run_antechamber",
+        lambda **kwargs: (_ for _ in ()).throw(AmberToolsError("should not run")),
+    )
+    monkeypatch.setattr(
+        "mdprep.ligands.workflow.run_parmchk2",
+        lambda **kwargs: (_ for _ in ()).throw(AmberToolsError("should not run")),
+    )
+    monkeypatch.setattr("mdprep.ligands.workflow.run_tleap", fake_tleap)
+    monkeypatch.setattr("mdprep.ligands.workflow.extract_point_charges_from_prmtop", fake_point_charges)
+    monkeypatch.setattr("mdprep.ligands.workflow.derive_pyscf_charges", fake_pyscf_derivation)
+
+    result = run_ligand_stage(
+        protonation.structure,
+        manifest,
+        output_dir=tmp_path,
+        protonation_result=protonation,
+    )
+
+    item = result.ligands[0]
+    assert item.antechamber is None
+    assert item.parmchk2 is None
+    assert item.qm is not None
+    assert item.provisional_mol2_path and item.provisional_mol2_path.name.endswith(".provisional.mol2")
+    final = read_mol2(item.final_mol2_path)
+    assert [atom.charge for atom in final.atoms] == pytest.approx([0.25, -0.25])
+    assert "User mol2 supplied provisional atom types" in " ".join(item.warnings)
 
 
 def test_qmmesp_requires_protonation_result(monkeypatch, tmp_path):
