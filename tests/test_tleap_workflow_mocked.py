@@ -47,16 +47,12 @@ def prepared_inputs(manifest, tmp_path):
 def fake_tleap(input_path, *, work_dir, executable="tleap"):
     work = Path(work_dir)
     script = Path(input_path).read_text(encoding="utf-8")
+    loadpdb = _loadpdb_path(Path(input_path), script)
     for name in ["system.dry", "system.solvated", "system.presalt"]:
         if f"{name}.prmtop" in script:
             (work / f"{name}.prmtop").write_text("prmtop\n", encoding="utf-8")
             (work / f"{name}.inpcrd").write_text("inpcrd\n", encoding="utf-8")
-            (work / f"{name}.pdb").write_text(
-                "ATOM      1  C1  SUB     1       5.000   5.000   5.000  1.00  0.00           C\n"
-                "ATOM      2  O1  SUB     1       6.000   5.000   5.000  1.00  0.00           O\n"
-                "END\n",
-                encoding="utf-8",
-            )
+            (work / f"{name}.pdb").write_text(loadpdb.read_text(encoding="utf-8"), encoding="utf-8")
     log_text = "Checking 'system'....\nUnit is OK.\nTotal unperturbed charge:   0.000000\n"
     (work / "tleap.log").write_text(log_text, encoding="utf-8")
     return TLeapRun(
@@ -72,6 +68,15 @@ def fake_tleap(input_path, *, work_dir, executable="tleap"):
         log_path=work / "tleap.log",
         summary=parse_tleap_log_text(log_text, returncode=0),
     )
+
+
+def _loadpdb_path(input_path: Path, script: str) -> Path:
+    for line in script.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("system = loadpdb "):
+            raw = stripped.split("system = loadpdb ", 1)[1]
+            return (input_path.parent / raw).resolve()
+    raise AssertionError("mock tleap script did not contain loadpdb")
 
 
 def test_tleap_stage_writes_dry_and_final_outputs(monkeypatch, tmp_path):

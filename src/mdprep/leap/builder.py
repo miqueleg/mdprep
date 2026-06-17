@@ -19,6 +19,7 @@ from mdprep.leap.residues import (
     disulfide_bond_commands,
     prepare_leap_input_pdb,
     validate_ligand_parameter_files,
+    validate_tleap_ligand_coordinates,
 )
 from mdprep.leap.runner import TLeapRun, TLeapRunError, run_tleap
 from mdprep.ligands.workflow import LigandStageResult
@@ -112,7 +113,12 @@ def run_tleap_stage(
             water_model=manifest.protein.water_model,
             ligands=manifest.ligands,
         )
-        leap_input = prepare_leap_input_pdb(structure, input_dir / "system.leap_input.pdb")
+        leap_input = prepare_leap_input_pdb(
+            structure,
+            input_dir / "system.leap_input.pdb",
+            manifest=manifest,
+            ligand_result=ligand_result,
+        )
         ligand_files = validate_ligand_parameter_files(
             manifest=manifest,
             structure=leap_input.structure,
@@ -144,10 +150,21 @@ def run_tleap_stage(
             context="dry",
         )
         _ensure_outputs(dry_outputs)
+        dry_coordinate_checks = validate_tleap_ligand_coordinates(
+            manifest=manifest,
+            reference_structure=leap_input.structure,
+            output_pdb=dry_outputs.pdb,
+            stage="dry",
+        )
 
         warnings = list(sources.warnings)
         warnings.extend(leap_input.structure.warnings)
         warnings.extend(warning for warning in dry_run.summary.warnings)
+        warnings.extend(
+            f"Ligand {check['ligand_id']} dry tleap coordinate max deviation: "
+            f"{check['max_coordinate_deviation_angstrom']:.3f} A"
+            for check in dry_coordinate_checks
+        )
         ion_plan: IonPlan | None = None
         salt_volume_a3: float | None = None
         final_run: TLeapRun | None = None

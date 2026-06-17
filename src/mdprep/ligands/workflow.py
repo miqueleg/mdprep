@@ -387,7 +387,12 @@ def _build_qmmesp_provisional_system(
     work_dir = output / "qmmesp" / "provisional_leap"
     input_dir = work_dir / "input"
     work_dir.mkdir(parents=True, exist_ok=True)
-    leap_input = prepare_leap_input_pdb(structure, input_dir / "provisional_input.pdb")
+    leap_input = prepare_leap_input_pdb(
+        structure,
+        input_dir / "provisional_input.pdb",
+        manifest=manifest,
+        ligand_result=ligand_result,
+    )
     sources = forcefield_sources(
         protein_forcefield=manifest.protein.forcefield,
         water_model=manifest.protein.water_model,
