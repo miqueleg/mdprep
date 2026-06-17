@@ -77,30 +77,6 @@ class DisulfideBondCommand:
         }
 
 
-@dataclass(frozen=True)
-class LigandCoordinateCommand:
-    ligand_id: str
-    residue: dict[str, object]
-    residue_index: int
-    atom_name: str
-    x: float
-    y: float
-    z: float
-    command: str
-
-    def to_dict(self) -> dict[str, object]:
-        return {
-            "ligand_id": self.ligand_id,
-            "residue": self.residue,
-            "residue_index": self.residue_index,
-            "atom_name": self.atom_name,
-            "x": self.x,
-            "y": self.y,
-            "z": self.z,
-            "command": self.command,
-        }
-
-
 def prepare_leap_input_pdb(
     structure: PdbStructure,
     output_path: str | Path,
@@ -197,6 +173,7 @@ def validate_ligand_parameter_files(
                 f"mol2 has {sorted(mol2_resnames)}."
             )
         pdb_atom_names = [atom.name for atom in residue.atoms]
+        _require_unique_atom_names(pdb_atom_names, ligand.id)
         mol2_atom_names = [atom.name for atom in mol2.atoms]
         if pdb_atom_names != mol2_atom_names:
             raise LeapResidueError(
@@ -229,46 +206,6 @@ def validate_ligand_parameter_files(
             )
         )
     return validated
-
-
-def ligand_coordinate_commands(
-    *,
-    manifest: ManifestConfig,
-    structure: PdbStructure,
-) -> list[LigandCoordinateCommand]:
-    mapping = residue_index_map(structure)
-    commands: list[LigandCoordinateCommand] = []
-    for ligand in manifest.ligands:
-        try:
-            residue = resolve_residue_selector(structure, ligand.selector.model_dump())
-        except SelectorError as exc:
-            raise LeapResidueError(f"Ligand {ligand.id} selector failed during coordinate anchoring: {exc}") from exc
-        atom_names = residue.atom_names()
-        duplicates = sorted({name for name in atom_names if atom_names.count(name) > 1})
-        if duplicates:
-            raise LeapResidueError(
-                f"Ligand {ligand.id} has duplicate atom names {duplicates}; tleap coordinate anchoring "
-                "requires unique atom names within each ligand residue."
-            )
-        residue_index = mapping[_residue_key(residue.id)]
-        for atom in residue.atoms:
-            command = (
-                f"set system.{residue_index}.{atom.name} position "
-                f"{{ {atom.x:.6f} {atom.y:.6f} {atom.z:.6f} }}"
-            )
-            commands.append(
-                LigandCoordinateCommand(
-                    ligand_id=ligand.id,
-                    residue=residue.id.to_dict(),
-                    residue_index=residue_index,
-                    atom_name=atom.name,
-                    x=atom.x,
-                    y=atom.y,
-                    z=atom.z,
-                    command=command,
-                )
-            )
-    return commands
 
 
 def validate_tleap_ligand_coordinates(
@@ -448,7 +385,7 @@ def _anchor_ligands_to_extracted_inputs(
                 f"Ligand {ligand.id} extracted PDB should contain exactly one residue: {extracted_pdb}"
             )
         reference = reference_structure.residues[0]
-        _require_same_atom_names(reference, target, ligand.id, context="leap input coordinate anchoring")
+        _require_anchor_compatible(reference, target, ligand.id, context="leap input coordinate anchoring")
         target_indices = _residue_atom_indices(anchored_atoms, target.id)
         if len(target_indices) != len(reference.atoms):
             raise LeapResidueError(
@@ -536,6 +473,30 @@ def _require_same_atom_names(reference: ResidueRecord, target: ResidueRecord, li
         raise LeapResidueError(
             f"Ligand {ligand_id} atom-name mismatch during {context}: "
             f"{target_names} != {reference_names}."
+        )
+
+
+def _require_unique_atom_names(atom_names: list[str], ligand_id: str) -> None:
+    duplicates = sorted({name for name in atom_names if atom_names.count(name) > 1})
+    if duplicates:
+        raise LeapResidueError(
+            f"Ligand {ligand_id} has duplicate atom names {duplicates}; unique atom names are required "
+            "for safe tleap residue-template matching."
+        )
+
+
+def _require_anchor_compatible(reference: ResidueRecord, target: ResidueRecord, ligand_id: str, *, context: str) -> None:
+    if len(reference.atoms) != len(target.atoms):
+        raise LeapResidueError(
+            f"Ligand {ligand_id} atom-count mismatch during {context}: "
+            f"{len(target.atoms)} != {len(reference.atoms)}."
+        )
+    reference_elements = [(atom.element or "").upper() for atom in reference.atoms]
+    target_elements = [(atom.element or "").upper() for atom in target.atoms]
+    if reference_elements != target_elements:
+        raise LeapResidueError(
+            f"Ligand {ligand_id} element-order mismatch during {context}: "
+            f"{target_elements} != {reference_elements}."
         )
 
 

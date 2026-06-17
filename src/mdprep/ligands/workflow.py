@@ -17,7 +17,6 @@ from mdprep.leap.log_parser import LeapLogError, assert_tleap_success
 from mdprep.leap.residues import (
     LeapResidueError,
     disulfide_bond_commands,
-    ligand_coordinate_commands,
     prepare_leap_input_pdb,
     validate_ligand_parameter_files,
 )
@@ -409,10 +408,6 @@ def _build_qmmesp_provisional_system(
         if protonation_result is not None
         else []
     )
-    coordinate_commands = ligand_coordinate_commands(
-        manifest=manifest,
-        structure=leap_input.structure,
-    )
     outputs = TLeapOutputs(
         prmtop=work_dir / "provisional.prmtop",
         inpcrd=work_dir / "provisional.inpcrd",
@@ -423,7 +418,6 @@ def _build_qmmesp_provisional_system(
         ligands=ligand_files,
         input_pdb=leap_input.path,
         disulfide_bonds=disulfides,
-        ligand_coordinate_commands=coordinate_commands,
         outputs=outputs,
         work_dir=work_dir,
     )

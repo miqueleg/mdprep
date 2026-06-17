@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from dataclasses import replace
 
 from mdprep.config.models import LigandConfig, ManifestConfig
 from mdprep.ligands.identity import ligand_identity_dict
@@ -84,6 +85,13 @@ def extract_ligand(
             fixed_atoms.append(atom.__class__(**{**atom.__dict__, "element": inferred}))
         else:
             fixed_atoms.append(atom)
+    fixed_atoms, rename_map = _uniquify_duplicate_atom_names(fixed_atoms)
+    if rename_map:
+        renamed = ", ".join(f"{old}->{new}" for old, new in rename_map)
+        warnings.append(
+            "Ligand atom names were not unique in the input PDB; generated deterministic "
+            f"Amber-safe names for this ligand: {renamed}."
+        )
     if fixed_atoms != residue.atoms:
         residue = ResidueRecord(
             id=residue.id,
@@ -127,6 +135,60 @@ def extract_ligand(
         encoding="utf-8",
     )
     return extracted
+
+
+def _uniquify_duplicate_atom_names(atoms: list) -> tuple[list, list[tuple[str, str]]]:
+    counts: dict[str, int] = {}
+    for atom in atoms:
+        counts[atom.name] = counts.get(atom.name, 0) + 1
+    duplicate_names = {name for name, count in counts.items() if count > 1}
+    if not duplicate_names:
+        return atoms, []
+
+    used = {atom.name for atom in atoms if atom.name not in duplicate_names}
+    element_counters: dict[str, int] = {}
+    renamed_atoms = []
+    rename_map: list[tuple[str, str]] = []
+    for atom in atoms:
+        if atom.name not in duplicate_names:
+            renamed_atoms.append(atom)
+            continue
+        element = (atom.element or infer_element(atom.name, resname=atom.resname, record_name=atom.record_name) or "X").upper()
+        new_name = _next_unique_ligand_atom_name(element, used, element_counters)
+        used.add(new_name)
+        renamed_atoms.append(replace(atom, name=new_name))
+        rename_map.append((atom.name, new_name))
+    return renamed_atoms, rename_map
+
+
+def _next_unique_ligand_atom_name(
+    element: str,
+    used: set[str],
+    counters: dict[str, int],
+) -> str:
+    symbol = "".join(char for char in element.upper() if char.isalnum()) or "X"
+    if len(symbol) > 2:
+        symbol = symbol[:2]
+    while True:
+        counters[symbol] = counters.get(symbol, 0) + 1
+        suffix = _base36(counters[symbol])
+        candidate = f"{symbol}{suffix}"
+        if len(candidate) > 4:
+            candidate = f"{symbol[:1]}{suffix}"[-4:]
+        if candidate not in used:
+            return candidate
+
+
+def _base36(value: int) -> str:
+    alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    if value <= 0:
+        return "0"
+    digits = []
+    current = value
+    while current:
+        current, remainder = divmod(current, 36)
+        digits.append(alphabet[remainder])
+    return "".join(reversed(digits))
 
 
 def _requires_pdb_chemistry_perception(ligand: LigandConfig) -> bool:

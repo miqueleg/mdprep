@@ -15,10 +15,8 @@ from mdprep.leap.residues import (
     DisulfideBondCommand,
     LeapInputResult,
     LeapResidueError,
-    LigandCoordinateCommand,
     LigandParameterFiles,
     disulfide_bond_commands,
-    ligand_coordinate_commands,
     prepare_leap_input_pdb,
     validate_ligand_parameter_files,
     validate_tleap_ligand_coordinates,
@@ -53,7 +51,6 @@ class TLeapStageResult:
     leap_input: LeapInputResult
     ligands: list[LigandParameterFiles]
     disulfide_bonds: list[DisulfideBondCommand]
-    ligand_coordinate_commands: list[LigandCoordinateCommand]
     dry_run: TLeapRun
     dry_outputs: TLeapOutputs
     final_run: TLeapRun | None
@@ -73,7 +70,6 @@ class TLeapStageResult:
             "force_field_warnings": self.forcefields.warnings,
             "water_box": self.forcefields.water_box,
             "ligands": [ligand.to_dict() for ligand in self.ligands],
-            "ligand_coordinate_commands": [command.to_dict() for command in self.ligand_coordinate_commands],
             "disulfide_bond_commands": [bond.to_dict() for bond in self.disulfide_bonds],
             "leap_input": self.leap_input.to_dict(),
             "dry_tleap": self.dry_run.to_dict(),
@@ -132,10 +128,6 @@ def run_tleap_stage(
             structure=leap_input.structure,
             protonation_result=protonation_result,
         )
-        coordinate_commands = ligand_coordinate_commands(
-            manifest=manifest,
-            structure=leap_input.structure,
-        )
         dry_outputs = TLeapOutputs(
             prmtop=dry_dir / "system.dry.prmtop",
             inpcrd=dry_dir / "system.dry.inpcrd",
@@ -146,7 +138,6 @@ def run_tleap_stage(
             ligands=ligand_files,
             input_pdb=leap_input.path,
             disulfide_bonds=disulfide_bonds,
-            ligand_coordinate_commands=coordinate_commands,
             outputs=dry_outputs,
             work_dir=dry_dir,
         )
@@ -186,7 +177,6 @@ def run_tleap_stage(
                 ligands=ligand_files,
                 input_pdb=leap_input.path,
                 disulfide_bonds=disulfide_bonds,
-                ligand_coordinate_commands=coordinate_commands,
                 dry_charge=dry_run.summary.total_charge,
                 output_dir=output,
             )
@@ -207,7 +197,6 @@ def run_tleap_stage(
         leap_input=leap_input,
         ligands=ligand_files,
         disulfide_bonds=disulfide_bonds,
-        ligand_coordinate_commands=coordinate_commands,
         dry_run=dry_run,
         dry_outputs=dry_outputs,
         final_run=final_run,
@@ -230,7 +219,6 @@ def build_tleap_script(
     input_pdb: str | Path,
     disulfide_bonds: list[DisulfideBondCommand],
     outputs: TLeapOutputs,
-    ligand_coordinate_commands: list[LigandCoordinateCommand] | None = None,
     work_dir: str | Path | None = None,
     solvation_command: str | None = None,
     ion_commands: list[str] | None = None,
@@ -246,7 +234,6 @@ def build_tleap_script(
             lines.append(f"{ligand.residue_name} = {ligand.variable_name}")
         lines.append(f"loadamberparams {frcmod_path}")
     lines.append(f"system = loadpdb {_tleap_path(input_pdb, work_dir)}")
-    lines.extend(command.command for command in ligand_coordinate_commands or [])
     lines.extend(bond.command for bond in disulfide_bonds)
     if solvation_command is not None:
         lines.append(solvation_command)
@@ -290,7 +277,6 @@ def _run_solvated_build(
     ligands: list[LigandParameterFiles],
     input_pdb: Path,
     disulfide_bonds: list[DisulfideBondCommand],
-    ligand_coordinate_commands: list[LigandCoordinateCommand],
     dry_charge: float | None,
     output_dir: Path,
 ) -> tuple[TLeapOutputs, TLeapRun, IonPlan | None, float | None]:
@@ -323,7 +309,6 @@ def _run_solvated_build(
                 ligands=ligands,
                 input_pdb=input_pdb,
                 disulfide_bonds=disulfide_bonds,
-                ligand_coordinate_commands=ligand_coordinate_commands,
                 outputs=pre_outputs,
                 work_dir=solv_dir,
                 solvation_command=solvate,
@@ -356,7 +341,6 @@ def _run_solvated_build(
         ligands=ligands,
         input_pdb=input_pdb,
         disulfide_bonds=disulfide_bonds,
-        ligand_coordinate_commands=ligand_coordinate_commands,
         outputs=final_outputs,
         work_dir=solv_dir,
         solvation_command=solvate,

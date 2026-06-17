@@ -156,3 +156,88 @@ def test_extract_ligand_preserves_ligand_conect_records(tmp_path):
     assert "CONECT    4    5    6" in output
     assert "CONECT    4    5    1    6" not in output
     assert any("Preserved" in warning and "CONECT" in warning for warning in extracted[0].warnings)
+
+
+def test_extract_ligand_renames_duplicate_atom_names_deterministically(tmp_path):
+    pdb_path = tmp_path / "duplicate_names.pdb"
+    atoms = [
+        AtomRecord(
+            serial=1,
+            name="C",
+            altloc=None,
+            resname="SAL",
+            chain_id="B",
+            resid=777,
+            icode=None,
+            x=0.0,
+            y=0.0,
+            z=0.0,
+            occupancy=1.0,
+            bfactor=0.0,
+            element="C",
+            record_name="HETATM",
+            original_line="",
+        ),
+        AtomRecord(
+            serial=2,
+            name="C",
+            altloc=None,
+            resname="SAL",
+            chain_id="B",
+            resid=777,
+            icode=None,
+            x=1.0,
+            y=0.0,
+            z=0.0,
+            occupancy=1.0,
+            bfactor=0.0,
+            element="C",
+            record_name="HETATM",
+            original_line="",
+        ),
+        AtomRecord(
+            serial=3,
+            name="O",
+            altloc=None,
+            resname="SAL",
+            chain_id="B",
+            resid=777,
+            icode=None,
+            x=0.0,
+            y=1.0,
+            z=0.0,
+            occupancy=1.0,
+            bfactor=0.0,
+            element="O",
+            record_name="HETATM",
+            original_line="",
+        ),
+        AtomRecord(
+            serial=4,
+            name="O",
+            altloc=None,
+            resname="SAL",
+            chain_id="B",
+            resid=777,
+            icode=None,
+            x=0.0,
+            y=0.0,
+            z=1.0,
+            occupancy=1.0,
+            bfactor=0.0,
+            element="O",
+            record_name="HETATM",
+            original_line="",
+        ),
+    ]
+    pdb_path.write_text("".join(format_atom_record(atom) for atom in atoms) + "END\n", encoding="utf-8")
+    data = manifest_data(str(pdb_path))
+    data["structure"]["remove_unknown_heterogens"] = False
+    data["ligands"] = [ligand_entry("substrate_sal", "B", "SAL", 777)]
+    manifest = make_manifest(data)
+
+    extracted = extract_configured_ligands(read_pdb(pdb_path), manifest, output_dir=tmp_path / "out")
+
+    assert [atom.name for atom in extracted[0].atoms] == ["C1", "C2", "O1", "O2"]
+    assert len(set(atom.name for atom in extracted[0].atoms)) == 4
+    assert any("not unique" in warning for warning in extracted[0].warnings)

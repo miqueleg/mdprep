@@ -6,12 +6,16 @@ from mdprep.ambertools.commands import AmberToolRun, AmberToolsError
 from mdprep.ambertools.mol2 import read_mol2, write_mol2_with_charges
 from mdprep.external.runner import CommandResult
 from mdprep.leap.log_parser import parse_tleap_log_text
+from mdprep.leap.residues import prepare_leap_input_pdb, validate_ligand_parameter_files
 from mdprep.leap.runner import TLeapRun
 from mdprep.ligands.pyscf_charges import LigandPySCFChargeResult
 from mdprep.ligands.workflow import LigandWorkflowError, run_ligand_stage
 from mdprep.protonation.apply import apply_protonation_stage
+from mdprep.structure.models import AtomRecord
 from mdprep.qm.point_charges import PointCharge, PointChargeSelection
+from mdprep.structure.pdb import read_pdb
 from mdprep.structure.normalize import normalize_structure_stage
+from mdprep.structure.writer import format_atom_record
 from tests.test_structure_normalize import ligand_entry, make_manifest, manifest_data
 
 
@@ -100,6 +104,97 @@ def test_am1bcc_workflow_writes_parameter_files_with_fake_tools(monkeypatch, tmp
     assert item.final_frcmod_path and item.final_frcmod_path.exists()
     assert item.validation and item.validation.validation_json_path.exists()
     assert item.validation.charges_csv_path.exists()
+
+
+def test_duplicate_input_ligand_names_are_consistent_for_parameterization_and_tleap(monkeypatch, tmp_path):
+    pdb_path = tmp_path / "duplicate_ligand_names.pdb"
+    atoms = [
+        AtomRecord(
+            serial=index,
+            name=name,
+            altloc=None,
+            resname="SAL",
+            chain_id="B",
+            resid=777,
+            icode=None,
+            x=float(index),
+            y=0.0,
+            z=0.0,
+            occupancy=1.0,
+            bfactor=0.0,
+            element=element,
+            record_name="HETATM",
+            original_line="",
+        )
+        for index, (name, element) in enumerate([("C", "C"), ("C", "C"), ("O", "O"), ("O", "O")], start=1)
+    ]
+    pdb_path.write_text("".join(format_atom_record(atom) for atom in atoms) + "END\n", encoding="utf-8")
+    data = manifest_data(str(pdb_path))
+    data["structure"]["remove_unknown_heterogens"] = False
+    data["protonation"]["method"] = "manual_only"
+    data["ligands"] = [ligand_entry("substrate_sal", "B", "SAL", 777)]
+    manifest = make_manifest(data)
+
+    def fake_duplicate_antechamber(*, ligand, input_pdb, output_mol2, residue_name, work_dir):
+        residue = read_pdb(input_pdb).residues[0]
+        atom_lines = []
+        for index, atom in enumerate(residue.atoms, start=1):
+            atom_type = "c3" if atom.element == "C" else "o"
+            charge = 0.25 if index == 1 else -0.25 if index == 2 else 0.0
+            atom_lines.append(
+                f"{index:7d} {atom.name:<8} {atom.x:10.4f} {atom.y:10.4f} {atom.z:10.4f} "
+                f"{atom_type:<8} {1:4d} {residue_name:<8} {charge:10.6f}"
+            )
+        output = Path(output_mol2)
+        output.write_text(
+            "\n".join(
+                [
+                    "@<TRIPOS>MOLECULE",
+                    residue_name,
+                    " 4 3 0 0 0",
+                    "SMALL",
+                    "USER_CHARGES",
+                    "",
+                    "@<TRIPOS>ATOM",
+                    *atom_lines,
+                    "@<TRIPOS>BOND",
+                    "     1    1    2 1",
+                    "     2    2    3 1",
+                    "     3    3    4 1",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        return command_run(output, "antechamber")
+
+    monkeypatch.setattr("mdprep.ligands.workflow.run_antechamber", fake_duplicate_antechamber)
+    monkeypatch.setattr("mdprep.ligands.workflow.run_parmchk2", fake_parmchk2)
+
+    structure = read_pdb(pdb_path)
+    result = run_ligand_stage(structure, manifest, output_dir=tmp_path)
+    final_mol2 = read_mol2(result.ligands[0].final_mol2_path)
+    leap_input = prepare_leap_input_pdb(
+        structure,
+        tmp_path / "system.leap_input.pdb",
+        manifest=manifest,
+        ligand_result=result,
+    )
+    ligand_files = validate_ligand_parameter_files(
+        manifest=manifest,
+        structure=leap_input.structure,
+        ligand_result=result,
+    )
+
+    assert [atom.name for atom in final_mol2.atoms] == ["C1", "C2", "O1", "O2"]
+    assert [atom.atom_type for atom in final_mol2.atoms] == ["c3", "c3", "o", "o"]
+    assert next(residue for residue in leap_input.structure.residues if residue.id.resname == "SAL").atom_names() == [
+        "C1",
+        "C2",
+        "O1",
+        "O2",
+    ]
+    assert ligand_files[0].atom_names == ["C1", "C2", "O1", "O2"]
 
 
 def test_user_mol2_workflow_copies_and_validates_mol2(tmp_path):

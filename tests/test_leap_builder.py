@@ -4,7 +4,7 @@ import pytest
 
 from mdprep.leap.builder import TLeapBuildError, TLeapOutputs, build_tleap_script, solvation_command
 from mdprep.leap.forcefields import forcefield_sources
-from mdprep.leap.residues import DisulfideBondCommand, LigandCoordinateCommand, LigandParameterFiles
+from mdprep.leap.residues import DisulfideBondCommand, LigandParameterFiles
 from tests.test_structure_normalize import ligand_entry, make_manifest, manifest_data
 
 
@@ -59,38 +59,6 @@ def test_dry_tleap_script_contains_required_commands(tmp_path):
     assert "savepdb system system.dry.pdb" in script
     assert "saveamberparm system system.dry.prmtop system.dry.inpcrd" in script
     assert script.rstrip().endswith("quit")
-
-
-def test_tleap_script_sets_ligand_coordinates_after_loadpdb(tmp_path):
-    sources = forcefield_sources(protein_forcefield="ff19SB", water_model="TIP3P", ligands=[])
-    outputs = TLeapOutputs(
-        prmtop=tmp_path / "system.dry.prmtop",
-        inpcrd=tmp_path / "system.dry.inpcrd",
-        pdb=tmp_path / "system.dry.pdb",
-    )
-    coordinate = LigandCoordinateCommand(
-        ligand_id="sub_501",
-        residue={"chain_id": "B", "resname": "SUB", "resid": 501, "icode": None},
-        residue_index=2,
-        atom_name="C1",
-        x=5.0,
-        y=6.0,
-        z=7.0,
-        command="set system.2.C1 position { 5.000000 6.000000 7.000000 }",
-    )
-
-    script = build_tleap_script(
-        sources=sources,
-        ligands=[],
-        input_pdb=tmp_path / "system.pdb",
-        disulfide_bonds=[],
-        ligand_coordinate_commands=[coordinate],
-        outputs=outputs,
-    )
-
-    assert "system = loadpdb" in script
-    assert "set system.2.C1 position { 5.000000 6.000000 7.000000 }" in script
-    assert script.index("system = loadpdb") < script.index("set system.2.C1 position")
 
 
 def test_tleap_script_paths_are_relative_to_work_dir(tmp_path):

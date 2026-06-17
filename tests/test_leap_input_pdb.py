@@ -5,7 +5,6 @@ import pytest
 
 from mdprep.leap.residues import (
     LeapResidueError,
-    ligand_coordinate_commands,
     prepare_leap_input_pdb,
     validate_tleap_ligand_coordinates,
 )
@@ -89,6 +88,64 @@ def test_prepare_leap_input_anchors_ligand_to_extracted_parameterization_pdb(tmp
     assert result.ligand_coordinate_anchors[0]["max_coordinate_delta_applied_angstrom"] > 100.0
 
 
+def test_prepare_leap_input_applies_extracted_unique_ligand_atom_names(tmp_path):
+    original = read_pdb("tests/data/protein_two_ligands.pdb")
+    target = next(residue for residue in original.residues if residue.id.resname == "SUB")
+    duplicate_atoms = [
+        replace(atom, name="C", element=target.atoms[index].element)
+        for index, atom in enumerate(target.atoms)
+    ]
+    unique_atoms = [
+        replace(duplicate_atoms[0], name="C1"),
+        replace(duplicate_atoms[1], name="O1"),
+    ]
+    extracted_pdb = tmp_path / "sub_unique.pdb"
+    write_pdb(
+        PdbStructure(
+            path=extracted_pdb,
+            atoms=unique_atoms,
+            residues=[
+                ResidueRecord(
+                    id=target.id,
+                    atoms=unique_atoms,
+                    record_names={"HETATM"},
+                    original_index=0,
+                )
+            ],
+            model_count=1,
+        ),
+        extracted_pdb,
+    )
+    structure_atoms = [
+        duplicate_atoms.pop(0) if atom.resname == "SUB" else atom
+        for atom in original.atoms
+    ]
+    structure = PdbStructure(
+        path=original.path,
+        atoms=structure_atoms,
+        residues=_build_residues(structure_atoms),
+        model_count=original.model_count,
+        used_model=original.used_model,
+        warnings=[],
+    )
+    data = manifest_data("tests/data/protein_two_ligands.pdb")
+    data["ligands"] = [ligand_entry("sub_501", "B", "SUB", 501)]
+    manifest = make_manifest(data)
+    ligand_result = SimpleNamespace(
+        ligands=[SimpleNamespace(ligand_id="sub_501", extracted_pdb_path=extracted_pdb)]
+    )
+
+    result = prepare_leap_input_pdb(
+        structure,
+        tmp_path / "system.leap_input.pdb",
+        manifest=manifest,
+        ligand_result=ligand_result,
+    )
+
+    anchored = next(residue for residue in read_pdb(result.path).residues if residue.id.resname == "SUB")
+    assert anchored.atom_names() == ["C1", "O1"]
+
+
 def test_tleap_ligand_coordinate_validation_fails_if_dry_build_moves_ligand(tmp_path):
     reference = read_pdb("tests/data/protein_two_ligands.pdb")
     data = manifest_data("tests/data/protein_two_ligands.pdb")
@@ -122,30 +179,6 @@ def test_tleap_ligand_coordinate_validation_fails_if_dry_build_moves_ligand(tmp_
     assert "moved during dry tleap build" in str(excinfo.value)
 
 
-def test_ligand_coordinate_commands_require_unique_atom_names():
-    structure = read_pdb("tests/data/protein_two_ligands.pdb")
-    duplicated_atoms = [
-        replace(atom, name="C1")
-        if atom.resname == "SUB"
-        else atom
-        for atom in structure.atoms
-    ]
-    duplicated = PdbStructure(
-        path=structure.path,
-        atoms=duplicated_atoms,
-        residues=_build_residues(duplicated_atoms),
-        model_count=structure.model_count,
-        used_model=structure.used_model,
-        warnings=[],
-    )
-    data = manifest_data("tests/data/protein_two_ligands.pdb")
-    data["ligands"] = [ligand_entry("sub_501", "B", "SUB", 501)]
-    manifest = make_manifest(data)
-
-    with pytest.raises(LeapResidueError) as excinfo:
-        ligand_coordinate_commands(manifest=manifest, structure=duplicated)
-
-    assert "duplicate atom names" in str(excinfo.value)
 
 
 def _build_residues(atoms):
