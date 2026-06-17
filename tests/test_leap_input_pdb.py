@@ -3,7 +3,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from mdprep.leap.residues import LeapResidueError, prepare_leap_input_pdb, validate_tleap_ligand_coordinates
+from mdprep.leap.residues import (
+    LeapResidueError,
+    ligand_coordinate_commands,
+    prepare_leap_input_pdb,
+    validate_tleap_ligand_coordinates,
+)
 from mdprep.structure.models import PdbStructure, ResidueId, ResidueRecord
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.writer import write_pdb
@@ -115,6 +120,32 @@ def test_tleap_ligand_coordinate_validation_fails_if_dry_build_moves_ligand(tmp_
         )
 
     assert "moved during dry tleap build" in str(excinfo.value)
+
+
+def test_ligand_coordinate_commands_require_unique_atom_names():
+    structure = read_pdb("tests/data/protein_two_ligands.pdb")
+    duplicated_atoms = [
+        replace(atom, name="C1")
+        if atom.resname == "SUB"
+        else atom
+        for atom in structure.atoms
+    ]
+    duplicated = PdbStructure(
+        path=structure.path,
+        atoms=duplicated_atoms,
+        residues=_build_residues(duplicated_atoms),
+        model_count=structure.model_count,
+        used_model=structure.used_model,
+        warnings=[],
+    )
+    data = manifest_data("tests/data/protein_two_ligands.pdb")
+    data["ligands"] = [ligand_entry("sub_501", "B", "SUB", 501)]
+    manifest = make_manifest(data)
+
+    with pytest.raises(LeapResidueError) as excinfo:
+        ligand_coordinate_commands(manifest=manifest, structure=duplicated)
+
+    assert "duplicate atom names" in str(excinfo.value)
 
 
 def _build_residues(atoms):

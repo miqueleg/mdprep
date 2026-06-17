@@ -77,6 +77,30 @@ class DisulfideBondCommand:
         }
 
 
+@dataclass(frozen=True)
+class LigandCoordinateCommand:
+    ligand_id: str
+    residue: dict[str, object]
+    residue_index: int
+    atom_name: str
+    x: float
+    y: float
+    z: float
+    command: str
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "ligand_id": self.ligand_id,
+            "residue": self.residue,
+            "residue_index": self.residue_index,
+            "atom_name": self.atom_name,
+            "x": self.x,
+            "y": self.y,
+            "z": self.z,
+            "command": self.command,
+        }
+
+
 def prepare_leap_input_pdb(
     structure: PdbStructure,
     output_path: str | Path,
@@ -205,6 +229,46 @@ def validate_ligand_parameter_files(
             )
         )
     return validated
+
+
+def ligand_coordinate_commands(
+    *,
+    manifest: ManifestConfig,
+    structure: PdbStructure,
+) -> list[LigandCoordinateCommand]:
+    mapping = residue_index_map(structure)
+    commands: list[LigandCoordinateCommand] = []
+    for ligand in manifest.ligands:
+        try:
+            residue = resolve_residue_selector(structure, ligand.selector.model_dump())
+        except SelectorError as exc:
+            raise LeapResidueError(f"Ligand {ligand.id} selector failed during coordinate anchoring: {exc}") from exc
+        atom_names = residue.atom_names()
+        duplicates = sorted({name for name in atom_names if atom_names.count(name) > 1})
+        if duplicates:
+            raise LeapResidueError(
+                f"Ligand {ligand.id} has duplicate atom names {duplicates}; tleap coordinate anchoring "
+                "requires unique atom names within each ligand residue."
+            )
+        residue_index = mapping[_residue_key(residue.id)]
+        for atom in residue.atoms:
+            command = (
+                f"set system.{residue_index}.{atom.name} position "
+                f"{{ {atom.x:.6f} {atom.y:.6f} {atom.z:.6f} }}"
+            )
+            commands.append(
+                LigandCoordinateCommand(
+                    ligand_id=ligand.id,
+                    residue=residue.id.to_dict(),
+                    residue_index=residue_index,
+                    atom_name=atom.name,
+                    x=atom.x,
+                    y=atom.y,
+                    z=atom.z,
+                    command=command,
+                )
+            )
+    return commands
 
 
 def validate_tleap_ligand_coordinates(
