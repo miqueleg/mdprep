@@ -41,6 +41,16 @@ def test_parse_blank_chain_selectors():
     assert atom_selector.atom_name == "ND1"
 
 
+def test_parse_alphanumeric_ligand_residue_selector():
+    selector = parse_residue_selector(":5NB301")
+    atom_selector = parse_atom_selector(":5NB301@C1x")
+
+    assert selector.chain_id == ""
+    assert selector.resname == "5NB"
+    assert selector.resid == 301
+    assert atom_selector.atom_name == "C1x"
+
+
 def test_parse_atom_selector():
     selector = parse_atom_selector("A:CYS45@SG")
 
@@ -59,6 +69,24 @@ def test_structured_selector_resolves_correct_residue():
 
     assert residue.id.resname == "ALA"
     assert residue.atoms[0].name == "N"
+
+
+def test_structured_resname_only_selector_resolves_unique_residue():
+    structure = read_pdb(DATA / "protein_atom_record_ligand_blank_chain.pdb")
+    residue = resolve_residue_selector(structure, {"resname": "5NB"})
+
+    assert residue.id.chain_id == ""
+    assert residue.id.resname == "5NB"
+    assert residue.id.resid == 301
+
+
+def test_structured_resname_only_selector_fails_when_ambiguous():
+    structure = read_pdb(DATA / "protein_disulfide.pdb")
+
+    with pytest.raises(SelectorError) as excinfo:
+        resolve_residue_selector(structure, {"resname": "CYS"})
+
+    assert "matched 3 residues" in str(excinfo.value)
 
 
 def test_atom_selector_resolves_correct_atom():
@@ -85,4 +113,3 @@ def test_ambiguous_selector_raises_selector_error():
         resolve_residue_selector(structure, "A:1")
 
     assert "matched 2 residues" in str(excinfo.value)
-

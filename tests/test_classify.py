@@ -31,6 +31,14 @@ def test_hetatm_non_water_residues_are_likely_ligands():
     assert [residue.id.resname for residue in ligands] == ["SUB", "COF"]
 
 
+def test_atom_record_nonstandard_residue_is_likely_ligand():
+    structure = read_pdb(DATA / "protein_atom_record_ligand_blank_chain.pdb")
+    ligands = [residue for residue in structure.residues if is_likely_ligand_or_cofactor(residue)]
+
+    assert [residue.id.resname for residue in ligands] == ["5NB"]
+    assert ligands[0].record_names == {"ATOM"}
+
+
 def test_histidines_and_titratable_residues_are_detected():
     structure = read_pdb(DATA / "protein_with_waters.pdb")
     histidines = [residue for residue in structure.residues if is_histidine(residue)]
@@ -38,4 +46,3 @@ def test_histidines_and_titratable_residues_are_detected():
 
     assert [residue.id.resname for residue in histidines] == ["HIS"]
     assert {residue.id.resname for residue in titratable} == {"HIS", "ASP"}
-

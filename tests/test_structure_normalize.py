@@ -74,6 +74,12 @@ def ligand_entry(ligand_id: str, chain: str, resname: str, resid: int) -> dict:
     }
 
 
+def ligand_entry_resname_only(ligand_id: str, resname: str) -> dict:
+    entry = ligand_entry(ligand_id, "", resname, 0)
+    entry["selector"] = {"resname": resname}
+    return entry
+
+
 def make_manifest(data: dict) -> ManifestConfig:
     return ManifestConfig.model_validate(data)
 
@@ -110,6 +116,28 @@ def test_configured_ligand_is_kept():
 
     assert [ligand.ligand_id for ligand in result.configured_ligands_kept] == ["SUB_501", "COF_601"]
     assert [residue.id.resname for residue in result.normalized_structure.residues] == ["ALA", "SUB", "COF"]
+
+
+def test_atom_record_ligand_can_be_configured_by_resname_only():
+    data = manifest_data("tests/data/protein_atom_record_ligand_blank_chain.pdb")
+    data["structure"]["remove_unknown_heterogens"] = False
+    data["ligands"] = [ligand_entry_resname_only("ligand", "5NB")]
+
+    result = normalize_structure_stage(make_manifest(data))
+
+    assert [ligand.ligand_id for ligand in result.configured_ligands_kept] == ["ligand"]
+    assert result.configured_ligands_kept[0].residue["chain_id"] == ""
+    assert result.configured_ligands_kept[0].residue["resid"] == 301
+
+
+def test_atom_record_ligand_is_unknown_heterogen_when_not_configured():
+    data = manifest_data("tests/data/protein_atom_record_ligand_blank_chain.pdb")
+    data["structure"]["remove_unknown_heterogens"] = False
+
+    with pytest.raises(StructureNormalizationError) as excinfo:
+        normalize_structure_stage(make_manifest(data))
+
+    assert "<blank>:5NB301" in str(excinfo.value)
 
 
 def test_unknown_heterogen_fails_when_not_allowed():

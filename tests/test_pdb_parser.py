@@ -28,6 +28,17 @@ def test_counts_waters_and_likely_ligands():
     assert summary.likely_ligands[0].id.resname == "SO4"
 
 
+def test_atom_record_nonstandard_blank_chain_ligand_is_parsed_and_detected():
+    summary = inspect_pdb_structure(DATA / "protein_atom_record_ligand_blank_chain.pdb")
+    ligand = summary.likely_ligands[0]
+
+    assert ligand.id.chain_id == ""
+    assert ligand.id.resname == "5NB"
+    assert ligand.id.resid == 301
+    assert ligand.atom_names() == ["C1x", "N1x", "O1x", "C2x"]
+    assert "ATOM" in ligand.record_names
+
+
 def test_handles_blank_chain_ids():
     structure = read_pdb(DATA / "protein_blank_chain.pdb")
 

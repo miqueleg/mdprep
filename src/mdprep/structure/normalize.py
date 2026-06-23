@@ -8,6 +8,7 @@ from pathlib import Path
 from mdprep.config.models import ManifestConfig
 from mdprep.structure.classify import (
     is_likely_ligand_or_cofactor,
+    is_nonstandard_nonwater_residue,
     is_standard_protein_residue,
     is_water_residue,
 )
@@ -163,7 +164,7 @@ def inspect_pdb_structure_from_structure(structure: PdbStructure) -> InspectionS
     protein_residues = [residue for residue in residues if is_standard_protein_residue(residue)]
     water_residues = [residue for residue in residues if is_water_residue(residue)]
     heterogen_residues = [
-        residue for residue in residues if "HETATM" in residue.record_names and not is_water_residue(residue)
+        residue for residue in residues if is_nonstandard_nonwater_residue(residue)
     ]
     likely_ligands = [residue for residue in residues if is_likely_ligand_or_cofactor(residue)]
     histidines = [residue for residue in residues if is_histidine(residue)]

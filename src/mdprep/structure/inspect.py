@@ -8,6 +8,7 @@ from pathlib import Path
 from mdprep.structure.classify import (
     is_histidine,
     is_likely_ligand_or_cofactor,
+    is_nonstandard_nonwater_residue,
     is_standard_protein_residue,
     is_titratable_residue,
     is_water_residue,
@@ -74,7 +75,7 @@ def inspect_pdb_structure(
     heterogen_residues = [
         residue
         for residue in residues
-        if "HETATM" in residue.record_names and not is_water_residue(residue)
+        if is_nonstandard_nonwater_residue(residue)
     ]
     likely_ligands = [residue for residue in residues if is_likely_ligand_or_cofactor(residue)]
     histidines = [residue for residue in residues if is_histidine(residue)]
@@ -102,4 +103,3 @@ def _residue_to_dict(residue: ResidueRecord) -> dict[str, object]:
         "record_names": sorted(residue.record_names),
         "original_index": residue.original_index,
     }
-

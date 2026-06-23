@@ -15,14 +15,15 @@ class SelectorError(ValueError):
 
 @dataclass(frozen=True)
 class ResidueSelector:
-    chain_id: str
-    resid: int
+    chain_id: str | None
+    resid: int | None
     resname: str | None = None
     icode: str | None = None
 
     def display(self) -> str:
-        chain = self.chain_id
-        residue = f"{self.resname or ''}{self.resid}{self.icode or ''}"
+        chain = "*" if self.chain_id is None else self.chain_id
+        residue_number = "*" if self.resid is None else str(self.resid)
+        residue = f"{self.resname or ''}{residue_number}{self.icode or ''}"
         return f"{chain}:{residue}"
 
 
@@ -35,7 +36,8 @@ class AtomSelector:
         return f"{self.residue.display()}@{self.atom_name}"
 
 
-_RESIDUE_BODY_RE = re.compile(r"^(?:(?P<resname>[A-Za-z]+))?(?P<resid>-?\d+)(?P<icode>[A-Za-z]?)$")
+_RESID_ONLY_BODY_RE = re.compile(r"^(?P<resid>-?\d+)(?P<icode>[A-Za-z]?)$")
+_RESNAME_RESID_BODY_RE = re.compile(r"^(?P<resname>[A-Za-z0-9]{1,3})(?P<resid>-?\d+)(?P<icode>[A-Za-z]?)$")
 
 
 def parse_residue_selector(text: str) -> ResidueSelector:
@@ -46,12 +48,16 @@ def parse_residue_selector(text: str) -> ResidueSelector:
     chain_id, body = text.split(":", 1)
     if not body:
         raise SelectorError(f"Residue selector {text!r} is missing a residue number")
-    match = _RESIDUE_BODY_RE.match(body.strip())
+    stripped_body = body.strip()
+    match = _RESID_ONLY_BODY_RE.match(stripped_body)
+    if match is None:
+        match = _RESNAME_RESID_BODY_RE.match(stripped_body)
     if match is None:
         raise SelectorError(f"Could not parse residue selector {text!r}")
+    resname = match.groupdict().get("resname")
     return ResidueSelector(
         chain_id=chain_id,
-        resname=match.group("resname"),
+        resname=resname,
         resid=int(match.group("resid")),
         icode=match.group("icode") or None,
     )
@@ -75,10 +81,7 @@ def resolve_all_residue_selector(
     matches = [
         residue
         for residue in structure.residues
-        if residue.id.chain_id == resolved_selector.chain_id
-        and residue.id.resid == resolved_selector.resid
-        and residue.id.icode == resolved_selector.icode
-        and (resolved_selector.resname is None or residue.id.resname == resolved_selector.resname)
+        if _matches_residue_selector(residue, resolved_selector)
     ]
     if not matches:
         nearby = _nearby_residues(structure, resolved_selector)
@@ -124,15 +127,17 @@ def coerce_residue_selector(selector: ResidueSelector | dict[str, Any] | str) ->
     if isinstance(selector, str):
         return parse_residue_selector(selector)
     if isinstance(selector, dict):
-        chain_value = selector.get("chain_id", selector.get("chain", ""))
-        if chain_value is None:
-            chain_value = ""
-        if "resid" not in selector:
-            raise SelectorError(f"Structured selector is missing 'resid': {selector}")
+        chain_value = selector.get("chain_id", selector.get("chain"))
+        if chain_value is not None:
+            chain_value = str(chain_value)
+        has_resid = "resid" in selector and selector.get("resid") is not None
+        resname = selector.get("resname")
+        if not has_resid and not resname:
+            raise SelectorError(f"Structured selector must include at least 'resname' or 'resid': {selector}")
         return ResidueSelector(
-            chain_id=str(chain_value),
-            resname=selector.get("resname"),
-            resid=int(selector["resid"]),
+            chain_id=chain_value,
+            resname=str(resname) if resname is not None else None,
+            resid=int(selector["resid"]) if has_resid else None,
             icode=selector.get("icode"),
         )
     raise SelectorError(f"Unsupported residue selector type: {type(selector).__name__}")
@@ -153,15 +158,44 @@ def coerce_atom_selector(selector: AtomSelector | dict[str, Any] | str) -> AtomS
 
 
 def _nearby_residues(structure: PdbStructure, selector: ResidueSelector) -> list[ResidueRecord]:
-    candidates = [
-        residue
-        for residue in structure.residues
-        if residue.id.chain_id == selector.chain_id
-        and abs(residue.id.resid - selector.resid) <= 2
-    ]
+    candidates: list[ResidueRecord] = []
+    if selector.resid is not None:
+        candidates = [
+            residue
+            for residue in structure.residues
+            if (selector.chain_id is None or residue.id.chain_id == selector.chain_id)
+            and abs(residue.id.resid - selector.resid) <= 2
+        ]
+    if not candidates and selector.resname is not None:
+        candidates = [
+            residue
+            for residue in structure.residues
+            if (selector.chain_id is None or residue.id.chain_id == selector.chain_id)
+            and residue.id.resname == selector.resname
+        ]
     if not candidates:
-        candidates = [residue for residue in structure.residues if residue.id.resid == selector.resid]
+        candidates = [
+            residue
+            for residue in structure.residues
+            if selector.resid is not None and residue.id.resid == selector.resid
+        ]
+    if not candidates:
+        candidates = structure.residues
     return candidates[:5]
+
+
+def _matches_residue_selector(residue: ResidueRecord, selector: ResidueSelector) -> bool:
+    if selector.chain_id is not None and residue.id.chain_id != selector.chain_id:
+        return False
+    if selector.resid is not None and residue.id.resid != selector.resid:
+        return False
+    if selector.resname is not None and residue.id.resname != selector.resname:
+        return False
+    if selector.icode is not None and residue.id.icode != selector.icode:
+        return False
+    if selector.resid is not None and selector.icode is None and residue.id.icode is not None:
+        return False
+    return True
 
 
 def _format_residue(residue: ResidueRecord) -> str:

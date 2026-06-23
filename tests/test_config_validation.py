@@ -91,6 +91,28 @@ def test_invalid_ligand_charge_method_fails():
         ManifestConfig.model_validate(data)
 
 
+def test_ligand_selector_can_use_resname_only():
+    data = base_manifest()
+    data["ligands"] = [
+        {
+            "id": "SUB",
+            "selector": {"resname": "SUB"},
+            "net_charge": 0,
+            "multiplicity": 1,
+            "atom_types": "gaff2",
+            "charge_method": "am1bcc",
+            "user_mol2": None,
+            "qmmesp": None,
+        }
+    ]
+
+    manifest = ManifestConfig.model_validate(data)
+
+    assert manifest.ligands[0].selector.chain is None
+    assert manifest.ligands[0].selector.resid is None
+    assert manifest.ligands[0].selector.resname == "SUB"
+
+
 def test_gxtb_opt_mode_is_allowed():
     data = base_manifest()
     data["protonation"]["histidine"]["xtb"]["model"] = "gxtb"

@@ -74,14 +74,13 @@ def is_titratable_residue(residue: ResidueRecord) -> bool:
     return residue.id.resname in TITRATABLE_RESIDUES
 
 
+def is_nonstandard_nonwater_residue(residue: ResidueRecord) -> bool:
+    return not is_water_residue(residue) and not is_standard_protein_residue(residue)
+
+
 def is_likely_ligand_or_cofactor(residue: ResidueRecord) -> bool:
-    return (
-        "HETATM" in residue.record_names
-        and not is_water_residue(residue)
-        and not is_standard_protein_residue(residue)
-    )
+    return is_nonstandard_nonwater_residue(residue)
 
 
 def likely_ligands_or_cofactors(residues: list[ResidueRecord]) -> list[ResidueRecord]:
     return [residue for residue in residues if is_likely_ligand_or_cofactor(residue)]
-

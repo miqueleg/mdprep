@@ -20,6 +20,13 @@ class ResidueSelector(StrictModel):
     icode: str | None = None
 
 
+class LigandResidueSelector(StrictModel):
+    chain: str | None = None
+    resname: str
+    resid: int | None = None
+    icode: str | None = None
+
+
 class ProjectConfig(StrictModel):
     name: str
     input_structure: str
@@ -160,7 +167,7 @@ class QmmespConfig(StrictModel):
 
 class LigandConfig(StrictModel):
     id: str
-    selector: ResidueSelector
+    selector: LigandResidueSelector
     net_charge: int
     multiplicity: int = Field(default=1, ge=1)
     atom_types: Literal["gaff", "gaff2"]
