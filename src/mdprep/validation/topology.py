@@ -79,7 +79,7 @@ def validate_final_outputs(
         unexpected = [
             residue.id.to_dict()
             for residue in likely_ligands_or_cofactors(final_structure.residues)
-            if residue.id.resname not in {ligand.selector.resname for ligand in manifest.ligands}
+            if residue.id.resname not in _allowed_final_heterogen_resnames(manifest)
         ]
         if unexpected:
             errors.append(f"Unexpected heterogen residues found in final PDB: {unexpected}")
@@ -148,6 +148,34 @@ def _expected_ligand_atom_names(ligand_id: str, output_dir: Path) -> list[str]:
         return []
     names = data.get("atom_names", [])
     return [str(name) for name in names] if isinstance(names, list) else []
+
+
+def _allowed_final_heterogen_resnames(manifest: ManifestConfig) -> set[str]:
+    allowed = {ligand.selector.resname for ligand in manifest.ligands}
+    if manifest.solvation.enabled and (
+        manifest.solvation.neutralize or manifest.solvation.salt_concentration_molar > 0
+    ):
+        allowed.update(_ion_residue_name_aliases(manifest.solvation.positive_ion))
+        allowed.update(_ion_residue_name_aliases(manifest.solvation.negative_ion))
+    return allowed
+
+
+def _ion_residue_name_aliases(name: str) -> set[str]:
+    stripped = name.strip()
+    if not stripped:
+        return set()
+    no_charge = stripped.rstrip("+-")
+    aliases = {
+        stripped,
+        stripped.upper(),
+        no_charge,
+        no_charge.upper(),
+        no_charge.capitalize(),
+    }
+    if stripped.endswith("+") or stripped.endswith("-"):
+        aliases.add(no_charge.capitalize() + stripped[-1])
+        aliases.add(no_charge.upper() + stripped[-1])
+    return {alias for alias in aliases if alias}
 
 
 def _render_markdown(report: dict[str, Any]) -> str:
