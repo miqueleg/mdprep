@@ -326,6 +326,14 @@ def _append_truncated_protein_residue(
         if name == "CA":
             anchors.append(len(atoms))
 
+    if residue.id.resname in {"HIS", "HID", "HIE", "HIP"}:
+        temporary_histidine_hydrogens = _temporary_histidine_hydrogens(
+            residue,
+            residue_state=residue_state,
+            target_histidine=target_histidine,
+        )
+        atoms.extend(temporary_histidine_hydrogens)
+
     for boundary_name, cap_name in [("N", "HCA_NCAP"), ("C", "HCA_CCAP")]:
         boundary = atom_by_name.get(boundary_name)
         if boundary is None:
@@ -499,41 +507,20 @@ def _validate_histidine_fragment_hydrogens(
         raise HistidineGeometryError(
             f"Histidine {residue.id.display()} is missing required atoms: {', '.join(missing_atoms)}."
         )
-    carbon_missing = [
-        name
-        for name in ("CE1", "CD2")
-        if _hydrogen_count_near_any(residue, (name,)) < 1
-    ]
-    if carbon_missing:
-        raise HistidineGeometryError(
-            f"Histidine {residue.id.display()} lacks ring carbon hydrogens on {', '.join(carbon_missing)}; "
-            "the xTB tautomer cluster would have an inconsistent valence."
-        )
     if target_histidine:
         if tautomer not in {"HID", "HIE"}:
             raise HistidineGeometryError("Target histidine tautomer must be HID or HIE.")
         return
 
-    nd1_h = _hydrogen_count_near_any(residue, ("ND1",))
-    ne2_h = _hydrogen_count_near_any(residue, ("NE2",))
     expected = {
         "HID": (1, 0),
         "HIE": (0, 1),
         "HIP": (1, 1),
     }.get(residue_state)
     if expected is None:
-        total = nd1_h + ne2_h
-        if total != 1:
-            raise HistidineGeometryError(
-                f"Neighbor histidine {residue.id.display()} is unresolved in the xTB cluster; "
-                f"found {total} imidazole N-H hydrogens. Assign it manually to HID/HIE/HIP."
-            )
-        return
-    if nd1_h != expected[0] or ne2_h != expected[1]:
         raise HistidineGeometryError(
-            f"Histidine {residue.id.display()} is assigned {residue_state}, "
-            f"but has ND1 hydrogens={nd1_h} and NE2 hydrogens={ne2_h}; "
-            f"expected {expected[0]} and {expected[1]}."
+            f"Neighbor histidine {residue.id.display()} is unresolved in the xTB cluster. "
+            "Assign it manually or let propka_xtb_his resolve all neutral histidines."
         )
 
 
@@ -546,7 +533,11 @@ def _skip_hydrogen_for_cluster_state(
 ) -> bool:
     if not is_hydrogen_like(atom):
         return False
-    if target_histidine and _hydrogen_is_near_any(atom, residue, ("ND1", "NE2")):
+    if residue.id.resname in {"HIS", "HID", "HIE", "HIP"} and _histidine_hydrogen_is_canonicalized(
+        atom,
+        residue,
+        target_histidine=target_histidine,
+    ):
         return True
     if residue_state in {"ASP", "GLU"}:
         anchors = ("OD1", "OD2") if residue_state == "ASP" else ("OE1", "OE2")
@@ -558,7 +549,7 @@ def _skip_hydrogen_for_cluster_state(
 
 def _require_retained_hydrogens(residue: ResidueRecord, fragment_atoms: list[XyzAtom]) -> None:
     non_cap_hydrogens = [
-        atom for atom in fragment_atoms if atom.element.upper() == "H" and atom.source != "cap"
+        atom for atom in fragment_atoms if atom.element.upper() == "H" and atom.source == "input"
     ]
     if not non_cap_hydrogens:
         raise HistidineGeometryError(
@@ -566,6 +557,80 @@ def _require_retained_hydrogens(residue: ResidueRecord, fragment_atoms: list[Xyz
             f"residue {residue.id.display()} has no retained hydrogens after CA truncation. "
             "Provide an input structure with hydrogens or add a manual HIS override."
         )
+
+
+def _histidine_hydrogen_is_canonicalized(
+    atom: AtomRecord,
+    residue: ResidueRecord,
+    *,
+    target_histidine: bool,
+) -> bool:
+    return _hydrogen_is_near_any(atom, residue, ("ND1", "NE2"))
+
+
+def _temporary_histidine_hydrogens(
+    residue: ResidueRecord,
+    *,
+    residue_state: str,
+    target_histidine: bool,
+) -> list[XyzAtom]:
+    hydrogens: list[XyzAtom] = []
+    if _hydrogen_count_near_any(residue, ("CE1",)) < 1:
+        hydrogens.append(_place_histidine_carbon_hydrogen(residue, carbon_name="CE1"))
+    if _hydrogen_count_near_any(residue, ("CD2",)) < 1:
+        hydrogens.append(_place_histidine_carbon_hydrogen(residue, carbon_name="CD2"))
+    if target_histidine:
+        return hydrogens
+    if residue_state == "HID":
+        hydrogens.append(place_histidine_tautomer_hydrogen(residue, tautomer="HID"))
+    elif residue_state == "HIE":
+        hydrogens.append(place_histidine_tautomer_hydrogen(residue, tautomer="HIE"))
+    elif residue_state == "HIP":
+        hydrogens.append(place_histidine_tautomer_hydrogen(residue, tautomer="HID"))
+        hydrogens.append(place_histidine_tautomer_hydrogen(residue, tautomer="HIE"))
+    return hydrogens
+
+
+def _place_histidine_carbon_hydrogen(
+    residue: ResidueRecord,
+    *,
+    carbon_name: str,
+    bond_length: float = 1.09,
+) -> XyzAtom:
+    if carbon_name == "CE1":
+        neighbor_names = ("ND1", "NE2")
+        atom_name = "HE1"
+    elif carbon_name == "CD2":
+        neighbor_names = ("CG", "NE2")
+        atom_name = "HD2"
+    else:
+        raise HistidineGeometryError(f"Unsupported histidine carbon hydrogen anchor {carbon_name!r}.")
+    carbon = _atom_by_name(residue, carbon_name)
+    neighbor1 = _atom_by_name(residue, neighbor_names[0])
+    neighbor2 = _atom_by_name(residue, neighbor_names[1])
+    if carbon is None or neighbor1 is None or neighbor2 is None:
+        missing = [
+            name
+            for name, atom in ((carbon_name, carbon), (neighbor_names[0], neighbor1), (neighbor_names[1], neighbor2))
+            if atom is None
+        ]
+        raise HistidineGeometryError(
+            f"Histidine {residue.id.display()} is missing required atoms for {atom_name}: {', '.join(missing)}."
+        )
+    direction = (
+        2.0 * carbon.x - neighbor1.x - neighbor2.x,
+        2.0 * carbon.y - neighbor1.y - neighbor2.y,
+        2.0 * carbon.z - neighbor1.z - neighbor2.z,
+    )
+    unit = _normalize(direction)
+    return XyzAtom(
+        element="H",
+        x=carbon.x + unit[0] * bond_length,
+        y=carbon.y + unit[1] * bond_length,
+        z=carbon.z + unit[2] * bond_length,
+        name=atom_name,
+        source="temporary_histidine_hydrogen",
+    )
 
 
 def _require_water_hydrogens(residue: ResidueRecord, atoms: list[XyzAtom]) -> None:

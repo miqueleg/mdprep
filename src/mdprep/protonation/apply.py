@@ -245,20 +245,24 @@ def apply_protonation_stage(
                 "Neutral HIS residues require HID/HIE assignment; set "
                 "protonation.histidine.neutral_tautomer_method: xtb or add manual overrides."
             )
+        pending_xtb_states = _initial_xtb_environment_states(xtb_needed, warnings)
         for decision in xtb_needed:
             try:
+                selection_states = dict(pending_xtb_states)
+                selection_states.update(final_by_residue)
                 selection = select_histidine_tautomer(
                     structure,
                     decision.residue,
                     manifest,
                     work_dir=_protonation_work_dir(output_protonation_pdb_path) / "histidine_xtb",
-                    planned_states=final_by_residue,
+                    planned_states=selection_states,
                 )
             except HistidineXtbError as exc:
                 raise ProtonationApplicationError(str(exc)) from exc
             warnings.extend(selection.warnings)
             xtb_selections.append(selection)
             final_by_residue[id(decision.residue)] = selection.selected_state
+            pending_xtb_states[id(decision.residue)] = selection.selected_state
             xtb_records.append(
                 _record(
                     decision.residue,
@@ -367,6 +371,75 @@ def _decide_propka_states(
         if decision is not None:
             decisions.append(decision)
     return decisions
+
+
+def _initial_xtb_environment_states(
+    decisions: list[PkaDecision],
+    warnings: list[str],
+) -> dict[int, str]:
+    states: dict[int, str] = {}
+    for decision in decisions:
+        residue = decision.residue
+        inferred = _input_histidine_state_from_n_hydrogens(residue)
+        if inferred in {"HID", "HIE"}:
+            states[id(residue)] = inferred
+            warnings.append(
+                f"Neutral histidine {residue.id.display()} is pending xTB assignment; "
+                f"using input-like {inferred} as its temporary environment state until its own HID/HIE comparison runs."
+            )
+        else:
+            states[id(residue)] = "HIE"
+            warnings.append(
+                f"Neutral histidine {residue.id.display()} is pending xTB assignment and has ambiguous or missing "
+                "imidazole hydrogens in the input; using HIE as a deterministic temporary environment state until "
+                "its own HID/HIE comparison runs."
+            )
+    return states
+
+
+def _input_histidine_state_from_n_hydrogens(residue: ResidueRecord) -> str | None:
+    nd1_h = _hydrogen_count_near_any(residue, ("ND1",))
+    ne2_h = _hydrogen_count_near_any(residue, ("NE2",))
+    if nd1_h == 1 and ne2_h == 0:
+        return "HID"
+    if nd1_h == 0 and ne2_h == 1:
+        return "HIE"
+    if nd1_h == 1 and ne2_h == 1:
+        return "HIP"
+    return None
+
+
+def _hydrogen_count_near_any(
+    residue: ResidueRecord,
+    atom_names: tuple[str, ...],
+    *,
+    cutoff_angstrom: float = 1.25,
+) -> int:
+    return sum(
+        1
+        for atom in residue.atoms
+        if is_hydrogen_atom(atom) and _hydrogen_is_near_any(atom, residue, atom_names, cutoff_angstrom=cutoff_angstrom)
+    )
+
+
+def _hydrogen_is_near_any(
+    hydrogen: AtomRecord,
+    residue: ResidueRecord,
+    atom_names: tuple[str, ...],
+    *,
+    cutoff_angstrom: float = 1.25,
+) -> bool:
+    for atom in residue.atoms:
+        if atom.name.strip() not in atom_names:
+            continue
+        distance = (
+            (hydrogen.x - atom.x) ** 2
+            + (hydrogen.y - atom.y) ** 2
+            + (hydrogen.z - atom.z) ** 2
+        ) ** 0.5
+        if distance <= cutoff_angstrom:
+            return True
+    return False
 
 
 def _protonation_work_dir(output_protonation_pdb_path: str | Path) -> Path:

@@ -7,7 +7,10 @@ from mdprep.external.runner import CommandResult
 from mdprep.protonation.apply import ProtonationApplicationError, apply_protonation_stage
 from mdprep.protonation.propka_parser import PropkaRecord
 from mdprep.protonation.xtb_runner import XtbExecutionError, XtbRunResult
+from mdprep.structure.models import PdbStructure, ResidueId, ResidueRecord
 from mdprep.structure.normalize import normalize_structure_stage
+from mdprep.structure.pdb import read_pdb
+from mdprep.structure.writer import write_pdb
 from tests.test_protonation_propka_workflow import fake_propka_result
 from tests.test_structure_normalize import make_manifest, manifest_data
 
@@ -86,6 +89,53 @@ def test_xtb_close_call_is_reported(monkeypatch, tmp_path):
 
     assert result.xtb_selections[0].close_call
     assert any("close-call" in warning for warning in result.warnings)
+
+
+def test_multiple_neutral_histidines_with_ambiguous_input_hydrogens_do_not_fail(monkeypatch, tmp_path):
+    pdb = _two_histidine_pdb_with_ambiguous_neighbor(tmp_path)
+    data = manifest_data(str(pdb))
+    data["protonation"]["method"] = "propka_xtb_his"
+    monkeypatch.setattr(
+        "mdprep.protonation.apply.run_propka_workflow",
+        lambda structure, manifest, work_dir: fake_propka_result(
+            tmp_path,
+            [
+                PropkaRecord("HIS", 2, "A", 6.0, "HIS 2 A 6.0"),
+                PropkaRecord("HIS", 3, "A", 6.0, "HIS 3 A 6.0"),
+            ],
+        ),
+    )
+
+    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None):
+        energy = -40.01 if Path(xyz_path).name == "HID.xyz" else -40.00
+        Path(stdout_path).write_text(f":: total energy      {energy:.12f} Eh\n", encoding="utf-8")
+        Path(stderr_path).write_text("", encoding="utf-8")
+        return XtbRunResult(
+            command_result=CommandResult(
+                command=("xtb", Path(xyz_path).name),
+                cwd=str(work_dir),
+                returncode=0,
+                stdout="",
+                stderr="",
+                runtime_seconds=0.01,
+            ),
+            stdout_path=Path(stdout_path),
+            stderr_path=Path(stderr_path),
+        )
+
+    monkeypatch.setattr("mdprep.protonation.histidine_xtb.run_xtb", fake_run_xtb)
+
+    manifest = make_manifest(data)
+    normalized = normalize_structure_stage(manifest)
+    result = apply_protonation_stage(
+        normalized.normalized_structure,
+        manifest,
+        input_normalized_pdb_path=tmp_path / "normalized.pdb",
+        output_protonation_pdb_path=tmp_path / "prepared" / "intermediate" / "01_protonation_assigned.pdb",
+    )
+
+    assert [selection.selected_state for selection in result.xtb_selections] == ["HID", "HID"]
+    assert any("temporary environment state" in warning for warning in result.warnings)
 
 
 def test_missing_histidine_ring_atom_fails_clearly(monkeypatch, tmp_path):
@@ -182,3 +232,63 @@ def test_xtb_unavailable_fails_only_when_neutral_his_needs_it(monkeypatch, tmp_p
         )
 
     assert "should not run" in str(excinfo.value)
+
+
+def _two_histidine_pdb_with_ambiguous_neighbor(tmp_path: Path) -> Path:
+    structure = read_pdb("tests/data/protein_histidine_ring_hydrogenated.pdb")
+    residue = next(residue for residue in structure.residues if residue.id.resname == "HIS")
+    first_atoms = list(residue.atoms)
+    second_atoms = []
+    serial = 100
+    for atom in residue.atoms:
+        second_atoms.append(
+            atom.__class__(
+                **{
+                    **atom.__dict__,
+                    "serial": serial,
+                    "resid": 3,
+                    "x": atom.x + 2.0,
+                    "original_line": "",
+                }
+            )
+        )
+        serial += 1
+    nd1 = next(atom for atom in second_atoms if atom.name == "ND1")
+    ne2 = next(atom for atom in second_atoms if atom.name == "NE2")
+    second_atoms.extend(
+        [
+            nd1.__class__(
+                **{
+                    **nd1.__dict__,
+                    "serial": serial,
+                    "name": "HD1",
+                    "x": nd1.x + 1.0,
+                    "element": "H",
+                    "original_line": "",
+                }
+            ),
+            ne2.__class__(
+                **{
+                    **ne2.__dict__,
+                    "serial": serial + 1,
+                    "name": "HE2",
+                    "x": ne2.x + 1.0,
+                    "element": "H",
+                    "original_line": "",
+                }
+            ),
+        ]
+    )
+    atoms = first_atoms + second_atoms
+    residues = [
+        residue,
+        ResidueRecord(
+            id=ResidueId(chain_id="A", resname="HIS", resid=3, icode=None),
+            atoms=second_atoms,
+            record_names={"ATOM"},
+            original_index=1,
+        ),
+    ]
+    path = tmp_path / "two_histidines.pdb"
+    write_pdb(PdbStructure(path=path, atoms=atoms, residues=residues, model_count=1), path)
+    return path

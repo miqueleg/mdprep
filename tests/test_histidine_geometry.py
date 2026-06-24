@@ -8,6 +8,7 @@ from mdprep.protonation.histidine_geometry import (
     place_histidine_tautomer_hydrogen,
     write_xcontrol_fix_file,
 )
+from mdprep.structure.models import AtomRecord, ResidueRecord
 from mdprep.structure.pdb import read_pdb
 
 
@@ -77,6 +78,50 @@ def test_generated_cluster_preserves_input_hydrogens_adds_caps_and_tautomer_h():
     assert len(model.anchor_atom_indices) == 1
 
 
+def test_target_histidine_input_imidazole_hydrogens_are_replaced_by_candidate():
+    residue = _with_histidine_n_hydrogens(histidine())
+
+    hid = build_tautomer_cluster_model([residue], residue, tautomer="HID")
+    hie = build_tautomer_cluster_model([residue], residue, tautomer="HIE")
+
+    assert [atom.name for atom in hid.atoms].count("HD1") == 1
+    assert "HE2" not in [atom.name for atom in hid.atoms]
+    assert [atom.name for atom in hie.atoms].count("HE2") == 1
+    assert "HD1" not in [atom.name for atom in hie.atoms]
+
+
+def test_missing_histidine_ring_carbon_hydrogen_is_added_temporarily():
+    residue = histidine()
+    residue = ResidueRecord(
+        id=residue.id,
+        atoms=[atom for atom in residue.atoms if atom.name != "HE1"],
+        record_names=residue.record_names,
+        original_index=residue.original_index,
+    )
+
+    model = build_tautomer_cluster_model([residue], residue, tautomer="HID")
+    temporary = [atom for atom in model.atoms if atom.name == "HE1"]
+
+    assert len(temporary) == 1
+    assert temporary[0].source == "temporary_histidine_hydrogen"
+
+
+def test_neighbor_histidine_assigned_state_ignores_ambiguous_input_n_hydrogens():
+    target = histidine()
+    neighbor = _shift_residue(_with_histidine_n_hydrogens(histidine()), resid=3, dx=2.0)
+
+    model = build_tautomer_cluster_model(
+        [target, neighbor],
+        target,
+        tautomer="HID",
+        residue_states={id(neighbor): "HID"},
+    )
+
+    names = [atom.name for atom in model.atoms]
+    assert names.count("HD1") == 2
+    assert "HE2" not in names
+
+
 def test_generated_xyz_uses_saturated_cluster_model():
     residue = histidine()
     atoms = build_tautomer_xyz_atoms([residue], residue, tautomer="HIE")
@@ -105,7 +150,7 @@ def test_dehydrogenated_cluster_fails_clearly():
     structure = read_pdb("tests/data/protein_histidine_ring.pdb")
     residue = next(residue for residue in structure.residues if residue.id.resname == "HIS")
 
-    with pytest.raises(HistidineGeometryError, match="inconsistent valence"):
+    with pytest.raises(HistidineGeometryError, match="requires a hydrogenated protein model"):
         build_tautomer_cluster_model([residue], residue, tautomer="HID")
 
 
@@ -128,3 +173,47 @@ def test_xcontrol_fix_file_contains_fixed_atoms(tmp_path):
     write_xcontrol_fix_file([3, 17, 18], path)
 
     assert path.read_text(encoding="utf-8") == "$fix\n atoms: 3,17,18\n$end\n"
+
+
+def _with_histidine_n_hydrogens(residue: ResidueRecord) -> ResidueRecord:
+    nd1 = next(atom for atom in residue.atoms if atom.name == "ND1")
+    ne2 = next(atom for atom in residue.atoms if atom.name == "NE2")
+    atoms = list(residue.atoms)
+    atoms.extend(
+        [
+            _hydrogen_from_anchor(nd1, "HD1", serial=9001),
+            _hydrogen_from_anchor(ne2, "HE2", serial=9002),
+        ]
+    )
+    return ResidueRecord(
+        id=residue.id,
+        atoms=atoms,
+        record_names=residue.record_names,
+        original_index=residue.original_index,
+    )
+
+
+def _hydrogen_from_anchor(anchor: AtomRecord, name: str, *, serial: int) -> AtomRecord:
+    return replace(
+        anchor,
+        serial=serial,
+        name=name,
+        x=anchor.x + 1.0,
+        y=anchor.y,
+        z=anchor.z,
+        element="H",
+        original_line="",
+    )
+
+
+def _shift_residue(residue: ResidueRecord, *, resid: int, dx: float) -> ResidueRecord:
+    shifted_atoms = [
+        replace(atom, resid=resid, x=atom.x + dx)
+        for atom in residue.atoms
+    ]
+    return ResidueRecord(
+        id=replace(residue.id, resid=resid),
+        atoms=shifted_atoms,
+        record_names=residue.record_names,
+        original_index=residue.original_index,
+    )
