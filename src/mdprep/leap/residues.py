@@ -281,8 +281,8 @@ def disulfide_bond_commands(
                 "or change the residue state to CYS/CYM if it is not disulfide-bonded."
             )
 
-    mapping = residue_index_map(structure)
     residue_by_key = {_residue_key(residue.id): residue for residue in structure.residues}
+    _validate_leap_residue_number_addressing(structure, pair_keys)
     commands: list[DisulfideBondCommand] = []
     for pair in sorted(pair_keys, key=lambda item: sorted(item)):
         key_a, key_b = sorted(pair)
@@ -292,8 +292,8 @@ def disulfide_bond_commands(
             raise LeapResidueError("Disulfide residue pair is not present in the leap-input structure.")
         if "SG" not in residue_a.atom_names() or "SG" not in residue_b.atom_names():
             raise LeapResidueError("Disulfide pair is missing SG atoms required for tleap bond commands.")
-        index_a = mapping[key_a]
-        index_b = mapping[key_b]
+        index_a = _leap_residue_number(residue_a)
+        index_b = _leap_residue_number(residue_b)
         commands.append(
             DisulfideBondCommand(
                 residue_a=residue_a.id.to_dict(),
@@ -334,6 +334,37 @@ def _unique_variable_name(ligand_id: str, used: set[str]) -> str:
 
 def _residue_key(residue_id: ResidueId) -> tuple[str, int, str | None]:
     return (residue_id.chain_id, residue_id.resid, residue_id.icode)
+
+
+def _leap_residue_number(residue: ResidueRecord) -> int:
+    if residue.id.icode is not None:
+        raise LeapResidueError(
+            f"Disulfide residue {residue.id.display()} has an insertion code; "
+            "tleap atom references cannot address insertion-coded residues safely."
+        )
+    return residue.id.resid
+
+
+def _validate_leap_residue_number_addressing(
+    structure: PdbStructure,
+    pair_keys: set[frozenset[tuple[str, int, str | None]]],
+) -> None:
+    disulfide_keys = {key for pair in pair_keys for key in pair}
+    residue_number_counts: dict[int, list[ResidueRecord]] = {}
+    for residue in structure.residues:
+        residue_number_counts.setdefault(residue.id.resid, []).append(residue)
+    for key in disulfide_keys:
+        residue = next((candidate for candidate in structure.residues if _residue_key(candidate.id) == key), None)
+        if residue is None:
+            continue
+        _leap_residue_number(residue)
+        same_number = residue_number_counts.get(residue.id.resid, [])
+        if len(same_number) > 1:
+            formatted = ", ".join(candidate.id.display() for candidate in same_number)
+            raise LeapResidueError(
+                f"Disulfide residue number {residue.id.resid} is not unique in the leap-input PDB "
+                f"({formatted}); tleap atom references by residue number would be ambiguous."
+            )
 
 
 def _build_residues(atoms: list[AtomRecord]) -> list[ResidueRecord]:

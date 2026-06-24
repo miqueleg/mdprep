@@ -39,7 +39,7 @@ def test_dry_tleap_script_contains_required_commands(tmp_path):
         inpcrd=tmp_path / "system.dry.inpcrd",
         pdb=tmp_path / "system.dry.pdb",
     )
-    bond = DisulfideBondCommand({}, {}, 1, 2, "bond system.1.SG system.2.SG")
+    bond = DisulfideBondCommand({}, {}, 10, 20, "bond system.10.SG system.20.SG")
 
     script = build_tleap_script(
         sources=sources,
