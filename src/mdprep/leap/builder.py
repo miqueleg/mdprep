@@ -16,6 +16,7 @@ from mdprep.leap.residues import (
     LeapInputResult,
     LeapResidueError,
     LigandParameterFiles,
+    append_disulfide_conect_records,
     disulfide_bond_commands,
     prepare_leap_input_pdb,
     validate_ligand_parameter_files,
@@ -128,6 +129,7 @@ def run_tleap_stage(
             structure=leap_input.structure,
             protonation_result=protonation_result,
         )
+        conect_records = append_disulfide_conect_records(leap_input.path, disulfide_bonds)
         dry_outputs = TLeapOutputs(
             prmtop=dry_dir / "system.dry.prmtop",
             inpcrd=dry_dir / "system.dry.inpcrd",
@@ -158,6 +160,10 @@ def run_tleap_stage(
         )
 
         warnings = list(sources.warnings)
+        if conect_records:
+            warnings.append(
+                "Disulfide SG-SG bonds were encoded as PDB CONECT records in the tleap input PDB."
+            )
         warnings.extend(leap_input.structure.warnings)
         warnings.extend(warning for warning in dry_run.summary.warnings)
         warnings.extend(
@@ -234,7 +240,7 @@ def build_tleap_script(
             lines.append(f"{ligand.residue_name} = {ligand.variable_name}")
         lines.append(f"loadamberparams {frcmod_path}")
     lines.append(f"system = loadpdb {_tleap_path(input_pdb, work_dir)}")
-    lines.extend(bond.command for bond in disulfide_bonds)
+    lines.extend(bond.command for bond in disulfide_bonds if bond.command.startswith("bond "))
     if solvation_command is not None:
         lines.append(solvation_command)
     lines.extend(ion_commands or [])

@@ -16,6 +16,7 @@ from mdprep.leap.forcefields import forcefield_sources
 from mdprep.leap.log_parser import LeapLogError, assert_tleap_success
 from mdprep.leap.residues import (
     LeapResidueError,
+    append_disulfide_conect_records,
     disulfide_bond_commands,
     prepare_leap_input_pdb,
     validate_ligand_parameter_files,
@@ -408,6 +409,7 @@ def _build_qmmesp_provisional_system(
         if protonation_result is not None
         else []
     )
+    append_disulfide_conect_records(leap_input.path, disulfides)
     outputs = TLeapOutputs(
         prmtop=work_dir / "provisional.prmtop",
         inpcrd=work_dir / "provisional.inpcrd",

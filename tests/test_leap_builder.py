@@ -61,6 +61,36 @@ def test_dry_tleap_script_contains_required_commands(tmp_path):
     assert script.rstrip().endswith("quit")
 
 
+def test_conect_disulfide_metadata_is_not_written_as_tleap_command(tmp_path):
+    sources = forcefield_sources(protein_forcefield="ff19SB", water_model="TIP3P", ligands=[])
+    outputs = TLeapOutputs(
+        prmtop=tmp_path / "system.dry.prmtop",
+        inpcrd=tmp_path / "system.dry.inpcrd",
+        pdb=tmp_path / "system.dry.pdb",
+    )
+    bond = DisulfideBondCommand(
+        {},
+        {},
+        1,
+        2,
+        "CONECT 2 4",
+        atom_serial_a=2,
+        atom_serial_b=4,
+        pdb_conect_records=("CONECT    2    4", "CONECT    4    2"),
+    )
+
+    script = build_tleap_script(
+        sources=sources,
+        ligands=[],
+        input_pdb=tmp_path / "system.pdb",
+        disulfide_bonds=[bond],
+        outputs=outputs,
+    )
+
+    assert "CONECT" not in script
+    assert "bond system" not in script
+
+
 def test_tleap_script_paths_are_relative_to_work_dir(tmp_path):
     output_dir = tmp_path / "prepared"
     work_dir = output_dir / "leap" / "dry"

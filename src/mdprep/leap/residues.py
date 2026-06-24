@@ -66,6 +66,9 @@ class DisulfideBondCommand:
     index_a: int
     index_b: int
     command: str
+    atom_serial_a: int | None = None
+    atom_serial_b: int | None = None
+    pdb_conect_records: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -74,6 +77,9 @@ class DisulfideBondCommand:
             "index_a": self.index_a,
             "index_b": self.index_b,
             "command": self.command,
+            "atom_serial_a": self.atom_serial_a,
+            "atom_serial_b": self.atom_serial_b,
+            "pdb_conect_records": list(self.pdb_conect_records),
         }
 
 
@@ -281,29 +287,66 @@ def disulfide_bond_commands(
                 "or change the residue state to CYS/CYM if it is not disulfide-bonded."
             )
 
-    residue_by_key = {_residue_key(residue.id): residue for residue in structure.residues}
-    _validate_leap_residue_number_addressing(structure, pair_keys)
+    residues_by_key: dict[tuple[str, int, str | None], list[ResidueRecord]] = {}
+    residue_indices = {id(residue): index for index, residue in enumerate(structure.residues, start=1)}
+    for residue in structure.residues:
+        residues_by_key.setdefault(_residue_key(residue.id), []).append(residue)
     commands: list[DisulfideBondCommand] = []
     for pair in sorted(pair_keys, key=lambda item: sorted(item)):
         key_a, key_b = sorted(pair)
-        residue_a = residue_by_key.get(key_a)
-        residue_b = residue_by_key.get(key_b)
-        if residue_a is None or residue_b is None:
-            raise LeapResidueError("Disulfide residue pair is not present in the leap-input structure.")
+        residue_a = _resolve_disulfide_residue(residues_by_key, key_a)
+        residue_b = _resolve_disulfide_residue(residues_by_key, key_b)
         if "SG" not in residue_a.atom_names() or "SG" not in residue_b.atom_names():
             raise LeapResidueError("Disulfide pair is missing SG atoms required for tleap bond commands.")
-        index_a = _leap_residue_number(residue_a)
-        index_b = _leap_residue_number(residue_b)
+        index_a = residue_indices[id(residue_a)]
+        index_b = residue_indices[id(residue_b)]
+        serial_a = _sg_atom_serial(residue_a)
+        serial_b = _sg_atom_serial(residue_b)
+        conect_records = (
+            _format_conect(serial_a, serial_b).rstrip("\n"),
+            _format_conect(serial_b, serial_a).rstrip("\n"),
+        )
         commands.append(
             DisulfideBondCommand(
                 residue_a=residue_a.id.to_dict(),
                 residue_b=residue_b.id.to_dict(),
                 index_a=index_a,
                 index_b=index_b,
-                command=f"bond system.{index_a}.SG system.{index_b}.SG",
+                command=f"CONECT {serial_a} {serial_b}",
+                atom_serial_a=serial_a,
+                atom_serial_b=serial_b,
+                pdb_conect_records=conect_records,
             )
         )
     return commands
+
+
+def append_disulfide_conect_records(
+    pdb_path: str | Path,
+    disulfide_bonds: list[DisulfideBondCommand],
+) -> list[str]:
+    records: list[str] = []
+    seen: set[str] = set()
+    for bond in disulfide_bonds:
+        for record in bond.pdb_conect_records:
+            line = record if record.endswith("\n") else f"{record}\n"
+            if line not in seen:
+                seen.add(line)
+                records.append(line)
+    if not records:
+        return []
+    path = Path(pdb_path)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    insert_at = len(lines)
+    if lines and lines[-1].strip() == "END":
+        insert_at = len(lines) - 1
+    existing = {line for line in lines if line.startswith("CONECT")}
+    new_records = [line for line in records if line not in existing]
+    if not new_records:
+        return []
+    lines[insert_at:insert_at] = new_records
+    path.write_text("".join(lines), encoding="utf-8")
+    return [line.rstrip("\n") for line in new_records]
 
 
 def _partner_key(record: ProtonationRecord) -> tuple[str, int, str | None] | None:
@@ -336,35 +379,43 @@ def _residue_key(residue_id: ResidueId) -> tuple[str, int, str | None]:
     return (residue_id.chain_id, residue_id.resid, residue_id.icode)
 
 
-def _leap_residue_number(residue: ResidueRecord) -> int:
-    if residue.id.icode is not None:
-        raise LeapResidueError(
-            f"Disulfide residue {residue.id.display()} has an insertion code; "
-            "tleap atom references cannot address insertion-coded residues safely."
-        )
-    return residue.id.resid
+def _resolve_disulfide_residue(
+    residues_by_key: dict[tuple[str, int, str | None], list[ResidueRecord]],
+    key: tuple[str, int, str | None],
+) -> ResidueRecord:
+    candidates = residues_by_key.get(key, [])
+    if not candidates:
+        raise LeapResidueError("Disulfide residue pair is not present in the leap-input structure.")
+    sg_candidates = [residue for residue in candidates if _is_cyx_disulfide_residue(residue)]
+    if len(sg_candidates) == 1:
+        return sg_candidates[0]
+    if len(sg_candidates) > 1:
+        formatted = ", ".join(residue.id.display() for residue in sg_candidates)
+        raise LeapResidueError(f"Disulfide residue identity is ambiguous in the leap-input structure: {formatted}.")
+    formatted = ", ".join(residue.id.display() for residue in candidates)
+    raise LeapResidueError(f"Disulfide residue pair is missing CYX SG atoms in the leap-input structure: {formatted}.")
 
 
-def _validate_leap_residue_number_addressing(
-    structure: PdbStructure,
-    pair_keys: set[frozenset[tuple[str, int, str | None]]],
-) -> None:
-    disulfide_keys = {key for pair in pair_keys for key in pair}
-    residue_number_counts: dict[int, list[ResidueRecord]] = {}
-    for residue in structure.residues:
-        residue_number_counts.setdefault(residue.id.resid, []).append(residue)
-    for key in disulfide_keys:
-        residue = next((candidate for candidate in structure.residues if _residue_key(candidate.id) == key), None)
-        if residue is None:
-            continue
-        _leap_residue_number(residue)
-        same_number = residue_number_counts.get(residue.id.resid, [])
-        if len(same_number) > 1:
-            formatted = ", ".join(candidate.id.display() for candidate in same_number)
-            raise LeapResidueError(
-                f"Disulfide residue number {residue.id.resid} is not unique in the leap-input PDB "
-                f"({formatted}); tleap atom references by residue number would be ambiguous."
-            )
+def _is_cyx_disulfide_residue(residue: ResidueRecord) -> bool:
+    if "SG" not in residue.atom_names():
+        return False
+    if residue.id.resname == "CYX":
+        return True
+    return any(atom.resname == "CYX" for atom in residue.atoms)
+
+
+def _sg_atom_serial(residue: ResidueRecord) -> int:
+    sg_atoms = [atom for atom in residue.atoms if atom.name == "SG"]
+    if len(sg_atoms) != 1:
+        raise LeapResidueError(f"Disulfide residue {residue.id.display()} must contain exactly one SG atom.")
+    serial = sg_atoms[0].serial
+    if serial is None:
+        raise LeapResidueError(f"Disulfide residue {residue.id.display()} SG atom has no PDB serial.")
+    return serial
+
+
+def _format_conect(source: int, target: int) -> str:
+    return "CONECT" + f"{source:5d}{target:5d}" + "\n"
 
 
 def _build_residues(atoms: list[AtomRecord]) -> list[ResidueRecord]:
