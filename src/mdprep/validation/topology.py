@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from mdprep.config.models import ManifestConfig
 from mdprep.structure.classify import is_water_residue, likely_ligands_or_cofactors
 from mdprep.structure.pdb import PdbParseError, read_pdb
 from mdprep.validation.openmm_check import run_openmm_energy_check
 from mdprep.validation.parmed_check import run_parmed_check
+
+if TYPE_CHECKING:
+    from mdprep.metals.workflow import MetalStageResult
 
 
 class FinalValidationError(ValueError):
@@ -23,9 +26,12 @@ def validate_final_outputs(
     prmtop: str | Path,
     inpcrd: str | Path,
     pdb: str | Path,
+    metal_result: "MetalStageResult | None" = None,
 ) -> dict[str, Any]:
     warnings: list[str] = []
     errors: list[str] = []
+    if metal_result is not None:
+        warnings.extend(metal_result.warnings)
     paths = {
         "prmtop": Path(prmtop),
         "inpcrd": Path(inpcrd),
@@ -52,7 +58,18 @@ def validate_final_outputs(
     if final_structure is not None:
         for ligand in manifest.ligands:
             expected = ligand.selector.resname
-            residues = [residue for residue in final_structure.residues if residue.id.resname == expected]
+            accepted_resnames = {expected}
+            if metal_result is not None and metal_result.mcpb_site is not None:
+                accepted_resnames.update(
+                    str(rename["final_resname"])
+                    for rename in metal_result.mcpb_site.residue_renames
+                    if rename.get("original_resname") == expected
+                )
+            residues = [
+                residue
+                for residue in final_structure.residues
+                if residue.id.resname in accepted_resnames
+            ]
             expected_names = _expected_ligand_atom_names(ligand.id, paths["pdb"].parent.parent)
             atom_names_ok = bool(residues)
             if expected_names:
@@ -79,7 +96,7 @@ def validate_final_outputs(
         unexpected = [
             residue.id.to_dict()
             for residue in likely_ligands_or_cofactors(final_structure.residues)
-            if residue.id.resname not in _allowed_final_heterogen_resnames(manifest)
+            if residue.id.resname not in _allowed_final_heterogen_resnames(manifest, metal_result)
         ]
         if unexpected:
             errors.append(f"Unexpected heterogen residues found in final PDB: {unexpected}")
@@ -150,8 +167,21 @@ def _expected_ligand_atom_names(ligand_id: str, output_dir: Path) -> list[str]:
     return [str(name) for name in names] if isinstance(names, list) else []
 
 
-def _allowed_final_heterogen_resnames(manifest: ManifestConfig) -> set[str]:
+def _allowed_final_heterogen_resnames(
+    manifest: ManifestConfig,
+    metal_result: "MetalStageResult | None" = None,
+) -> set[str]:
     allowed = {ligand.selector.resname for ligand in manifest.ligands}
+    allowed.update(
+        ion.selector.resname
+        for site in manifest.metals
+        for ion in site.ions
+    )
+    if metal_result is not None and metal_result.mcpb_site is not None:
+        allowed.update(
+            str(rename["final_resname"])
+            for rename in metal_result.mcpb_site.residue_renames
+        )
     if manifest.solvation.enabled and (
         manifest.solvation.neutralize or manifest.solvation.salt_concentration_molar > 0
     ):
@@ -186,10 +216,13 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- Final residue count: {report['final_residue_count']}",
         f"- ParmEd status: `{report['parmed'].get('status')}`",
         f"- OpenMM status: `{report['openmm'].get('status')}`",
-        "",
-        "## Ligands",
-        "",
     ]
+    if report["openmm"].get("amber_12_6_4_detected"):
+        lines.append(
+            "- OpenMM 12-6-4 r^-4 force present: "
+            f"`{report['openmm'].get('openmm_12_6_4_force_present')}`"
+        )
+    lines.extend(["", "## Ligands", ""])
     ligand_checks = report.get("ligand_presence_checks", [])
     if ligand_checks:
         for check in ligand_checks:

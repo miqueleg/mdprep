@@ -40,6 +40,40 @@ def test_prepare_leap_input_renames_water_and_preserves_ligand_atoms(tmp_path):
     assert result.water_renames
 
 
+def test_prepare_leap_input_can_align_residue_numbers_with_mcpb_order(tmp_path):
+    structure = read_pdb("tests/data/protein_with_waters.pdb")
+    shifted_atoms = [
+        replace(atom, resid=atom.resid - 2)
+        for atom in structure.atoms
+    ]
+    shifted = PdbStructure(
+        path=structure.path,
+        atoms=shifted_atoms,
+        residues=_build_residues(shifted_atoms),
+        model_count=structure.model_count,
+        used_model=structure.used_model,
+        warnings=[],
+    )
+
+    result = prepare_leap_input_pdb(
+        shifted,
+        tmp_path / "system.mcpb_aligned.pdb",
+        renumber_residues_sequentially=True,
+    )
+
+    parsed = read_pdb(result.path)
+    assert [residue.id.resid for residue in parsed.residues] == list(
+        range(1, len(parsed.residues) + 1)
+    )
+    assert [(atom.x, atom.y, atom.z) for atom in parsed.atoms] == [
+        (atom.x, atom.y, atom.z) for atom in shifted.atoms
+    ]
+    assert result.residue_renumberings[0]["original_resid"] == (
+        shifted.residues[0].id.resid
+    )
+    assert result.residue_renumberings[0]["tleap_residue_index"] == 1
+
+
 def test_prepare_leap_input_anchors_ligand_to_extracted_parameterization_pdb(tmp_path):
     original = read_pdb("tests/data/protein_two_ligands.pdb")
     reference = next(residue for residue in original.residues if residue.id.resname == "SUB")
@@ -177,6 +211,41 @@ def test_tleap_ligand_coordinate_validation_fails_if_dry_build_moves_ligand(tmp_
         )
 
     assert "moved during dry tleap build" in str(excinfo.value)
+
+
+def test_tleap_ligand_coordinate_validation_uses_recorded_mcpb_resname(tmp_path):
+    reference = read_pdb("tests/data/protein_two_ligands.pdb")
+    data = manifest_data("tests/data/protein_two_ligands.pdb")
+    data["ligands"] = [ligand_entry("sub_501", "B", "SUB", 501)]
+    manifest = make_manifest(data)
+    renamed_atoms = [
+        replace(atom, resname="SG1")
+        if atom.resname == "SUB" and atom.resid == 501
+        else atom
+        for atom in reference.atoms
+    ]
+    renamed_pdb = tmp_path / "dry.mcpb.pdb"
+    write_pdb(
+        PdbStructure(
+            path=renamed_pdb,
+            atoms=renamed_atoms,
+            residues=_build_residues(renamed_atoms),
+            model_count=1,
+        ),
+        renamed_pdb,
+    )
+
+    checks = validate_tleap_ligand_coordinates(
+        manifest=manifest,
+        reference_structure=reference,
+        output_pdb=renamed_pdb,
+        stage="dry",
+        output_resnames_by_ligand_id={"sub_501": "SG1"},
+    )
+
+    assert checks[0]["reference_resname"] == "SUB"
+    assert checks[0]["output_resname"] == "SG1"
+    assert checks[0]["max_coordinate_deviation_angstrom"] == 0.0
 
 
 

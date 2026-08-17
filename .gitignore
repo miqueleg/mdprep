@@ -13,4 +13,6 @@ runs/
 *.log
 *.out
 *.tmp
+*.tar.gz
+*.tar.gz.sha256
 .DS_Store

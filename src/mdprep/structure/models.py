@@ -77,4 +77,10 @@ class PdbStructure:
     model_count: int
     used_model: int = 1
     warnings: list[str] = field(default_factory=list)
-
+    # Connectivity is stored by PDB atom serial so it survives residue
+    # renaming and filtering.  Each pair is canonicalized as (min, max).
+    conect_bonds: set[tuple[int, int]] = field(default_factory=set)
+    # TER is a polymer/chain boundary, not decoration.  Store the serial of
+    # the last atom before each explicit input TER so writers cannot
+    # accidentally reconnect an unresolved chain break or a heterogen.
+    ter_after_serials: set[int] = field(default_factory=set)

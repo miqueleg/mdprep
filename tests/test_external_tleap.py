@@ -54,10 +54,11 @@ def test_real_tleap_ligand_only_build_when_available(tmp_path):
             "forbid": [],
         },
         "ligands": [
-            {
-                "id": "sub_501",
-                "selector": {"chain": "B", "resname": "SUB", "resid": 501, "icode": None},
-                "net_charge": 0,
+                {
+                    "id": "sub_501",
+                    "selector": {"chain": "B", "resname": "SUB", "resid": 501, "icode": None},
+                    "expected_formula": "CO",
+                    "net_charge": 0,
                 "multiplicity": 1,
                 "atom_types": "gaff2",
                 "charge_method": "user_mol2",

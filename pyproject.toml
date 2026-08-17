@@ -4,15 +4,15 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mdprep"
-version = "0.1.0"
-description = "Reproducible Amber MD preparation workflow manager for proteins and independent ligands."
+version = "0.2.0"
+description = "Reproducible Amber preparation for proteins, ligands, metal centers, and OpenMM MD."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [
   { name = "Miquel Estévez Gay" }
 ]
-keywords = ["amber", "molecular-dynamics", "protein", "ligand", "resp", "qmmm", "pyscf"]
+keywords = ["amber", "molecular-dynamics", "protein", "ligand", "metal", "mcpb", "openmm", "resp", "qmmm", "pyscf"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
@@ -36,6 +36,13 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+md = [
+  "openmm>=8.1",
+]
+qm = [
+  "pyscf>=2.6",
+  "parmed>=4.2",
+]
 test = [
   "pytest>=8",
 ]
@@ -73,5 +80,6 @@ markers = [
   "qmmesp: tests requiring optional QMMESP-style integration dependencies",
   "propka: tests requiring optional PropKa executable",
   "xtb: tests requiring optional xTB executable",
+  "mace: tests requiring optional MACE-POLAR-1 dependencies and checkpoint",
   "slow: slow tests excluded from quick CI runs",
 ]

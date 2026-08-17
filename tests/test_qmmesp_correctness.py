@@ -244,6 +244,9 @@ def test_multiple_qmmesp_ligands_are_fitted_one_target_at_a_time(monkeypatch, tm
     assert extraction_calls == ["sub_501", "cof_601"]
     assert derivation_calls == [("sub_501", (10, 11)), ("cof_601", (12, 13))]
     assert [item.ligand_id for item in result.ligands] == ["sub_501", "cof_601"]
+    assert [item.ligand_id for item in result.provisional_ligands] == ["sub_501", "cof_601"]
+    assert all(item.charge_method == "am1bcc" for item in result.provisional_ligands)
+    assert result.qmmesp_provisional_system is not None
     assert result.ligands[0].qm.embedding_summary["categories"] == {"ligand": 1}
     assert result.ligands[1].qm.embedding_summary["categories"] == {"ligand": 1}
 
@@ -251,3 +254,97 @@ def test_multiple_qmmesp_ligands_are_fitted_one_target_at_a_time(monkeypatch, tm
     cof_final = read_mol2(result.ligands[1].final_mol2_path)
     assert [atom.charge for atom in sub_final.atoms] == pytest.approx([0.25, -0.25])
     assert [atom.charge for atom in cof_final.atoms] == pytest.approx([0.35, -0.35])
+
+
+def test_qmmesp_provisional_system_uses_am1bcc_for_non_target_user_ligand(monkeypatch, tmp_path):
+    manifest = qmmesp_manifest(tmp_path)
+    data = manifest.model_dump(mode="json")
+    data["ligands"][1].update(
+        {
+            "charge_method": "user_mol2",
+            "user_mol2": "tests/data/ligands/ligand_cof.good.mol2",
+            "user_frcmod": "tests/data/ligands/ligand_cof.frcmod",
+            "qmmesp": None,
+        }
+    )
+    manifest = make_manifest(data)
+    normalized = normalize_structure_stage(manifest)
+    protonation = apply_protonation_stage(
+        normalized.normalized_structure,
+        manifest,
+        input_normalized_pdb_path=tmp_path / "mixed_00.pdb",
+        output_protonation_pdb_path=tmp_path / "mixed_01.pdb",
+    )
+    antechamber_calls: list[str] = []
+
+    def capture_antechamber(**kwargs):
+        antechamber_calls.append(kwargs["ligand"].id)
+        return fake_qmmesp_antechamber(**kwargs)
+
+    def one_target_environment(**kwargs):
+        return PointChargeSelection(
+            target_atom_indices=[10, 11],
+            point_charges=[
+                PointCharge(
+                    x=1.0,
+                    y=2.0,
+                    z=3.0,
+                    charge=0.05,
+                    residue_name="COF",
+                    residue_number=601,
+                    atom_name="N1",
+                    category="ligand",
+                )
+            ],
+            total_before_cutoff=1,
+            total_after_cutoff=1,
+            net_embedding_charge=0.05,
+            min_distance=2.0,
+            max_distance=2.0,
+            categories={"ligand": 1},
+        )
+
+    def fit_target(*, extracted, provisional_mol2_path, output_mol2_path, output_dir, method_name, point_charges):
+        output = Path(output_mol2_path)
+        write_mol2_with_charges(provisional_mol2_path, [0.25, -0.25], output)
+        qm_dir = Path(output_dir) / "ligands" / extracted.config.id / "qm" / method_name
+        qm_dir.mkdir(parents=True, exist_ok=True)
+        charges_csv = qm_dir / "fitted_charges.csv"
+        charges_csv.write_text("atom_index,atom_name,charge\n1,C1,0.25\n2,O1,-0.25\n", encoding="utf-8")
+        fit_report = qm_dir / "fit_report.json"
+        fit_report.write_text('{"charge_sum_final": 0.0}\n', encoding="utf-8")
+        return LigandPySCFChargeResult(
+            method=method_name,
+            qm_dir=qm_dir,
+            charged_mol2_path=output,
+            fitted_charges_csv_path=charges_csv,
+            fit_report_path=fit_report,
+            pyscf_result={"converged": True},
+            fit_result={"charge_sum_final": 0.0, "confirmation": QMMESP_CONFIRMATION},
+            grid_point_count=12,
+            embedding_summary=point_charges.to_dict(),
+            warnings=[],
+        )
+
+    monkeypatch.setattr("mdprep.ligands.workflow.run_antechamber", capture_antechamber)
+    monkeypatch.setattr("mdprep.ligands.workflow.run_parmchk2", fake_qmmesp_parmchk2)
+    monkeypatch.setattr("mdprep.ligands.workflow.run_tleap", fake_qmmesp_tleap)
+    monkeypatch.setattr("mdprep.ligands.workflow.extract_point_charges_from_prmtop", one_target_environment)
+    monkeypatch.setattr("mdprep.ligands.workflow.derive_pyscf_charges", fit_target)
+
+    result = run_ligand_stage(
+        protonation.structure,
+        manifest,
+        output_dir=manifest.project.output_dir,
+        protonation_result=protonation,
+    )
+
+    assert antechamber_calls == ["sub_501", "cof_601"]
+    assert [item.charge_method for item in result.provisional_ligands] == ["am1bcc", "am1bcc"]
+    provisional_cofactor = read_mol2(result.provisional_ligands[1].final_mol2_path)
+    assert [atom.charge for atom in provisional_cofactor.atoms] == pytest.approx([0.222, -0.222])
+    final_cofactor = read_mol2(result.ligands[1].final_mol2_path)
+    configured_cofactor = read_mol2("tests/data/ligands/ligand_cof.good.mol2")
+    assert [atom.charge for atom in final_cofactor.atoms] == pytest.approx(
+        [atom.charge for atom in configured_cofactor.atoms]
+    )

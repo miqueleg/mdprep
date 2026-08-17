@@ -77,7 +77,7 @@ def decide_residue_state(
     if resname == "ARG":
         if not protonated:
             warnings.append(
-                "ARG deprotonation is not automatically represented in mdprep v0.1; "
+                "ARG deprotonation is not automatically represented in mdprep v0.2; "
                 "use a manual override or custom parameters if needed."
             )
         return _decision(residue, "ARG", record, ph, warnings)
@@ -163,4 +163,3 @@ def _conservative_default(resname: str) -> str:
 def _format_residue(residue: ResidueRecord) -> str:
     chain = residue.id.chain_id if residue.id.chain_id else "<blank>"
     return f"{chain}:{residue.id.resname}{residue.id.resid}{residue.id.icode or ''}"
-

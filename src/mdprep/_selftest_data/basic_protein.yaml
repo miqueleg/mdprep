@@ -1,0 +1,33 @@
+project:
+  name: selftest
+  input_structure: input.pdb
+  output_dir: prepared/selftest
+
+structure:
+  keep_crystal_waters: true
+  remove_unknown_heterogens: false
+
+protein:
+  forcefield: ff14SB
+  water_model: TIP3P
+
+protonation:
+  method: manual_only
+
+disulfides:
+  auto_detect: true
+  detection_cutoff_angstrom: 2.2
+  force: []
+  forbid: []
+
+ligands: []
+metals: []
+
+solvation:
+  enabled: true
+
+validation:
+  fail_on_missing_parameters: true
+
+molecular_dynamics:
+  enabled: false

@@ -24,6 +24,9 @@ from mdprep.leap.residues import (
 )
 from mdprep.leap.runner import TLeapRun, TLeapRunError, run_tleap
 from mdprep.ligands.workflow import LigandStageResult
+from mdprep.metals.workflow import MetalStageResult
+from mdprep.metals.mcpb import McpbRefittedLigand
+from mdprep.metals.c4 import C4PostprocessError, C4PostprocessRun, apply_12_6_4_c4
 from mdprep.protonation.apply import ProtonationResult
 from mdprep.structure.models import PdbStructure
 
@@ -51,6 +54,7 @@ class TLeapStageResult:
     forcefields: ForceFieldSources
     leap_input: LeapInputResult
     ligands: list[LigandParameterFiles]
+    mcpb_resp_ligands: list[McpbRefittedLigand]
     disulfide_bonds: list[DisulfideBondCommand]
     dry_run: TLeapRun
     dry_outputs: TLeapOutputs
@@ -63,6 +67,7 @@ class TLeapStageResult:
     salt_concentration_molar: float
     ion_plan: IonPlan | None
     salt_volume_a3: float | None
+    c4_postprocessing: list[C4PostprocessRun]
     warnings: list[str]
 
     def to_report_dict(self) -> dict[str, object]:
@@ -71,6 +76,9 @@ class TLeapStageResult:
             "force_field_warnings": self.forcefields.warnings,
             "water_box": self.forcefields.water_box,
             "ligands": [ligand.to_dict() for ligand in self.ligands],
+            "mcpb_resp_ligands": [
+                ligand.to_dict() for ligand in self.mcpb_resp_ligands
+            ],
             "disulfide_bond_commands": [bond.to_dict() for bond in self.disulfide_bonds],
             "leap_input": self.leap_input.to_dict(),
             "dry_tleap": self.dry_run.to_dict(),
@@ -86,6 +94,7 @@ class TLeapStageResult:
             "salt_concentration_molar": self.salt_concentration_molar,
             "salt_ion_pairs_requested": self.ion_plan.salt_pairs if self.ion_plan is not None else 0,
             "salt_volume_a3": self.salt_volume_a3,
+            "c4_postprocessing": [run.to_dict() for run in self.c4_postprocessing],
             "final_tleap": self.final_run.to_dict() if self.final_run is not None else None,
             "final_outputs": self.final_outputs.to_dict(),
             "warnings": self.warnings,
@@ -99,6 +108,7 @@ def run_tleap_stage(
     output_dir: str | Path,
     protonation_result: ProtonationResult,
     ligand_result: LigandStageResult,
+    metal_result: MetalStageResult | None = None,
 ) -> TLeapStageResult:
     output = Path(output_dir)
     input_dir = output / "leap" / "input"
@@ -114,20 +124,61 @@ def run_tleap_stage(
             water_model=manifest.protein.water_model,
             ligands=manifest.ligands,
         )
+        metal_structure = (
+            metal_result.structure
+            if metal_result is not None and metal_result.structure is not None
+            else structure
+        )
+        bonded_mcpb_complete = bool(
+            metal_result is not None
+            and metal_result.mcpb_site is not None
+            and metal_result.mcpb_site.complete
+        )
+        mcpb_resp_ligand_ids = {
+            ligand.id
+            for ligand in manifest.ligands
+            if ligand.charge_method == "mcpb_resp_pyscf"
+        }
+        refitted_ligands = (
+            list(metal_result.mcpb_site.refitted_ligands)
+            if bonded_mcpb_complete
+            and metal_result is not None
+            and metal_result.mcpb_site is not None
+            else []
+        )
+        if {item.ligand_id for item in refitted_ligands} != mcpb_resp_ligand_ids:
+            raise LeapResidueError(
+                "Final tLEAP build requires one MCPB RESP-fitted mol2 for every "
+                "mcpb_resp_pyscf ligand; expected "
+                f"{sorted(mcpb_resp_ligand_ids)}, obtained "
+                f"{sorted(item.ligand_id for item in refitted_ligands)}."
+            )
         leap_input = prepare_leap_input_pdb(
-            structure,
+            metal_structure,
             input_dir / "system.leap_input.pdb",
-            manifest=manifest,
-            ligand_result=ligand_result,
+            manifest=None if bonded_mcpb_complete else manifest,
+            ligand_result=None if bonded_mcpb_complete else ligand_result,
+            # MCPB.py writes bond commands against its own deterministic,
+            # one-based residue order. Original PDB residue numbers can be
+            # negative, zero, non-contiguous, or insertion-coded, and LEaP
+            # otherwise remaps those numbers independently. Keep atom order
+            # and coordinates unchanged while making the input numbering
+            # match MCPB's command indices exactly.
+            renumber_residues_sequentially=bonded_mcpb_complete,
         )
         ligand_files = validate_ligand_parameter_files(
             manifest=manifest,
-            structure=leap_input.structure,
+            structure=structure,
             ligand_result=ligand_result,
+            excluded_ligand_ids=mcpb_resp_ligand_ids,
         )
-        disulfide_bonds = disulfide_bond_commands(
-            structure=leap_input.structure,
-            protonation_result=protonation_result,
+        disulfide_bonds = (
+            []
+            if bonded_mcpb_complete
+            else disulfide_bond_commands(
+                structure=leap_input.structure,
+                protonation_result=protonation_result,
+            )
         )
         conect_records = append_disulfide_conect_records(leap_input.path, disulfide_bonds)
         dry_outputs = TLeapOutputs(
@@ -142,6 +193,8 @@ def run_tleap_stage(
             disulfide_bonds=disulfide_bonds,
             outputs=dry_outputs,
             work_dir=dry_dir,
+            setup_commands=metal_result.leap_setup_commands if metal_result else None,
+            extra_bond_commands=metal_result.leap_bond_commands if metal_result else None,
         )
         dry_input = dry_dir / "tleap.in"
         dry_input.write_text(dry_script, encoding="utf-8")
@@ -152,11 +205,25 @@ def run_tleap_stage(
             context="dry",
         )
         _ensure_outputs(dry_outputs)
+        c4_runs: list[C4PostprocessRun] = []
+        if metal_result is not None and metal_result.c4_atom_types:
+            c4_runs.append(
+                apply_12_6_4_c4(
+                    dry_outputs.prmtop,
+                    atom_types=metal_result.c4_atom_types,
+                    water_model=manifest.protein.water_model,
+                    work_dir=dry_dir / "c4",
+                )
+            )
         dry_coordinate_checks = validate_tleap_ligand_coordinates(
             manifest=manifest,
-            reference_structure=leap_input.structure,
+            reference_structure=structure,
             output_pdb=dry_outputs.pdb,
             stage="dry",
+            output_resnames_by_ligand_id={
+                item.ligand_id: item.final_resname
+                for item in refitted_ligands
+            },
         )
 
         warnings = list(sources.warnings)
@@ -177,7 +244,7 @@ def run_tleap_stage(
         if not manifest.solvation.enabled:
             final_outputs = _copy_outputs(dry_outputs, final_dir)
         else:
-            final_outputs, final_run, ion_plan, salt_volume_a3 = _run_solvated_build(
+            final_outputs, final_run, ion_plan, salt_volume_a3, final_c4 = _run_solvated_build(
                 manifest=manifest,
                 sources=sources,
                 ligands=ligand_files,
@@ -185,7 +252,10 @@ def run_tleap_stage(
                 disulfide_bonds=disulfide_bonds,
                 dry_charge=dry_run.summary.total_charge,
                 output_dir=output,
+                metal_result=metal_result,
             )
+            if final_c4 is not None:
+                c4_runs.append(final_c4)
             warnings.extend(final_run.summary.warnings)
 
     except (
@@ -194,6 +264,7 @@ def run_tleap_stage(
         LeapLogError,
         LeapResidueError,
         TLeapRunError,
+        C4PostprocessError,
         FileNotFoundError,
     ) as exc:
         raise TLeapBuildError(str(exc)) from exc
@@ -202,6 +273,7 @@ def run_tleap_stage(
         forcefields=sources,
         leap_input=leap_input,
         ligands=ligand_files,
+        mcpb_resp_ligands=refitted_ligands,
         disulfide_bonds=disulfide_bonds,
         dry_run=dry_run,
         dry_outputs=dry_outputs,
@@ -214,6 +286,7 @@ def run_tleap_stage(
         salt_concentration_molar=manifest.solvation.salt_concentration_molar,
         ion_plan=ion_plan,
         salt_volume_a3=salt_volume_a3,
+        c4_postprocessing=c4_runs,
         warnings=warnings,
     )
 
@@ -228,6 +301,8 @@ def build_tleap_script(
     work_dir: str | Path | None = None,
     solvation_command: str | None = None,
     ion_commands: list[str] | None = None,
+    setup_commands: list[str] | None = None,
+    extra_bond_commands: list[str] | None = None,
 ) -> str:
     lines: list[str] = []
     for source in sources.all_sources:
@@ -239,8 +314,10 @@ def build_tleap_script(
         if ligand.variable_name != ligand.residue_name:
             lines.append(f"{ligand.residue_name} = {ligand.variable_name}")
         lines.append(f"loadamberparams {frcmod_path}")
+    lines.extend(setup_commands or [])
     lines.append(f"system = loadpdb {_tleap_path(input_pdb, work_dir)}")
     lines.extend(bond.command for bond in disulfide_bonds if bond.command.startswith("bond "))
+    lines.extend(command for command in (extra_bond_commands or []) if command.startswith("bond "))
     if solvation_command is not None:
         lines.append(solvation_command)
     lines.extend(ion_commands or [])
@@ -285,7 +362,8 @@ def _run_solvated_build(
     disulfide_bonds: list[DisulfideBondCommand],
     dry_charge: float | None,
     output_dir: Path,
-) -> tuple[TLeapOutputs, TLeapRun, IonPlan | None, float | None]:
+    metal_result: MetalStageResult | None,
+) -> tuple[TLeapOutputs, TLeapRun, IonPlan | None, float | None, C4PostprocessRun | None]:
     if dry_charge is None and manifest.solvation.neutralize:
         raise TLeapBuildError("tleap dry-system charge was not parsed; cannot neutralize safely.")
     solv_dir = output_dir / "leap" / "solvated"
@@ -318,6 +396,8 @@ def _run_solvated_build(
                 outputs=pre_outputs,
                 work_dir=solv_dir,
                 solvation_command=solvate,
+                setup_commands=metal_result.leap_setup_commands if metal_result else None,
+                extra_bond_commands=metal_result.leap_bond_commands if metal_result else None,
             ),
             encoding="utf-8",
         )
@@ -351,6 +431,8 @@ def _run_solvated_build(
         work_dir=solv_dir,
         solvation_command=solvate,
         ion_commands=ion_plan.commands,
+        setup_commands=metal_result.leap_setup_commands if metal_result else None,
+        extra_bond_commands=metal_result.leap_bond_commands if metal_result else None,
     )
     script_path = solv_dir / "tleap.in"
     script_path.write_text(script, encoding="utf-8")
@@ -361,8 +443,16 @@ def _run_solvated_build(
         context="solvated",
     )
     _ensure_outputs(final_outputs)
+    c4_run: C4PostprocessRun | None = None
+    if metal_result is not None and metal_result.c4_atom_types:
+        c4_run = apply_12_6_4_c4(
+            final_outputs.prmtop,
+            atom_types=metal_result.c4_atom_types,
+            water_model=manifest.protein.water_model,
+            work_dir=solv_dir / "c4",
+        )
     copied = _copy_outputs(final_outputs, output_dir / "final")
-    return copied, final_run, ion_plan, volume_a3
+    return copied, final_run, ion_plan, volume_a3, c4_run
 
 
 def _copy_outputs(outputs: TLeapOutputs, final_dir: Path) -> TLeapOutputs:

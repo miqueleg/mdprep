@@ -46,6 +46,13 @@ def read_pdb(
     raw_atoms = [_parse_atom_line(line) for line in model_lines if line.startswith(("ATOM", "HETATM"))]
     atoms = _apply_altloc_policy(raw_atoms, altloc_policy)
     residues = _build_residues(atoms)
+    present_serials = {atom.serial for atom in atoms if atom.serial is not None}
+    if len(present_serials) != sum(atom.serial is not None for atom in atoms):
+        raise PdbParseError("PDB atom serials must be unique when present.")
+    ter_after_serials = _parse_ter_after_serials(model_lines, present_serials)
+    # CONECT records conventionally follow ENDMDL, so inspect the complete
+    # file while filtering endpoints to the selected first model/altloc.
+    conect_bonds = _parse_conect_bonds(lines, present_serials)
     return PdbStructure(
         path=pdb_path,
         atoms=atoms,
@@ -53,7 +60,51 @@ def read_pdb(
         model_count=model_count,
         used_model=1,
         warnings=warnings,
+        conect_bonds=conect_bonds,
+        ter_after_serials=ter_after_serials,
     )
+
+
+def _parse_ter_after_serials(
+    lines: list[str],
+    present_serials: set[int],
+) -> set[int]:
+    result: set[int] = set()
+    last_serial: int | None = None
+    for line in lines:
+        if line.startswith(("ATOM", "HETATM")):
+            serial = _parse_int(line[6:11])
+            if serial in present_serials:
+                last_serial = serial
+        elif line.startswith("TER") and last_serial is not None:
+            result.add(last_serial)
+    return result
+
+
+def _parse_conect_bonds(
+    lines: list[str],
+    present_serials: set[int],
+) -> set[tuple[int, int]]:
+    bonds: set[tuple[int, int]] = set()
+    for line in lines:
+        if not line.startswith("CONECT"):
+            continue
+        values: list[int] = []
+        for field in line[6:].split():
+            try:
+                values.append(int(field))
+            except ValueError:
+                continue
+        if len(values) < 2:
+            continue
+        source, *targets = values
+        if source not in present_serials:
+            continue
+        for target in targets:
+            if target not in present_serials or target == source:
+                continue
+            bonds.add((min(source, target), max(source, target)))
+    return bonds
 
 
 def _first_model_lines(lines: Iterable[str]) -> list[str]:
@@ -332,6 +383,17 @@ def infer_element(
     if not stripped:
         return None
     upper = stripped.upper()
+    residue_upper = (resname or "").strip().upper()
+    # Some AmberTools/MCPB.py PDB writers emit a one-atom ion as ATOM rather
+    # than HETATM and align its atom field like a one-letter element (for
+    # example " FE "). A coincident elemental residue/atom symbol is the
+    # unambiguous ion identity in either record form.
+    if (
+        record_name in {"ATOM", "HETATM"}
+        and residue_upper == upper
+        and upper in PERIODIC_ELEMENTS
+    ):
+        return _canonical_element(upper)
     if resname in STANDARD_PROTEIN_RESNAMES:
         if upper.startswith("H"):
             return "H"

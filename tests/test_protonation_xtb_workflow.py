@@ -1,11 +1,13 @@
 from pathlib import Path
 import json
+from dataclasses import replace
 
 import pytest
 
 from mdprep.external.runner import CommandResult
 from mdprep.protonation.apply import ProtonationApplicationError, apply_protonation_stage
 from mdprep.protonation.propka_parser import PropkaRecord
+from mdprep.protonation.temporary_hydrogenation import TemporaryHydrogenationResult
 from mdprep.protonation.xtb_runner import XtbExecutionError, XtbRunResult
 from mdprep.structure.models import PdbStructure, ResidueId, ResidueRecord
 from mdprep.structure.normalize import normalize_structure_stage
@@ -69,6 +71,63 @@ def test_propka_xtb_his_runs_hid_hie_comparison_and_selects_lower_hid(monkeypatc
     assert cluster_model["charge_breakdown"]
     assert "C" in cluster_model["HID_element_counts"]
     assert "Ca" not in cluster_model["HID_element_counts"]
+    assert Path(cluster_model["tautomer_work_directories"]["HID"]).name == "HID"
+    assert Path(cluster_model["tautomer_work_directories"]["HIE"]).name == "HIE"
+
+
+def test_xtb_tautomers_use_clean_isolated_work_directories(monkeypatch, tmp_path):
+    data = manifest_data("tests/data/protein_histidine_ring_hydrogenated.pdb")
+    data["protonation"]["method"] = "propka_xtb_his"
+    histidine_dir = tmp_path / "prepared" / "protonation" / "histidine_xtb" / "A_HIS2"
+    for tautomer in ("HID", "HIE"):
+        stale_dir = histidine_dir / tautomer
+        stale_dir.mkdir(parents=True)
+        (stale_dir / "xtbrestart").write_text("stale restart\n", encoding="utf-8")
+
+    observed_work_dirs: list[Path] = []
+    monkeypatch.setattr(
+        "mdprep.protonation.apply.run_propka_workflow",
+        lambda structure, manifest, work_dir: fake_propka_result(
+            tmp_path,
+            [PropkaRecord("HIS", 2, "A", 6.0, "HIS 2 A 6.0")],
+        ),
+    )
+
+    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None):
+        run_dir = Path(work_dir)
+        observed_work_dirs.append(run_dir)
+        assert run_dir.name == Path(xyz_path).stem
+        assert Path(xyz_path).parent == run_dir
+        assert input_path is None or Path(input_path).parent == run_dir
+        assert not (run_dir / "xtbrestart").exists()
+        energy = -40.01 if run_dir.name == "HID" else -40.00
+        Path(stdout_path).write_text(f":: total energy      {energy:.12f} Eh\n", encoding="utf-8")
+        Path(stderr_path).write_text("", encoding="utf-8")
+        return XtbRunResult(
+            command_result=CommandResult(
+                command=("xtb", Path(xyz_path).name),
+                cwd=str(run_dir),
+                returncode=0,
+                stdout="",
+                stderr="",
+                runtime_seconds=0.01,
+            ),
+            stdout_path=Path(stdout_path),
+            stderr_path=Path(stderr_path),
+        )
+
+    monkeypatch.setattr("mdprep.protonation.histidine_xtb.run_xtb", fake_run_xtb)
+    manifest = make_manifest(data)
+    normalized = normalize_structure_stage(manifest)
+    result = apply_protonation_stage(
+        normalized.normalized_structure,
+        manifest,
+        input_normalized_pdb_path=tmp_path / "normalized.pdb",
+        output_protonation_pdb_path=tmp_path / "prepared" / "intermediate" / "01_protonation_assigned.pdb",
+    )
+
+    assert result.xtb_selections[0].selected_state == "HID"
+    assert [path.name for path in observed_work_dirs] == ["HID", "HIE"]
 
 
 def test_propka_xtb_his_selects_lower_hie(monkeypatch, tmp_path):
@@ -171,6 +230,9 @@ def test_missing_histidine_ring_atom_fails_clearly(monkeypatch, tmp_path):
 def test_dehydrogenated_histidine_cluster_fails_clearly(monkeypatch, tmp_path):
     data = manifest_data("tests/data/protein_histidine_ring.pdb")
     data["protonation"]["method"] = "propka_xtb_his"
+    data["protonation"]["histidine"]["xtb"][
+        "add_missing_protein_hydrogens"
+    ] = False
     monkeypatch.setattr(
         "mdprep.protonation.apply.run_propka_workflow",
         lambda structure, manifest, work_dir: fake_propka_result(
@@ -190,6 +252,85 @@ def test_dehydrogenated_histidine_cluster_fails_clearly(monkeypatch, tmp_path):
         )
 
     assert "requires a hydrogenated protein model" in str(excinfo.value)
+
+
+def test_dehydrogenated_histidine_cluster_uses_temporary_pdbfixer_environment(
+    monkeypatch,
+    tmp_path,
+):
+    data = manifest_data("tests/data/protein_histidine_ring.pdb")
+    data["protonation"]["method"] = "propka_xtb_his"
+    dehydrogenated = read_pdb("tests/data/protein_histidine_ring.pdb")
+    temporary_path = tmp_path / "temporary_hydrogenated.pdb"
+    temporary_atoms = []
+    serial = 0
+    for residue in dehydrogenated.residues:
+        for atom in residue.atoms:
+            serial += 1
+            temporary_atoms.append(replace(atom, serial=serial))
+        anchor = next(
+            (atom for atom in residue.atoms if atom.name == "CB"),
+            next(atom for atom in residue.atoms if atom.name == "CA"),
+        )
+        serial += 1
+        temporary_atoms.append(
+            replace(
+                anchor,
+                serial=serial,
+                name="HX",
+                z=anchor.z + 1.3,
+                element="H",
+                original_line="",
+            )
+        )
+    write_pdb(
+        PdbStructure(
+            path=temporary_path,
+            atoms=temporary_atoms,
+            residues=dehydrogenated.residues,
+            model_count=1,
+        ),
+        temporary_path,
+    )
+    hydrogenated = read_pdb(temporary_path)
+
+    def fake_hydrogenation(structure, *, ph, random_seed, work_dir):
+        assert random_seed == 20260722
+        return TemporaryHydrogenationResult(
+            backend="pdbfixer",
+            backend_version="test",
+                platform="Reference",
+                ph=ph,
+                random_seed=random_seed,
+                input_path=tmp_path / "temporary_input.pdb",
+            raw_output_path=tmp_path / "temporary_raw.pdb",
+            restored_output_path=temporary_path,
+            structure=hydrogenated,
+            added_hydrogen_count=len(hydrogenated.atoms) - len(structure.atoms),
+            maximum_original_atom_displacement_angstrom=0.0,
+        )
+
+    monkeypatch.setattr(
+        "mdprep.protonation.apply.add_temporary_protein_hydrogens",
+        fake_hydrogenation,
+    )
+    result = run_with_fakes(
+        monkeypatch,
+        tmp_path,
+        data,
+        hid_energy=-40.01,
+        hie_energy=-40.00,
+    )
+
+    assert result.xtb_selections[0].selected_state == "HID"
+    assert result.xtb_temporary_hydrogenation is not None
+    assert result.xtb_temporary_hydrogenation.final_prepared_pdb_modified is False
+    assert not any(
+        atom.element == "H"
+        for residue in result.structure.residues
+        if residue.id.resname == "HID"
+        for atom in residue.atoms
+    )
 
 
 def test_xtb_unavailable_fails_only_when_neutral_his_needs_it(monkeypatch, tmp_path):

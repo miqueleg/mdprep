@@ -8,7 +8,7 @@ from mdprep.protonation.histidine_geometry import (
     place_histidine_tautomer_hydrogen,
     write_xcontrol_fix_file,
 )
-from mdprep.structure.models import AtomRecord, ResidueRecord
+from mdprep.structure.models import AtomRecord, ResidueId, ResidueRecord
 from mdprep.structure.pdb import read_pdb
 
 
@@ -166,6 +166,39 @@ def test_protonated_acid_state_without_carboxyl_h_fails_before_xtb():
             tautomer="HID",
             residue_states={id(asp): "ASH"},
         )
+
+
+def test_temporary_lyn_state_removes_third_pdbfixer_lysine_hydrogen():
+    target = histidine()
+    by_name = {atom.name: atom for atom in target.atoms}
+    nz = replace(by_name["CB"], name="NZ", resid=3, x=10.0, y=0.0, z=0.0)
+    lysine_atoms = [
+        replace(by_name["N"], resid=3, x=0.0, y=0.0, z=0.0),
+        replace(by_name["CA"], resid=3, x=1.0, y=0.0, z=0.0),
+        replace(by_name["C"], resid=3, x=2.0, y=0.0, z=0.0),
+        nz,
+        _hydrogen_from_anchor(nz, "HZ1", serial=9101),
+        replace(_hydrogen_from_anchor(nz, "HZ2", serial=9102), x=10.0, y=1.0),
+        replace(_hydrogen_from_anchor(nz, "HZ3", serial=9103), x=10.0, z=1.0),
+    ]
+    lysine = ResidueRecord(
+        id=ResidueId(chain_id="A", resname="LYS", resid=3),
+        atoms=[replace(atom, resname="LYS") for atom in lysine_atoms],
+        record_names={"ATOM"},
+        original_index=1,
+    )
+
+    model = build_tautomer_cluster_model(
+        [target, lysine],
+        target,
+        tautomer="HID",
+        residue_states={id(lysine): "LYN"},
+    )
+
+    names = [atom.name for atom in model.atoms]
+    assert "HZ1" in names
+    assert "HZ2" in names
+    assert "HZ3" not in names
 
 
 def test_xcontrol_fix_file_contains_fixed_atoms(tmp_path):

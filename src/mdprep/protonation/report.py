@@ -62,6 +62,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- Method: `{report['method']}`",
         f"- pH: {report['ph']}",
         f"- Hydrogens removed: {report['hydrogen_atoms_removed']}",
+        "- Reused initial assignments after refinement: "
+        f"{report['reused_initial_assignments_after_refinement']}",
+        "- Refined hydrogens preserved: "
+        f"{report['preserved_refined_hydrogen_count']}",
         f"- Residues changed: {len(report['residues_changed'])}",
         f"- Explicit unchanged assignments: {len(report['residues_unchanged_but_explicitly_assigned'])}",
         "",
@@ -69,6 +73,8 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "",
     ]
     lines.extend(_record_lines(report["manual_overrides_applied"]))
+    lines.extend(["", "## Metal-Coordination Assignments", ""])
+    lines.extend(_record_lines(report.get("metal_coordination_assignments_applied", [])))
     lines.extend(["", "## Disulfide Assignments", ""])
     lines.extend(_record_lines(report["disulfide_assignments_applied"]))
     lines.extend(["", "## PropKa Assignments", ""])
@@ -77,6 +83,12 @@ def _render_markdown(report: dict[str, Any]) -> str:
     lines.extend(_record_lines(report.get("input_state_assignments_applied", [])))
     lines.extend(["", "## xTB Histidine Selections", ""])
     lines.extend(_xtb_lines(report.get("xtb_histidines", [])))
+    lines.extend(["", "## Temporary Protein Hydrogenation For xTB", ""])
+    lines.extend(
+        _temporary_protein_hydrogenation_lines(
+            report.get("xtb_temporary_protein_hydrogenation")
+        )
+    )
     lines.extend(["", "## Temporary Water Hydrogens For xTB Clusters", ""])
     lines.extend(_temporary_water_hydrogen_lines(report.get("temporary_water_hydrogens_for_xtb_clusters", [])))
     lines.extend(["", "## Hydrogens Removed", ""])
@@ -142,6 +154,22 @@ def _temporary_water_hydrogen_lines(clusters: list[dict[str, Any]]) -> list[str]
                 f"{water['hydrogens_added']} added"
             )
     return lines
+
+
+def _temporary_protein_hydrogenation_lines(
+    hydrogenation: dict[str, Any] | None,
+) -> list[str]:
+    if hydrogenation is None:
+        return ["- Not required"]
+    return [
+        f"- Backend: `{hydrogenation['backend']}` "
+        f"({hydrogenation['backend_version'] or 'unknown version'})",
+        f"- Temporary hydrogens added: {hydrogenation['added_hydrogen_count']}",
+        "- Maximum displacement of an original atom: "
+        f"{hydrogenation['maximum_original_atom_displacement_angstrom']:.6f} A",
+        f"- Final prepared PDB modified: {hydrogenation['final_prepared_pdb_modified']}",
+        f"- Temporary hydrogenated environment: `{hydrogenation['restored_output_path']}`",
+    ]
 
 
 def _format_record(record: dict[str, Any]) -> str:

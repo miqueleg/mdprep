@@ -11,6 +11,12 @@ from rich.table import Table
 
 from mdprep import __version__
 from mdprep.config.loader import load_manifest
+from mdprep.config.models import McpbParameterComparisonConfig
+from mdprep.metals.parameter_comparison import (
+    McpbParameterComparisonError,
+    compare_mcpb_parameter_files,
+)
+from mdprep.md.roe_brooks import RoeBrooksError, run_roe_brooks
 from mdprep.structure.inspect import InspectionSummary
 from mdprep.structure.normalize import StructureNormalizationError
 from mdprep.structure.pdb import PdbParseError, VALID_ALTLOC_POLICIES
@@ -135,8 +141,8 @@ def init_command(
         "--force",
         help="Overwrite an existing output manifest.",
     ),
-    forcefield: str = typer.Option("ff19SB", "--forcefield", help="Protein force field."),
-    water_model: str = typer.Option("OPC", "--water-model", help="Water model."),
+    forcefield: str = typer.Option("ff14SB", "--forcefield", help="Protein force field."),
+    water_model: str = typer.Option("TIP3P", "--water-model", help="Water model."),
     ph: float = typer.Option(7.0, "--ph", help="Target pH for starter manifest defaults."),
     protonation_method: str = typer.Option(
         "manual_only",
@@ -189,15 +195,31 @@ def prepare_command(
     stop_after: str | None = typer.Option(
         None,
         "--stop-after",
-        help="Stop after a supported workflow stage: structure, protonation, ligands, or tleap.",
+        help=(
+            "Stop after a supported workflow stage: structure, protonation, refinement, "
+            "ligands, metals, tleap, or md."
+        ),
     ),
     overwrite: bool = typer.Option(False, "--overwrite", help="Overwrite mdprep-generated outputs."),
+    resume: bool = typer.Option(
+        False,
+        "--resume",
+        help=(
+            "Resume from a matching converged ASH refinement after an interrupted "
+            "downstream stage."
+        ),
+    ),
     quiet: bool = typer.Option(False, "--quiet", help="Reduce command output."),
 ) -> None:
     """Prepare an Amber system from a manifest."""
 
     try:
-        result = prepare_system(manifest, stop_after=stop_after, overwrite=overwrite)
+        result = prepare_system(
+            manifest,
+            stop_after=stop_after,
+            overwrite=overwrite,
+            resume=resume,
+        )
     except (
         PrepareWorkflowError,
         StructureNormalizationError,
@@ -225,6 +247,116 @@ def validate_command(
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from exc
     console.print("Validation passed")
+
+
+@app.command("run-md")
+def run_md_command(
+    manifest_path: Path = typer.Argument(..., help="Manifest containing molecular_dynamics settings."),
+    prmtop: Path | None = typer.Option(
+        None,
+        "--prmtop",
+        help="Amber topology; defaults to <project.output_dir>/final/system.prmtop.",
+    ),
+    inpcrd: Path | None = typer.Option(
+        None,
+        "--inpcrd",
+        help="Amber coordinates; defaults to <project.output_dir>/final/system.inpcrd.",
+    ),
+    output_dir: Path | None = typer.Option(
+        None,
+        "--output-dir",
+        help="MD output directory; defaults to <project.output_dir>/md/roe_brooks_2020.",
+    ),
+) -> None:
+    """Run manifest-configured Roe--Brooks MD from an existing Amber system."""
+
+    try:
+        manifest = load_manifest(manifest_path, resolve_paths=True)
+        project_output = Path(manifest.project.output_dir)
+        result = run_roe_brooks(
+            prmtop_path=prmtop or project_output / "final" / "system.prmtop",
+            inpcrd_path=inpcrd or project_output / "final" / "system.inpcrd",
+            output_dir=(
+                output_dir
+                or project_output / "md" / "roe_brooks_2020"
+            ),
+            config=manifest.molecular_dynamics,
+        )
+    except (FileNotFoundError, RoeBrooksError, ValueError) as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(
+        f"MD completed on {result.platform}; final coordinates: {result.final_pdb}"
+    )
+
+
+@app.command("compare-mcpb")
+def compare_mcpb_command(
+    candidate_frcmod: Path = typer.Argument(
+        ..., help="Candidate MCPB.py-generated frcmod file."
+    ),
+    reference_frcmod: Path = typer.Argument(
+        ..., help="Selected reference MCPB.py-generated frcmod file."
+    ),
+    output_dir: Path = typer.Option(
+        Path("mcpb_parameter_comparison"),
+        "--output-dir",
+        help="Directory for JSON, CSV, and Markdown comparison reports.",
+    ),
+    candidate_label: str = typer.Option("xTB MCPB", "--candidate-label"),
+    reference_label: str = typer.Option("MCPB reference", "--reference-label"),
+    require_exact_term_set: bool = typer.Option(
+        True,
+        "--require-exact-term-set/--allow-term-set-difference",
+        help="Require candidate and reference to contain identical MCPB Seminario terms.",
+    ),
+    max_bond_relative_rmse: float | None = typer.Option(
+        None, "--max-bond-relative-rmse"
+    ),
+    max_angle_relative_rmse: float | None = typer.Option(
+        None, "--max-angle-relative-rmse"
+    ),
+    max_bond_distance_rmse: float | None = typer.Option(
+        None, "--max-bond-distance-rmse"
+    ),
+    max_angle_value_rmse: float | None = typer.Option(
+        None, "--max-angle-value-rmse"
+    ),
+    report_only: bool = typer.Option(
+        False,
+        "--report-only",
+        help="Write a failing report without returning a nonzero exit status.",
+    ),
+) -> None:
+    """Compare MCPB Seminario bond/angle terms against a selected reference."""
+
+    try:
+        config = McpbParameterComparisonConfig(
+            reference_frcmod=str(reference_frcmod),
+            candidate_label=candidate_label,
+            reference_label=reference_label,
+            require_exact_term_set=require_exact_term_set,
+            max_bond_force_constant_relative_rmse=max_bond_relative_rmse,
+            max_angle_force_constant_relative_rmse=max_angle_relative_rmse,
+            max_bond_equilibrium_distance_rmse_angstrom=max_bond_distance_rmse,
+            max_angle_equilibrium_value_rmse_degrees=max_angle_value_rmse,
+            fail_on_thresholds=not report_only,
+        )
+        result = compare_mcpb_parameter_files(
+            candidate_frcmod,
+            config=config,
+            output_dir=output_dir,
+        )
+    except (McpbParameterComparisonError, ValueError) as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    status = {
+        "pass": "PASS",
+        "fail": "FAIL (report only)",
+        "report_only": "REPORT ONLY (no numeric acceptance thresholds)",
+    }[result.status]
+    console.print(f"MCPB parameter comparison: {status}")
+    console.print(f"Wrote report: {result.json_path}")
 
 
 @app.command("selftest")

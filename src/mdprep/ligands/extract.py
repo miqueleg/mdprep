@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from collections import Counter
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -38,6 +40,7 @@ class ExtractedLigand:
             residue=self.residue,
             net_charge=self.config.net_charge,
             multiplicity=self.config.multiplicity,
+            expected_formula=self.config.expected_formula,
             charge_method=self.config.charge_method,
             atom_types=self.config.atom_types,
         )
@@ -99,6 +102,7 @@ def extract_ligand(
             record_names=residue.record_names,
             original_index=residue.original_index,
         )
+    warnings.extend(_validate_ligand_formula(ligand, residue))
 
     ligand_dir = Path(output_dir) / "ligands" / ligand.id / "input"
     ligand_dir.mkdir(parents=True, exist_ok=True)
@@ -192,11 +196,115 @@ def _base36(value: int) -> str:
 
 
 def _requires_pdb_chemistry_perception(ligand: LigandConfig) -> bool:
-    if ligand.charge_method == "am1bcc":
+    if ligand.charge_method in {"am1bcc", "mcpb_resp_pyscf"}:
         return True
     if ligand.charge_method in {"gas_resp_pyscf", "qmmesp_pyscf"}:
         return ligand.user_mol2 is None
     return False
+
+
+_FORMULA_TOKEN = re.compile(r"([A-Z][a-z]?)([0-9]*)")
+
+
+def _validate_ligand_formula(
+    ligand: LigandConfig,
+    residue: ResidueRecord,
+) -> list[str]:
+    """Require explicit ligand hydrogens and validate an optional exact formula.
+
+    PDB coordinates do not encode bond orders or protonation. A molecule that
+    contains no hydrogen is therefore rejected unless the user explicitly
+    declares a hydrogen-free expected formula. An exact formula is the only
+    reliable way to detect a partially hydrogenated ligand, so production
+    examples should always set expected_formula.
+    """
+
+    observed = Counter((atom.element or "").strip().capitalize() for atom in residue.atoms)
+    observed.pop("", None)
+    expected = _parse_formula(ligand.expected_formula) if ligand.expected_formula else None
+
+    if observed.get("H", 0) == 0 and (expected is None or expected.get("H", 0) > 0):
+        warning = (
+            f"WARNING [LIGAND_HYDROGENS_MISSING] Ligand {ligand.id} "
+            f"({residue.id.chain_id}:{residue.id.resname}:{residue.id.resid}) contains no "
+            "explicit hydrogen atoms."
+        )
+        error = (
+            f"ERROR [LIGAND_CHEMISTRY_UNRESOLVED] Ligand {ligand.id} cannot be sent to "
+            "AM1-BCC or QM charge derivation without an explicit, validated protonation "
+            "state. Add ligand hydrogens before running mdprep and set expected_formula; "
+            "mdprep will not guess ligand protonation."
+        )
+        raise LigandExtractionError(f"{warning}\n{error}")
+
+    warnings: list[str] = []
+    if expected is None:
+        warnings.append(
+            f"WARNING [LIGAND_FORMULA_UNVERIFIED] Ligand {ligand.id} contains explicit "
+            "hydrogens, but expected_formula was not supplied; mdprep cannot prove that "
+            "the ligand is completely protonated."
+        )
+        return warnings
+
+    if observed == expected:
+        return warnings
+
+    observed_heavy = Counter({key: value for key, value in observed.items() if key != "H"})
+    expected_heavy = Counter({key: value for key, value in expected.items() if key != "H"})
+    if observed_heavy == expected_heavy and observed.get("H", 0) < expected.get("H", 0):
+        missing = expected.get("H", 0) - observed.get("H", 0)
+        warning = (
+            f"WARNING [LIGAND_HYDROGENS_MISSING] Ligand {ligand.id} has "
+            f"{observed.get('H', 0)} explicit H atom(s), but expected_formula "
+            f"{ligand.expected_formula} requires {expected.get('H', 0)}; {missing} hydrogen "
+            "atom(s) are missing."
+        )
+        error = (
+            f"ERROR [LIGAND_CHEMISTRY_UNRESOLVED] Ligand {ligand.id} is only partially "
+            "hydrogenated. Add the missing ligand hydrogens before running mdprep; "
+            "automatic ligand protonation is intentionally unsupported."
+        )
+        raise LigandExtractionError(f"{warning}\n{error}")
+
+    raise LigandExtractionError(
+        f"ERROR [LIGAND_FORMULA_MISMATCH] Ligand {ligand.id} has observed formula "
+        f"{_format_formula(observed)}, but expected_formula is {ligand.expected_formula}. "
+        "Correct the input coordinates or the manifest; mdprep will not alter ligand "
+        "composition silently."
+    )
+
+
+def _parse_formula(formula: str) -> Counter[str]:
+    counts: Counter[str] = Counter()
+    position = 0
+    for match in _FORMULA_TOKEN.finditer(formula):
+        if match.start() != position:
+            raise LigandExtractionError(f"Invalid expected_formula: {formula}")
+        element, count_text = match.groups()
+        if element in counts:
+            raise LigandExtractionError(
+                f"Invalid expected_formula {formula}: element {element} appears more than once"
+            )
+        count = int(count_text) if count_text else 1
+        if count <= 0:
+            raise LigandExtractionError(
+                f"Invalid expected_formula {formula}: element counts must be positive"
+            )
+        counts[element] = count
+        position = match.end()
+    if position != len(formula) or not counts:
+        raise LigandExtractionError(f"Invalid expected_formula: {formula}")
+    return counts
+
+
+def _format_formula(counts: Counter[str]) -> str:
+    ordered = []
+    for element in ("C", "H"):
+        if element in counts:
+            ordered.append(element + (str(counts[element]) if counts[element] != 1 else ""))
+    for element in sorted(key for key in counts if key not in {"C", "H"}):
+        ordered.append(element + (str(counts[element]) if counts[element] != 1 else ""))
+    return "".join(ordered)
 
 
 def _ligand_conect_lines(input_path: Path, atoms: list) -> list[str]:

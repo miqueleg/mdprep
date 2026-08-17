@@ -79,6 +79,28 @@ def _write_csv(items: list[LigandWorkflowItem], path: Path) -> None:
 
 def _render_markdown(report: dict[str, Any]) -> str:
     lines = ["# Ligand Report", ""]
+    provisional_system = report.get("qmmesp_provisional_system")
+    if provisional_system:
+        lines.extend(
+            [
+                "## QMMESP provisional system",
+                "",
+                "- Provisional charge model: AM1-BCC for every configured ligand/cofactor",
+                f"- prmtop: `{provisional_system['prmtop_path']}`",
+                f"- inpcrd: `{provisional_system['inpcrd_path']}`",
+                f"- tleap input: `{provisional_system['script_path']}`",
+                f"- tleap log: `{provisional_system['tleap']['log_path']}`",
+                "",
+                "### Provisional ligands",
+                "",
+            ]
+        )
+        for provisional in report.get("qmmesp_provisional_ligands", []):
+            lines.append(
+                f"- `{provisional['ligand_id']}`: `{provisional['final_mol2_path']}` "
+                f"(charge method `{provisional['charge_method']}`)"
+            )
+        lines.append("")
     for item in report["ligands"]:
         lines.extend(
             [
@@ -108,6 +130,10 @@ def _render_markdown(report: dict[str, Any]) -> str:
                     f"  - Fitted charge sum: {qm['fit_result']['charge_sum_final']}",
                 ]
             )
+            if qm["fit_result"].get("calculation_type"):
+                lines.append(f"  - Calculation type: `{qm['fit_result']['calculation_type']}`")
+            if qm["fit_result"].get("embedding_operator"):
+                lines.append(f"  - Electrostatic embedding: `{qm['fit_result']['embedding_operator']}`")
             if qm["fit_result"].get("confirmation"):
                 lines.append(f"  - Interpretation: {qm['fit_result']['confirmation']}")
             if qm.get("embedding_summary"):

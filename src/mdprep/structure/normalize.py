@@ -15,7 +15,12 @@ from mdprep.structure.classify import (
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord
 from mdprep.structure.pdb import read_pdb
-from mdprep.structure.selectors import SelectorError, resolve_residue_selector
+from mdprep.structure.repair import (
+    StructureRepairError,
+    StructureRepairResult,
+    repair_structure,
+)
+from mdprep.structure.selectors import SelectorError, resolve_atom_selector, resolve_residue_selector
 
 
 class StructureNormalizationError(ValueError):
@@ -28,6 +33,14 @@ class NormalizedLigand:
     residue: dict[str, object]
 
 
+@dataclass(frozen=True)
+class NormalizedMetalIon:
+    site_id: str
+    element: str
+    charge: int
+    atom: dict[str, object]
+
+
 @dataclass
 class StructureNormalizationResult:
     input_path: Path
@@ -37,9 +50,11 @@ class StructureNormalizationResult:
     waters_kept: list[dict[str, object]] = field(default_factory=list)
     waters_removed: list[dict[str, object]] = field(default_factory=list)
     configured_ligands_kept: list[NormalizedLigand] = field(default_factory=list)
+    configured_metal_ions_kept: list[NormalizedMetalIon] = field(default_factory=list)
     unknown_heterogens_removed: list[dict[str, object]] = field(default_factory=list)
     unknown_heterogens_causing_failure: list[dict[str, object]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+    repair_result: StructureRepairResult | None = None
 
     def to_report_dict(self) -> dict[str, object]:
         normalized_summary = inspect_pdb_structure_from_structure(self.normalized_structure)
@@ -56,6 +71,15 @@ class StructureNormalizationResult:
             "configured_ligands_kept": [
                 {"id": ligand.ligand_id, **ligand.residue} for ligand in self.configured_ligands_kept
             ],
+            "configured_metal_ions_kept": [
+                {
+                    "site_id": metal.site_id,
+                    "element": metal.element,
+                    "charge": metal.charge,
+                    **metal.atom,
+                }
+                for metal in self.configured_metal_ions_kept
+            ],
             "unknown_heterogens_removed": self.unknown_heterogens_removed,
             "unknown_heterogens_causing_failure": self.unknown_heterogens_causing_failure,
             "histidines": _residue_dicts(self.input_summary.histidines),
@@ -63,6 +87,11 @@ class StructureNormalizationResult:
             "possible_disulfides": [
                 candidate.to_dict() for candidate in self.input_summary.possible_disulfides
             ],
+            "structure_repair": (
+                self.repair_result.to_dict()
+                if self.repair_result is not None
+                else None
+            ),
             "warnings": self.warnings,
         }
 
@@ -73,19 +102,49 @@ def normalize_structure_stage(
     output_path: str | Path | None = None,
 ) -> StructureNormalizationResult:
     input_path = Path(manifest.project.input_structure)
-    structure = read_pdb(input_path, altloc_policy=manifest.structure.altloc_policy)
     input_summary = inspect_pdb_structure(
         input_path,
         altloc_policy=manifest.structure.altloc_policy,
         disulfide_cutoff_angstrom=manifest.disulfides.detection_cutoff_angstrom,
     )
+    repair_result: StructureRepairResult | None = None
+    if manifest.structure.repair.backend != "none":
+        if output_path is None:
+            raise StructureNormalizationError(
+                "Structure repair requires an explicit normalization output path."
+            )
+        normalized_target = Path(output_path)
+        repair_path = normalized_target.with_name("00_structure_repaired.pdb")
+        try:
+            repair_result = repair_structure(manifest, output_path=repair_path)
+        except StructureRepairError as exc:
+            raise StructureNormalizationError(str(exc)) from exc
+        assert repair_result is not None
+        structure = repair_result.structure
+    else:
+        structure = read_pdb(
+            input_path,
+            altloc_policy=manifest.structure.altloc_policy,
+        )
 
     configured_ligands = _resolve_configured_ligands(structure, manifest)
+    configured_metals = _resolve_configured_metals(structure, manifest)
     _validate_disulfide_selectors(structure, manifest)
     configured_ligand_keys = {id(residue) for _, residue in configured_ligands}
+    configured_metal_residue_keys = {id(residue) for _, _, residue in configured_metals}
+    overlap = configured_ligand_keys & configured_metal_residue_keys
+    if overlap:
+        residues = [residue for residue in structure.residues if id(residue) in overlap]
+        formatted = ", ".join(_format_residue_for_error(residue) for residue in residues)
+        raise StructureNormalizationError(
+            "A residue cannot be configured as both a ligand and a metal ion: " + formatted
+        )
     likely_heterogens = [residue for residue in structure.residues if is_likely_ligand_or_cofactor(residue)]
     unknown_heterogens = [
-        residue for residue in likely_heterogens if id(residue) not in configured_ligand_keys
+        residue
+        for residue in likely_heterogens
+        if id(residue) not in configured_ligand_keys
+        and id(residue) not in configured_metal_residue_keys
     ]
 
     unknown_heterogen_dicts = _residue_dicts(unknown_heterogens)
@@ -93,7 +152,8 @@ def normalize_structure_stage(
         formatted = ", ".join(_format_residue_for_error(residue) for residue in unknown_heterogens)
         raise StructureNormalizationError(
             "Unknown heterogens are present but structure.remove_unknown_heterogens is false: "
-            f"{formatted}. Add them to ligands: or set structure.remove_unknown_heterogens: true."
+            f"{formatted}. Add them to ligands: for molecular heterogens or metals: for metal ions, "
+            "or set structure.remove_unknown_heterogens: true."
         )
 
     keep_residue_ids: set[int] = set()
@@ -112,6 +172,8 @@ def normalize_structure_stage(
                 waters_removed.append(residue)
         elif id(residue) in configured_ligand_keys:
             keep_residue_ids.add(id(residue))
+        elif id(residue) in configured_metal_residue_keys:
+            keep_residue_ids.add(id(residue))
         elif residue in unknown_heterogens:
             unknown_removed.append(residue)
         else:
@@ -129,9 +191,22 @@ def normalize_structure_stage(
         model_count=structure.model_count,
         used_model=structure.used_model,
         warnings=list(structure.warnings),
+        conect_bonds={
+            bond
+            for bond in structure.conect_bonds
+            if bond[0] in {atom.serial for atom in filtered_atoms}
+            and bond[1] in {atom.serial for atom in filtered_atoms}
+        },
+        ter_after_serials={
+            serial
+            for serial in structure.ter_after_serials
+            if serial in {atom.serial for atom in filtered_atoms}
+        },
     )
 
     warnings = list(structure.warnings)
+    if repair_result is not None:
+        warnings.extend(repair_result.warnings)
     if manifest.structure.remove_input_hydrogens:
         warnings.append(
             "structure.remove_input_hydrogens is not applied during the structure-only stage."
@@ -148,11 +223,25 @@ def normalize_structure_stage(
             NormalizedLigand(ligand_id=ligand_id, residue=_residue_dict(residue))
             for ligand_id, residue in configured_ligands
         ],
+        configured_metal_ions_kept=[
+            NormalizedMetalIon(
+                site_id=site_id,
+                element=element,
+                charge=charge,
+                atom={
+                    **residue.id.to_dict(),
+                    "atom_name": atom.name,
+                    "atom_serial": atom.serial,
+                },
+            )
+            for site_id, (element, charge, atom), residue in configured_metals
+        ],
         unknown_heterogens_removed=_residue_dicts(unknown_removed),
         unknown_heterogens_causing_failure=unknown_heterogen_dicts
         if unknown_heterogens and not manifest.structure.remove_unknown_heterogens
         else [],
         warnings=warnings,
+        repair_result=repair_result,
     )
 
 
@@ -195,6 +284,41 @@ def _resolve_configured_ligands(
                 f"Ligand {ligand.id!r} selector did not resolve exactly one residue: {exc}"
             ) from exc
         resolved.append((ligand.id, residue))
+    return resolved
+
+
+def _resolve_configured_metals(
+    structure: PdbStructure,
+    manifest: ManifestConfig,
+) -> list[tuple[str, tuple[str, int, AtomRecord], ResidueRecord]]:
+    resolved: list[tuple[str, tuple[str, int, AtomRecord], ResidueRecord]] = []
+    seen_atoms: set[int] = set()
+    for site in manifest.metals:
+        for ion in site.ions:
+            try:
+                atom = resolve_atom_selector(structure, ion.selector.model_dump())
+                residue = resolve_residue_selector(structure, ion.selector.model_dump())
+            except SelectorError as exc:
+                raise StructureNormalizationError(
+                    f"Metal site {site.id!r} ion selector did not resolve exactly one atom: {exc}"
+                ) from exc
+            if id(atom) in seen_atoms:
+                raise StructureNormalizationError(
+                    f"Metal atom {atom.atom_identity} is configured more than once."
+                )
+            seen_atoms.add(id(atom))
+            observed_element = (atom.element or "").capitalize()
+            if observed_element and observed_element != ion.element:
+                raise StructureNormalizationError(
+                    f"Metal site {site.id!r} declares element {ion.element} for "
+                    f"{atom.atom_identity}, but the PDB element is {observed_element}."
+                )
+            if len(residue.atoms) != 1:
+                raise StructureNormalizationError(
+                    f"Metal ion residue {residue.id.display()} contains {len(residue.atoms)} atoms; "
+                    "each configured metal ion must occupy a one-atom residue."
+                )
+            resolved.append((site.id, (ion.element, ion.charge, atom), residue))
     return resolved
 
 

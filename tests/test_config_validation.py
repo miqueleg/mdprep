@@ -64,12 +64,61 @@ def base_manifest() -> dict:
     }
 
 
+def qmmesp_ligand() -> dict:
+    return {
+        "id": "SUB_501",
+        "selector": {"chain": "B", "resname": "SUB", "resid": 501, "icode": None},
+        "net_charge": 0,
+        "multiplicity": 1,
+        "atom_types": "gaff2",
+        "charge_method": "qmmesp_pyscf",
+        "user_mol2": None,
+        "qmmesp": {"qm_engine": "pyscf", "method": "HF", "basis": "STO-3G"},
+    }
+
+
 def test_invalid_forcefield_fails():
     data = base_manifest()
     data["protein"]["forcefield"] = "ff99SB"
 
     with pytest.raises(ValidationError):
         ManifestConfig.model_validate(data)
+
+
+def test_pdbfixer_repair_requires_explicit_sequence_for_missing_residues():
+    data = base_manifest()
+    data["structure"]["repair"] = {
+        "backend": "pdbfixer",
+        "add_missing_heavy_atoms": True,
+        "missing_residues": [
+            {"chain": "A", "resname": "GLN", "resid": 54, "icode": None}
+        ],
+    }
+
+    with pytest.raises(ValidationError) as excinfo:
+        ManifestConfig.model_validate(data)
+
+    assert "requires sequence_source" in str(excinfo.value)
+
+
+def test_explicit_pdbfixer_repair_configuration_validates():
+    data = base_manifest()
+    data["structure"]["repair"] = {
+        "backend": "pdbfixer",
+        "sequence_source": "data/original.pdb",
+        "add_missing_heavy_atoms": True,
+        "missing_residues": [
+            {"chain": "A", "resname": "GLN", "resid": 54, "icode": None}
+        ],
+        "random_seed": 1234,
+        "platform": "Reference",
+    }
+
+    manifest = ManifestConfig.model_validate(data)
+
+    assert manifest.structure.repair.backend == "pdbfixer"
+    assert manifest.structure.repair.missing_residues[0].resid == 54
+    assert manifest.structure.repair.random_seed == 1234
 
 
 def test_invalid_ligand_charge_method_fails():
@@ -212,3 +261,52 @@ def test_qmmesp_rejects_self_ligand_embedding():
         ManifestConfig.model_validate(data)
 
     assert "target ligand self-embedding is not allowed" in str(excinfo.value)
+
+
+def test_qmmesp_defaults_to_full_embedding_and_canonical_resp():
+    data = base_manifest()
+    data["ligands"] = [qmmesp_ligand()]
+
+    manifest = ManifestConfig.model_validate(data)
+    qmmesp = manifest.ligands[0].qmmesp
+
+    assert qmmesp is not None
+    assert qmmesp.embedding_cutoff_angstrom is None
+    assert qmmesp.grid.type == "merz_kollman"
+    assert qmmesp.grid.vdw_scale_factors == [1.4, 1.6, 1.8, 2.0]
+    assert qmmesp.grid.exclude_inside_vdw_scale == 1.4
+    assert qmmesp.resp_fitting.backend == "ambertools"
+    assert qmmesp.resp_fitting.stage_2 is True
+
+
+def test_qmmesp_rejects_simplified_resp_backend():
+    data = base_manifest()
+    ligand = qmmesp_ligand()
+    ligand["qmmesp"]["resp_fitting"] = {"backend": "native", "stage_2": True}
+    data["ligands"] = [ligand]
+
+    with pytest.raises(ValidationError) as excinfo:
+        ManifestConfig.model_validate(data)
+
+    assert "ambertools" in str(excinfo.value)
+
+
+@pytest.mark.parametrize(
+    ("updates", "expected"),
+    [
+        ({"net_charge": 1, "qmmesp": {"scf_charge": 0}}, "must equal ligand net_charge"),
+        ({"multiplicity": 2, "qmmesp": {"scf_spin": 0}}, "must equal multiplicity - 1"),
+    ],
+)
+def test_qmmesp_rejects_inconsistent_scf_state(updates, expected):
+    data = base_manifest()
+    ligand = qmmesp_ligand()
+    qmmesp_updates = updates["qmmesp"]
+    ligand.update({key: value for key, value in updates.items() if key != "qmmesp"})
+    ligand["qmmesp"].update(qmmesp_updates)
+    data["ligands"] = [ligand]
+
+    with pytest.raises(ValidationError) as excinfo:
+        ManifestConfig.model_validate(data)
+
+    assert expected in str(excinfo.value)

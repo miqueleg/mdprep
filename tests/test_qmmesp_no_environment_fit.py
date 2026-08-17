@@ -8,9 +8,12 @@ import pytest
 
 from mdprep.ambertools.mol2 import read_mol2
 from mdprep.charges.esp_grid import EspGrid
-from mdprep.charges.resp_fit import RespFitResult
 from mdprep.ligands.extract import extract_ligand
-from mdprep.ligands.pyscf_charges import QMMESP_CONFIRMATION, derive_pyscf_charges
+from mdprep.ligands.pyscf_charges import (
+    QMMESP_CONFIRMATION,
+    LigandPySCFChargeError,
+    derive_pyscf_charges,
+)
 from mdprep.qm.point_charges import PointCharge, PointChargeSelection
 from mdprep.structure.normalize import normalize_structure_stage
 from tests.test_ligand_workflow_mocked import qmmesp_block
@@ -57,6 +60,25 @@ def embedded_point_charges():
     )
 
 
+def fake_amber_resp_result():
+    charges = np.asarray([0.25, -0.25], dtype=float)
+    report = {
+        "charges": charges.tolist(),
+        "charge_sum_before_correction": 0.0,
+        "charge_correction_applied": 0.0,
+        "charge_sum_final": 0.0,
+        "rms_error": 0.0,
+        "relative_rms_error": 0.0,
+        "max_error": 0.0,
+        "iterations": 2,
+        "converged": True,
+        "fitting_mode": "ambertools_two_stage_resp",
+        "commands": [],
+        "warnings": [],
+    }
+    return SimpleNamespace(charges=charges, warnings=[], to_dict=lambda: report)
+
+
 def test_mm_potential_is_not_added_to_fitted_esp_target(monkeypatch, tmp_path):
     extracted = extracted_qmmesp_ligand(tmp_path)
     point_charges = embedded_point_charges()
@@ -84,27 +106,15 @@ def test_mm_potential_is_not_added_to_fitted_esp_target(monkeypatch, tmp_path):
     def fake_evaluate_ligand_esp(**kwargs):
         return np.asarray([1.0, 2.0, 3.0], dtype=float)
 
-    def fake_fit_resp_charges(**kwargs):
-        captured["fit_esp_values"] = kwargs["esp_values"].copy()
-        captured["fit_atom_count"] = len(kwargs["atom_coordinates"])
-        return RespFitResult(
-            charges=np.asarray([0.25, -0.25], dtype=float),
-            charge_sum_before_correction=0.0,
-            charge_correction_applied=0.0,
-            charge_sum_final=0.0,
-            rms_error=0.0,
-            relative_rms_error=0.0,
-            max_error=0.0,
-            iterations=1,
-            converged=True,
-            fitting_mode="mock",
-            warnings=[],
-        )
+    def fake_run_amber_resp_fit(**kwargs):
+        captured["fit_esp_values"] = kwargs["esp_values_au"].copy()
+        captured["fit_atom_count"] = len(kwargs["atom_coordinates_bohr"])
+        return fake_amber_resp_result()
 
-    monkeypatch.setattr("mdprep.ligands.pyscf_charges.generate_connolly_grid", fake_grid)
+    monkeypatch.setattr("mdprep.ligands.pyscf_charges.generate_merz_kollman_grid", fake_grid)
     monkeypatch.setattr("mdprep.ligands.pyscf_charges.run_pyscf_scf", fake_run_pyscf_scf)
     monkeypatch.setattr("mdprep.ligands.pyscf_charges.evaluate_ligand_esp", fake_evaluate_ligand_esp)
-    monkeypatch.setattr("mdprep.ligands.pyscf_charges.fit_resp_charges", fake_fit_resp_charges)
+    monkeypatch.setattr("mdprep.ligands.pyscf_charges.run_amber_resp_fit", fake_run_amber_resp_fit)
 
     result = derive_pyscf_charges(
         extracted=extracted,
@@ -119,8 +129,18 @@ def test_mm_potential_is_not_added_to_fitted_esp_target(monkeypatch, tmp_path):
     assert captured["fit_esp_values"] == pytest.approx([1.0, 2.0, 3.0])
     assert captured["fit_esp_values"] != pytest.approx([101.0, 102.0, 103.0])
     assert captured["fit_atom_count"] == len(extracted.atoms)
+    assert result.fit_result["calculation_type"] == "electrostatically_embedded_qm_mm_single_point"
+    assert result.fit_result["electrostatic_embedding_applied"] is True
+    assert result.fit_result["embedding_operator"] == "pyscf.qmmm.mm_charge"
+    assert result.fit_result["mm_point_charge_count"] == 1
+    assert result.fit_result["mm_point_charge_potential_in_scf_hamiltonian"] is True
     assert result.fit_result["external_mm_potential_included_in_fit"] is False
     assert result.fit_result["confirmation"] == QMMESP_CONFIRMATION
+    pyscf_input = json.loads((result.qm_dir / "pyscf_input.json").read_text(encoding="utf-8"))
+    assert pyscf_input["electrostatic_embedding"] is True
+    assert pyscf_input["embedding_operator"] == "pyscf.qmmm.mm_charge"
+    assert pyscf_input["mm_point_charge_potential_in_scf_hamiltonian"] is True
+    assert pyscf_input["mm_bonded_and_lennard_jones_terms_in_scf"] is False
 
 
 def test_fitted_charge_centers_are_ligand_atoms_only(monkeypatch, tmp_path):
@@ -128,7 +148,7 @@ def test_fitted_charge_centers_are_ligand_atoms_only(monkeypatch, tmp_path):
     point_charges = embedded_point_charges()
 
     monkeypatch.setattr(
-        "mdprep.ligands.pyscf_charges.generate_connolly_grid",
+        "mdprep.ligands.pyscf_charges.generate_merz_kollman_grid",
         lambda **kwargs: EspGrid(
             points=np.asarray([[8.0, 5.0, 5.0], [5.0, 8.0, 5.0], [5.0, 5.0, 8.0]], dtype=float),
             atom_indices=[0, 0, 1],
@@ -151,20 +171,8 @@ def test_fitted_charge_centers_are_ligand_atoms_only(monkeypatch, tmp_path):
         lambda **kwargs: np.asarray([1.0, 2.0, 3.0], dtype=float),
     )
     monkeypatch.setattr(
-        "mdprep.ligands.pyscf_charges.fit_resp_charges",
-        lambda **kwargs: RespFitResult(
-            charges=np.asarray([0.25, -0.25], dtype=float),
-            charge_sum_before_correction=0.0,
-            charge_correction_applied=0.0,
-            charge_sum_final=0.0,
-            rms_error=0.0,
-            relative_rms_error=0.0,
-            max_error=0.0,
-            iterations=1,
-            converged=True,
-            fitting_mode="mock",
-            warnings=[],
-        ),
+        "mdprep.ligands.pyscf_charges.run_amber_resp_fit",
+        lambda **kwargs: fake_amber_resp_result(),
     )
 
     result = derive_pyscf_charges(
@@ -194,7 +202,7 @@ def test_gas_resp_path_has_no_environment(monkeypatch, tmp_path):
     captured = {}
 
     monkeypatch.setattr(
-        "mdprep.ligands.pyscf_charges.generate_connolly_grid",
+        "mdprep.ligands.pyscf_charges.generate_merz_kollman_grid",
         lambda **kwargs: EspGrid(
             points=np.asarray([[8.0, 5.0, 5.0], [5.0, 8.0, 5.0], [5.0, 5.0, 8.0]], dtype=float),
             atom_indices=[0, 0, 1],
@@ -220,20 +228,8 @@ def test_gas_resp_path_has_no_environment(monkeypatch, tmp_path):
         lambda **kwargs: np.asarray([1.0, 2.0, 3.0], dtype=float),
     )
     monkeypatch.setattr(
-        "mdprep.ligands.pyscf_charges.fit_resp_charges",
-        lambda **kwargs: RespFitResult(
-            charges=np.asarray([0.25, -0.25], dtype=float),
-            charge_sum_before_correction=0.0,
-            charge_correction_applied=0.0,
-            charge_sum_final=0.0,
-            rms_error=0.0,
-            relative_rms_error=0.0,
-            max_error=0.0,
-            iterations=1,
-            converged=True,
-            fitting_mode="mock",
-            warnings=[],
-        ),
+        "mdprep.ligands.pyscf_charges.run_amber_resp_fit",
+        lambda **kwargs: fake_amber_resp_result(),
     )
 
     result = derive_pyscf_charges(
@@ -248,5 +244,31 @@ def test_gas_resp_path_has_no_environment(monkeypatch, tmp_path):
     assert captured["mm_charges"] is None
     assert captured["mm_coordinates"] is None
     assert result.embedding_summary is None
+    assert result.fit_result["electrostatic_embedding_applied"] is False
+    assert result.fit_result["embedding_operator"] is None
     assert result.fit_result["confirmation"] == "Gas-phase ligand ESP fit; no MM point charges were used."
     assert read_mol2(result.charged_mol2_path).total_charge == pytest.approx(0.0, abs=1.0e-6)
+
+
+def test_qmmesp_rejects_an_empty_embedding_environment(tmp_path):
+    extracted = extracted_qmmesp_ligand(tmp_path)
+    empty = PointChargeSelection(
+        target_atom_indices=[20, 21],
+        point_charges=[],
+        total_before_cutoff=10,
+        total_after_cutoff=0,
+        net_embedding_charge=0.0,
+        min_distance=None,
+        max_distance=None,
+        categories={},
+    )
+
+    with pytest.raises(LigandPySCFChargeError, match="zero MM point charges"):
+        derive_pyscf_charges(
+            extracted=extracted,
+            provisional_mol2_path="tests/data/ligands/ligand_sub.good.mol2",
+            output_mol2_path=tmp_path / "sub.empty.mol2",
+            output_dir=tmp_path,
+            method_name="qmmesp_pyscf",
+            point_charges=empty,
+        )

@@ -1,2 +1,1 @@
-"""ESP-grid and RESP-like charge fitting helpers."""
-
+"""Deterministic ESP-grid helpers."""

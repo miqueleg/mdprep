@@ -48,10 +48,31 @@ def _render_markdown(report: dict[str, Any]) -> str:
             )
     else:
         lines.append("- None")
+    lines.extend(["", "### MCPB joint-RESP ligands", ""])
+    mcpb_resp_ligands = report.get("mcpb_resp_ligands", [])
+    if mcpb_resp_ligands:
+        for ligand in mcpb_resp_ligands:
+            lines.append(
+                f"- `{ligand['ligand_id']}`: final template "
+                f"`{ligand['final_mol2_path']}` (provisional mol2 excluded from "
+                "the final tLEAP ligand list)"
+            )
+    else:
+        lines.append("- None")
     lines.extend(["", "## Disulfide Bonds", ""])
     bonds = report.get("disulfide_bond_commands", [])
     if bonds:
         lines.extend(f"- `{bond['command']}`" for bond in bonds)
+    else:
+        lines.append("- None")
+    lines.extend(["", "## 12-6-4 Post-processing", ""])
+    c4_runs = report.get("c4_postprocessing", [])
+    if c4_runs:
+        for run in c4_runs:
+            lines.append(
+                f"- `{run['output_prmtop']}`: atom types "
+                + ", ".join(f"`{atom_type}`" for atom_type in run["atom_types"])
+            )
     else:
         lines.append("- None")
     lines.extend(

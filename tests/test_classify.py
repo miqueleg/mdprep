@@ -31,6 +31,21 @@ def test_hetatm_non_water_residues_are_likely_ligands():
     assert [residue.id.resname for residue in ligands] == ["SUB", "COF"]
 
 
+def test_hetatm_proline_is_a_ligand_not_a_polymer_residue(tmp_path):
+    path = tmp_path / "free_proline.pdb"
+    path.write_text(
+        "HETATM    1  N   PRO A 502       0.000   0.000   0.000  1.00  0.00           N  \n"
+        "HETATM    2  CA  PRO A 502       1.450   0.000   0.000  1.00  0.00           C  \n"
+        "END\n",
+        encoding="utf-8",
+    )
+    residue = read_pdb(path).residues[0]
+
+    assert not is_standard_protein_residue(residue)
+    assert is_likely_ligand_or_cofactor(residue)
+    assert not is_titratable_residue(residue)
+
+
 def test_atom_record_nonstandard_residue_is_likely_ligand():
     structure = read_pdb(DATA / "protein_atom_record_ligand_blank_chain.pdb")
     ligands = [residue for residue in structure.residues if is_likely_ligand_or_cofactor(residue)]
