@@ -132,6 +132,23 @@ Relative paths are resolved from the manifest directory. Unknown heterogens
 are not deleted or guessed: configure them under `ligands` or `metals`, or
 explicitly request their removal.
 
+For a guided 3D workflow, upload
+[`examples/mdprep_interactive_colab.ipynb`](examples/mdprep_interactive_colab.ipynb)
+to Google Colab. It accepts an RCSB PDB ID or uploaded PDB, requires review of
+all structural and chemistry decisions, creates a validated manifest, and can
+either download a portable input bundle or run mdprep in Colab. BesD PDB 7JSD
+is the default structural example; charges, spin states, and metal chemistry
+remain explicit user decisions. For bonded MCPB preparation, a dedicated cell
+installs the pinned official g-xTB Linux build and accepts it only after
+checksum verification and a successful `--gxtb --hess` smoke calculation. The
+guided metal workflow supports one explicitly bonded, single-chain MCPB site
+and can select either that g-xTB Hessian or PySCF B3LYP/6-31G*; every
+coordination bond remains explicitly selected. The notebook derives the MCPB
+small/large-model charge and multiplicity and the complete QM-region
+multiplicity from the reviewed component electronic states, displays the
+calculation, and refuses ambiguous multi-open-shell spin coupling rather than
+guessing it. All multi-selection fields use comma-separated values.
+
 ## Common workflows
 
 Generate a starter manifest using PropKa and ff19SB/OPC:
@@ -176,6 +193,7 @@ specified in steps in the manifest.
 | Metal centers and MCPB.py | [Metal centers](docs/metals.md) | `examples/08_nonbonded_zinc_1264.yaml`, `09_bonded_zinc_mcpb_prepare.yaml` |
 | Active-site QM/MM refinement | [QM/MM refinement](docs/qmmm_refinement.md) | `examples/10_qmmm_refinement_ash.yaml` |
 | Roe–Brooks OpenMM MD | [Molecular dynamics](docs/molecular_dynamics.md) | `examples/15_roe_brooks_openmm.yaml` |
+| Guided Colab builder | [Colab example notes](examples/README.md) | `examples/mdprep_interactive_colab.ipynb` |
 | Complete Fe(III) workflow | [7E07 tutorial](examples/tutorials/7E07_bonded_fe3/README.md) | `examples/tutorials/7E07_bonded_fe3/system.yaml` |
 
 All public example manifests are schema-validated in the test suite.
