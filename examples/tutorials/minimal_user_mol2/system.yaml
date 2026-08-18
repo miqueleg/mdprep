@@ -44,6 +44,7 @@ ligands:
       icode: null
     net_charge: 0
     multiplicity: 1
+    expected_formula: CO
     atom_types: gaff2
     charge_method: user_mol2
     user_mol2: ligand.mol2

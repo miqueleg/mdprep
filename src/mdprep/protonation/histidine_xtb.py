@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from itertools import chain
 import json
 from pathlib import Path
+import shutil
 
 from mdprep.config.models import ManifestConfig
 from mdprep.protonation.histidine_geometry import (
@@ -115,28 +116,40 @@ def select_histidine_tautomer(
     except HistidineGeometryError as exc:
         raise HistidineXtbError(str(exc)) from exc
 
-    hid_stdout = hist_dir / "HID_xtb_stdout.txt"
-    hie_stdout = hist_dir / "HIE_xtb_stdout.txt"
-    hid_stderr = hist_dir / "HID_xtb_stderr.txt"
-    hie_stderr = hist_dir / "HIE_xtb_stderr.txt"
+    hid_run_dir, hid_run_xyz, hid_run_input = _prepare_isolated_xtb_work_dir(
+        hist_dir,
+        tautomer="HID",
+        xyz_path=hid_xyz,
+        input_path=hid_input,
+    )
+    hie_run_dir, hie_run_xyz, hie_run_input = _prepare_isolated_xtb_work_dir(
+        hist_dir,
+        tautomer="HIE",
+        xyz_path=hie_xyz,
+        input_path=hie_input,
+    )
+    hid_stdout = hid_run_dir / "HID_xtb_stdout.txt"
+    hie_stdout = hie_run_dir / "HIE_xtb_stdout.txt"
+    hid_stderr = hid_run_dir / "HID_xtb_stderr.txt"
+    hie_stderr = hie_run_dir / "HIE_xtb_stderr.txt"
     try:
         hid_run = run_xtb(
             config=config,
-            xyz_path=hid_xyz,
-            work_dir=hist_dir,
+            xyz_path=hid_run_xyz,
+            work_dir=hid_run_dir,
             cluster_charge=cluster_charge,
             stdout_path=hid_stdout,
             stderr_path=hid_stderr,
-            input_path=hid_input if config.mode == "opt" and hid_model.fixed_atom_indices else None,
+            input_path=hid_run_input if config.mode == "opt" and hid_model.fixed_atom_indices else None,
         )
         hie_run = run_xtb(
             config=config,
-            xyz_path=hie_xyz,
-            work_dir=hist_dir,
+            xyz_path=hie_run_xyz,
+            work_dir=hie_run_dir,
             cluster_charge=cluster_charge,
             stdout_path=hie_stdout,
             stderr_path=hie_stderr,
-            input_path=hie_input if config.mode == "opt" and hie_model.fixed_atom_indices else None,
+            input_path=hie_run_input if config.mode == "opt" and hie_model.fixed_atom_indices else None,
         )
         hid_energy = parse_xtb_energy_file(hid_stdout)
         hie_energy = parse_xtb_energy_file(hie_stdout)
@@ -179,6 +192,10 @@ def select_histidine_tautomer(
         "HIE_element_counts": _element_counts(hie_model.atoms),
         "HID_min_interatomic_distance": _min_interatomic_distance(hid_model.atoms),
         "HIE_min_interatomic_distance": _min_interatomic_distance(hie_model.atoms),
+        "tautomer_work_directories": {
+            "HID": str(hid_run_dir),
+            "HIE": str(hie_run_dir),
+        },
         "temporary_water_hydrogens_for_xtb_only": {
             "hydrogens_added": selection.temporary_water_hydrogens_added,
             "waters_modified": selection.waters_modified_for_xtb_only,
@@ -194,6 +211,25 @@ def select_histidine_tautomer(
         encoding="utf-8",
     )
     return selection
+
+
+def _prepare_isolated_xtb_work_dir(
+    histidine_dir: Path,
+    *,
+    tautomer: str,
+    xyz_path: Path,
+    input_path: Path,
+) -> tuple[Path, Path, Path]:
+    """Create a clean xTB directory so restart files cannot cross-contaminate trials."""
+    run_dir = histidine_dir / tautomer
+    if run_dir.exists():
+        shutil.rmtree(run_dir)
+    run_dir.mkdir(parents=True)
+    run_xyz = run_dir / xyz_path.name
+    run_input = run_dir / input_path.name
+    shutil.copyfile(xyz_path, run_xyz)
+    shutil.copyfile(input_path, run_input)
+    return run_dir, run_xyz, run_input
 
 
 def build_histidine_cluster(

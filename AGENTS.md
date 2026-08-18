@@ -54,19 +54,19 @@ preparation.
 - All user-facing features need tests and docs.
 - All example YAML files must validate in tests.
 
-## Current v0.1 Limits
+## Current v0.2 Limits
 
 Do not add new scientific features without a focused task, tests, examples
 where practical, and documentation.
 
-Explicitly unsupported for v0.1:
+Explicitly unsupported for v0.2:
 
 - noncanonical amino acids inside peptide chains
 - covalent ligands
-- bonded metal centers
-- MCPB.py-like metal models
 - ORCA backend
 - Multiwfn dependency
+- multiple independent bonded MCPB sites
+- multi-chain MCPB protein inputs
 
 ## Required Checks
 

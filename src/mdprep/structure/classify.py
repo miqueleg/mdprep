@@ -59,7 +59,13 @@ HISTIDINE_RESIDUES = {"HIS", "HID", "HIE", "HIP"}
 
 
 def is_standard_protein_residue(residue: ResidueRecord) -> bool:
-    return residue.id.resname in STANDARD_PROTEIN_RESIDUES
+    # Residue names alone are insufficient: free proline substrates and other
+    # amino-acid-like ligands are valid HETATM residues.  Polymer identity is
+    # carried by ATOM records (and preserved TER boundaries).
+    return (
+        residue.id.resname in STANDARD_PROTEIN_RESIDUES
+        and "ATOM" in residue.record_names
+    )
 
 
 def is_water_residue(residue: ResidueRecord) -> bool:
@@ -67,11 +73,11 @@ def is_water_residue(residue: ResidueRecord) -> bool:
 
 
 def is_histidine(residue: ResidueRecord) -> bool:
-    return residue.id.resname in HISTIDINE_RESIDUES
+    return is_standard_protein_residue(residue) and residue.id.resname in HISTIDINE_RESIDUES
 
 
 def is_titratable_residue(residue: ResidueRecord) -> bool:
-    return residue.id.resname in TITRATABLE_RESIDUES
+    return is_standard_protein_residue(residue) and residue.id.resname in TITRATABLE_RESIDUES
 
 
 def is_nonstandard_nonwater_residue(residue: ResidueRecord) -> bool:

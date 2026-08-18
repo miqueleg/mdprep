@@ -4,15 +4,17 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from importlib import import_module
+from importlib.resources import as_file, files
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 from rich.console import Console
 from rich.table import Table
 
 import mdprep
-from mdprep.ambertools.mol2 import read_mol2
-from mdprep.charges.esp_grid import generate_connolly_grid
-from mdprep.charges.resp_fit import fit_resp_charges
+from mdprep.ambertools.mol2 import Mol2File, read_mol2
+from mdprep.ambertools.resp import write_amber_esp
+from mdprep.charges.esp_grid import generate_merz_kollman_grid
 from mdprep.config.loader import load_manifest
 from mdprep.external.discovery import optional_executable_report
 from mdprep.leap.forcefields import protein_leaprc, water_box, water_leaprc
@@ -22,7 +24,16 @@ from mdprep.validation.parmed_check import parmed_available
 import numpy as np
 
 
-OPTIONAL_EXECUTABLES = ["tleap", "antechamber", "parmchk2", "propka3", "propka", "xtb"]
+OPTIONAL_EXECUTABLES = [
+    "tleap",
+    "antechamber",
+    "parmchk2",
+    "respgen",
+    "resp",
+    "propka3",
+    "propka",
+    "xtb",
+]
 
 
 @dataclass(frozen=True)
@@ -31,7 +42,7 @@ class SelftestSummary:
     checked_examples: int
 
 
-def _project_root() -> Path:
+def _project_root() -> Path | None:
     candidates = [
         Path.cwd(),
         Path(__file__).resolve().parents[3],
@@ -39,7 +50,36 @@ def _project_root() -> Path:
     for candidate in candidates:
         if (candidate / "examples").is_dir():
             return candidate
-    return Path.cwd()
+    return None
+
+
+def _validate_example_manifests(root: Path | None) -> tuple[int, list[str]]:
+    if root is not None:
+        examples = sorted((root / "examples").glob("*.yaml"))
+        errors: list[str] = []
+        for example in examples:
+            try:
+                load_manifest(example)
+            except Exception as exc:
+                errors.append(f"{example.name}: {exc}")
+        return len(examples), errors
+
+    resource = files("mdprep").joinpath("_selftest_data/basic_protein.yaml")
+    with as_file(resource) as example:
+        try:
+            load_manifest(example)
+        except Exception as exc:
+            return 1, [f"{example.name}: {exc}"]
+    return 1, []
+
+
+def _read_mol2_fixture(root: Path | None) -> Mol2File:
+    if root is not None:
+        return read_mol2(root / "tests" / "data" / "ligands" / "ligand_sub.good.mol2")
+
+    resource = files("mdprep").joinpath("_selftest_data/ligand_sub.mol2")
+    with as_file(resource) as fixture:
+        return read_mol2(fixture)
 
 
 def _blocked_tokens() -> tuple[str, ...]:
@@ -65,7 +105,6 @@ def _source_has_blocked_tokens() -> list[Path]:
 def run_selftest(*, quick: bool = False, console: Console | None = None) -> SelftestSummary:
     out = console or Console()
     root = _project_root()
-    examples = sorted((root / "examples").glob("*.yaml"))
 
     out.print(f"mdprep {mdprep.__version__}")
     out.print("Mode: quick" if quick else "Mode: standard")
@@ -80,17 +119,12 @@ def run_selftest(*, quick: bool = False, console: Console | None = None) -> Self
     except Exception as exc:
         checks.append(("Python imports", False, str(exc)))
 
-    example_errors = []
-    for example in examples:
-        try:
-            load_manifest(example)
-        except Exception as exc:
-            example_errors.append(f"{example.name}: {exc}")
+    example_count, example_errors = _validate_example_manifests(root)
     checks.append(
         (
             "Example manifests",
-            not example_errors and bool(examples),
-            f"{len(examples)} validated" if not example_errors else "; ".join(example_errors),
+            not example_errors and example_count > 0,
+            f"{example_count} validated" if not example_errors else "; ".join(example_errors),
         )
     )
 
@@ -104,7 +138,7 @@ def run_selftest(*, quick: bool = False, console: Console | None = None) -> Self
     )
 
     try:
-        mol2 = read_mol2(root / "tests" / "data" / "ligands" / "ligand_sub.good.mol2")
+        mol2 = _read_mol2_fixture(root)
         checks.append(("mol2 parser fixture", len(mol2.atoms) == 2, f"{len(mol2.atoms)} atoms"))
     except Exception as exc:
         checks.append(("mol2 parser fixture", False, str(exc)))
@@ -125,20 +159,20 @@ def run_selftest(*, quick: bool = False, console: Console | None = None) -> Self
 
     try:
         coords = np.asarray([[0.0, 0.0, 0.0], [0.96, 0.0, 0.0]], dtype=float)
-        grid_a = generate_connolly_grid(
+        grid_a = generate_merz_kollman_grid(
             elements=["O", "H"],
             coordinates=coords,
             vdw_scale_factors=[1.4],
-            points_per_atom_per_shell=8,
-            exclude_inside_vdw_scale=1.1,
+            point_density_per_square_angstrom=0.25,
+            exclude_inside_vdw_scale=1.4,
             max_points=100,
         )
-        grid_b = generate_connolly_grid(
+        grid_b = generate_merz_kollman_grid(
             elements=["O", "H"],
             coordinates=coords,
             vdw_scale_factors=[1.4],
-            points_per_atom_per_shell=8,
-            exclude_inside_vdw_scale=1.1,
+            point_density_per_square_angstrom=0.25,
+            exclude_inside_vdw_scale=1.4,
             max_points=100,
         )
         checks.append(("ESP grid determinism", bool(np.allclose(grid_a.points, grid_b.points)), f"{len(grid_a.points)} points"))
@@ -147,19 +181,23 @@ def run_selftest(*, quick: bool = False, console: Console | None = None) -> Self
 
     try:
         atom_coords = np.asarray([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=float)
-        grid_coords = np.asarray([[0.0, 3.0, 0.0], [2.0, 3.0, 0.0], [1.0, 3.5, 0.0], [1.0, -3.0, 0.0]], dtype=float)
-        true_charges = np.asarray([-0.3, 0.3], dtype=float)
-        esp = (1.0 / np.linalg.norm(grid_coords[:, None, :] - atom_coords[None, :, :], axis=2)) @ true_charges
-        fit = fit_resp_charges(
-            atom_coordinates=atom_coords,
-            grid_coordinates=grid_coords,
-            esp_values=esp,
-            total_charge=0.0,
-            restraint="none",
+        grid_coords = np.asarray(
+            [[0.0, 3.0, 0.0], [2.0, 3.0, 0.0], [1.0, 3.5, 0.0], [1.0, -3.0, 0.0]],
+            dtype=float,
         )
-        checks.append(("Native RESP/ESP fit", bool(abs(fit.charge_sum_final) < 1.0e-8), f"rms={fit.rms_error:.3e}"))
+        esp = np.asarray([-0.1, 0.1, 0.0, 0.0], dtype=float)
+        with TemporaryDirectory(prefix="mdprep-selftest-") as temporary_dir:
+            path = write_amber_esp(
+                atom_coordinates_bohr=atom_coords,
+                grid_coordinates_bohr=grid_coords,
+                esp_values_au=esp,
+                path=Path(temporary_dir) / "test.esp",
+            )
+            lines = path.read_text(encoding="ascii").splitlines()
+        fixed_width_ok = lines[0] == "    2    4" and len(lines[1]) == 65 and len(lines[3]) == 65
+        checks.append(("Amber RESP ESP format", fixed_width_ok, "2 atoms, 4 grid points"))
     except Exception as exc:
-        checks.append(("Native RESP/ESP fit", False, str(exc)))
+        checks.append(("Amber RESP ESP format", False, str(exc)))
 
     table = Table(title="mdprep self-test")
     table.add_column("Check")
@@ -178,5 +216,5 @@ def run_selftest(*, quick: bool = False, console: Console | None = None) -> Self
 
     return SelftestSummary(
         passed=all(ok for _, ok, _ in checks),
-        checked_examples=len(examples),
+        checked_examples=example_count,
     )

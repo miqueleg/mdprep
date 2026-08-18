@@ -64,13 +64,13 @@ def qmmesp_block():
         "basis": "STO-3G",
         "embedding_cutoff_angstrom": 12.0,
         "grid": {
-            "type": "connolly",
+            "type": "merz_kollman",
             "vdw_scale_factors": [1.4],
-            "points_per_atom_per_shell": 8,
-            "exclude_inside_vdw_scale": 1.2,
+            "point_density_per_square_angstrom": 0.25,
+            "exclude_inside_vdw_scale": 1.4,
             "max_points": 100,
         },
-        "resp_fitting": {"backend": "native", "restraint": "none", "stage_2": False},
+        "resp_fitting": {"backend": "ambertools", "stage_2": True},
         "environment": {
             "include_protein": True,
             "include_waters": True,
@@ -132,7 +132,12 @@ def test_duplicate_input_ligand_names_are_consistent_for_parameterization_and_tl
     data = manifest_data(str(pdb_path))
     data["structure"]["remove_unknown_heterogens"] = False
     data["protonation"]["method"] = "manual_only"
-    data["ligands"] = [ligand_entry("substrate_sal", "B", "SAL", 777)]
+    data["ligands"] = [
+        {
+            **ligand_entry("substrate_sal", "B", "SAL", 777),
+            "expected_formula": "C2O2",
+        }
+    ]
     manifest = make_manifest(data)
 
     def fake_duplicate_antechamber(*, ligand, input_pdb, output_mol2, residue_name, work_dir):
@@ -399,7 +404,7 @@ def test_qmmesp_pyscf_uses_embedding_and_replaces_provisional_charges(monkeypatc
     _assert_tleap_script_paths_resolve(tmp_path / "qmmesp" / "provisional_leap" / "tleap.in")
 
 
-def test_qmmesp_pyscf_can_use_user_mol2_as_provisional_scaffold(monkeypatch, tmp_path):
+def test_qmmesp_pyscf_generates_am1bcc_then_uses_user_mol2_scaffold(monkeypatch, tmp_path):
     entry = {
         **ligand_entry("sub_501", "B", "SUB", 501),
         "charge_method": "qmmesp_pyscf",
@@ -409,10 +414,7 @@ def test_qmmesp_pyscf_can_use_user_mol2_as_provisional_scaffold(monkeypatch, tmp
     }
     manifest = manifest_with_ligand(entry)
     protonation = protonation_result(manifest, tmp_path)
-    monkeypatch.setattr(
-        "mdprep.ligands.workflow.run_antechamber",
-        lambda **kwargs: (_ for _ in ()).throw(AmberToolsError("should not run")),
-    )
+    monkeypatch.setattr("mdprep.ligands.workflow.run_antechamber", fake_antechamber)
     monkeypatch.setattr(
         "mdprep.ligands.workflow.run_parmchk2",
         lambda **kwargs: (_ for _ in ()).throw(AmberToolsError("should not run")),
@@ -429,13 +431,15 @@ def test_qmmesp_pyscf_can_use_user_mol2_as_provisional_scaffold(monkeypatch, tmp
     )
 
     item = result.ligands[0]
-    assert item.antechamber is None
+    assert item.antechamber is not None
     assert item.parmchk2 is None
     assert item.qm is not None
     assert item.provisional_mol2_path and item.provisional_mol2_path.name.endswith(".provisional.mol2")
+    assert len(result.provisional_ligands) == 1
+    assert result.provisional_ligands[0].charge_method == "am1bcc"
     final = read_mol2(item.final_mol2_path)
     assert [atom.charge for atom in final.atoms] == pytest.approx([0.25, -0.25])
-    assert "User mol2 supplied provisional atom types" in " ".join(item.warnings)
+    assert "Preserved the user mol2 atom types" in " ".join(item.warnings)
 
 
 def test_qmmesp_requires_protonation_result(monkeypatch, tmp_path):

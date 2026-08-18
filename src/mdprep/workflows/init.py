@@ -12,8 +12,8 @@ def generate_starter_manifest(
     *,
     output_path: str | Path,
     overwrite: bool = False,
-    forcefield: str = "ff19SB",
-    water_model: str = "OPC",
+    forcefield: str = "ff14SB",
+    water_model: str = "TIP3P",
     ph: float = 7.0,
     output_dir: str | None = None,
     protonation_method: str = "manual_only",
@@ -159,6 +159,8 @@ def _render_manifest(
     lines.extend(
         [
             "",
+            "metals: []",
+            "",
             "solvation:",
             "  enabled: true",
             "  box: truncated_octahedron",
@@ -173,6 +175,9 @@ def _render_manifest(
             "  fail_on_warnings: false",
             "  fail_on_missing_parameters: true",
             "  fail_on_noninteger_ligand_charge: true",
+            "",
+            "molecular_dynamics:",
+            "  enabled: false",
             "",
         ]
     )

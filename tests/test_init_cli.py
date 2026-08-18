@@ -16,6 +16,8 @@ def test_init_generates_valid_manifest(tmp_path):
     assert result.exit_code == 0
     manifest = load_manifest(output)
     assert manifest.project.input_structure == "tests/data/protein_with_waters.pdb"
+    assert manifest.protein.forcefield == "ff14SB"
+    assert manifest.protein.water_model == "TIP3P"
 
     config_check = CliRunner().invoke(app, ["config-check", str(output)])
     assert config_check.exit_code == 0

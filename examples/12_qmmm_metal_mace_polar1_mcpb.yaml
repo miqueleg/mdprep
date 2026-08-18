@@ -1,0 +1,140 @@
+project:
+  name: qmmm_refined_zinc_mace_polar1_mcpb
+  input_structure: data/protein_zinc_substrate.pdb
+  output_dir: prepared/qmmm_refined_zinc_mace_polar1_mcpb
+
+structure:
+  keep_crystal_waters: true
+  altloc_policy: highest_occupancy
+  remove_unknown_heterogens: false
+  preserve_chain_ids: true
+  remove_input_hydrogens: true
+
+protein:
+  forcefield: ff14SB
+  water_model: TIP3P
+
+protonation:
+  ph: 7.0
+  method: propka_xtb_his
+  overrides:
+    - selector: {chain: A, resname: CYS, resid: 46, icode: null}
+      state: CYM
+      reason: Explicit thiolate state for the declared Zn-S coordination bond
+  histidine:
+    neutral_tautomer_method: xtb
+
+disulfides:
+  auto_detect: true
+  detection_cutoff_angstrom: 2.2
+  force: []
+  forbid: []
+
+ligands:
+  - id: substrate
+    selector: {chain: L, resname: SUB, resid: 401, icode: null}
+    net_charge: -1
+    multiplicity: 1
+    atom_types: gaff2
+    # AM1-BCC is provisional during QM/MM relaxation. MCPB RESP supplies the
+    # final charges for the coordinating site.
+    charge_method: mcpb_resp_pyscf
+
+metals:
+  - id: catalytic_zinc
+    model: bonded_mcpb
+    ions:
+      - selector: &zinc
+          chain: Z
+          resname: ZN
+          resid: 500
+          icode: null
+          atom_name: ZN
+        element: Zn
+        charge: 2
+        multiplicity: 1
+    mcpb:
+      executable: MCPB.py
+      workflow: pyscf
+      provisional_nonbonded_parameter_set: "12_6"
+      cutoff_angstrom: 2.8
+      bonds:
+        - ion: *zinc
+          coordinator: {chain: A, resname: HIS, resid: 42, icode: null, atom_name: NE2}
+        - ion: *zinc
+          coordinator: {chain: A, resname: CYS, resid: 46, icode: null, atom_name: SG}
+        - ion: *zinc
+          coordinator: {chain: L, resname: SUB, resid: 401, icode: null, atom_name: O1}
+      additional_residues: []
+      force_constant_method: seminario
+      charge_restraint: backbone_heavy
+      software_version: gau
+      # Audit these values against the exact MCPB capped models.
+      small_model_charge: 0
+      small_model_spin: 1
+      large_model_charge: 0
+      large_model_spin: 1
+      scale_factor: 1.0
+      large_opt: 0
+      pyscf:
+        geometry_source: qmmm_refinement
+        hessian_backend: mace_polar1
+        mace_polar1:
+          python_executable: python
+          model: polar-1-m
+          device: cpu
+          num_threads: 4
+          expected_model_sha256: null
+          finite_difference_step_angstrom: 0.001
+          max_hessian_vector_relative_error: 0.01
+          # Set true only after reviewing the MACE-POLAR-1 Academic Software License.
+          accept_model_license: true
+        # PySCF still supplies the embedded large-model ESP for MCPB RESP.
+        method: B3LYP
+        basis: "6-31G*"
+        max_cycle: 150
+        conv_tol: 1.0e-9
+        dft_grid_level: 3
+        num_threads: 4
+        max_memory_mb: 8000
+        embedding_cutoff_angstrom: null
+        embedding_min_distance_angstrom: 1.2
+        esp_batch_size: 256
+
+refinement:
+  enabled: true
+  backend: ash
+  qm_method: gfn2_xtb
+  qm_components:
+    ligands: [substrate]
+    metal_sites: [catalytic_zinc]
+    metal_coordinating_residues: {}
+  active_region_cutoff_angstrom: 4.0
+  active_water_cutoff_angstrom: 8.0
+  include_contact_waters: true
+  total_qm_multiplicity: 1
+  ash:
+    python_executable: python
+    xtb_executable: xtb
+    allow_unusual_link_boundaries: true
+    max_iterations: 250
+    num_cores: 4
+    platform: CPU
+    xtb_max_iterations: 500
+    electronic_temperature_kelvin: 300.0
+    accuracy: 0.1
+
+solvation:
+  enabled: true
+  box: truncated_octahedron
+  buffer_angstrom: 10.0
+  neutralize: true
+  salt_concentration_molar: 0.15
+  positive_ion: Na+
+  negative_ion: Cl-
+
+validation:
+  run_openmm_energy_check: true
+  fail_on_warnings: false
+  fail_on_missing_parameters: true
+  fail_on_noninteger_ligand_charge: true

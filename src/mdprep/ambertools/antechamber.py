@@ -38,6 +38,12 @@ def build_antechamber_command(
         "bcc",
         "-at",
         ligand.atom_types,
+        "-an",
+        "n",
+        "-du",
+        "n",
+        "-seq",
+        "n",
         "-s",
         "2",
     ]

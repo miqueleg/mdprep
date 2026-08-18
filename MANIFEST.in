@@ -7,5 +7,5 @@ include CONTRIBUTING.md
 include environment.yml
 include environment-dev.yml
 recursive-include docs *.md
-recursive-include examples *.md *.yaml *.pdb *.mol2 *.frcmod
+recursive-include examples *.md *.yaml *.pdb *.mol2 *.frcmod *.ipynb *.py
 recursive-include tests/data *

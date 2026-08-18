@@ -1,0 +1,239 @@
+project:
+  name: 7E07_bonded_fe3
+  input_structure: input.pdb
+  output_dir: prepared
+
+structure:
+  keep_crystal_waters: true
+  altloc_policy: highest_occupancy
+  remove_unknown_heterogens: false
+  preserve_chain_ids: true
+  remove_input_hydrogens: true
+  repair:
+    backend: pdbfixer
+    sequence_source: ../7E07.pdb
+    add_missing_heavy_atoms: true
+    missing_residues:
+      - chain: A
+        resname: GLN
+        resid: 54
+        icode: null
+    random_seed: 20260722
+    platform: Reference
+    peptide_bond_min_angstrom: 1.10
+    peptide_bond_max_angstrom: 1.50
+    require_trans_peptide_bonds: true
+    trans_peptide_min_abs_degrees: 120.0
+
+protein:
+  forcefield: ff14SB
+  water_model: TIP3P
+
+protonation:
+  ph: 7.0
+  method: propka_xtb_his
+  propka:
+    executable: propka3
+    fallback_executables: [propka3, propka]
+    extra_args: []
+    require_success: true
+  overrides:
+    # The two Fe-bound histidines (114 and 214) are assigned HID
+    # automatically from their explicit NE2 coordination bonds below.
+    - selector: {chain: A, resname: ASP, resid: 116, icode: null}
+      state: ASP
+      reason: Explicit ionized carboxylate for Fe(III)-OD1 coordination
+    - selector: {chain: A, resname: HIS, resid: 155, icode: null}
+      state: HIE
+      reason: Pin the state used by the accepted H-only refinement after repeated GFN2 optimizations selected different local minima
+  histidine:
+    neutral_tautomer_method: xtb
+    xtb:
+      executable: xtb
+      model: gfn2
+      mode: opt
+      opt_level: loose
+      solvent: water
+      cutoff_angstrom: 5.0
+      extra_args: []
+      add_missing_protein_hydrogens: true
+      temporary_hydrogen_random_seed: 20260722
+      add_missing_water_hydrogens: true
+
+disulfides:
+  auto_detect: true
+  detection_cutoff_angstrom: 2.2
+  force: []
+  forbid: []
+
+ligands:
+  - id: proline_substrate
+    selector:
+      chain: A
+      resname: LPR
+      resid: 502
+      icode: null
+    net_charge: 0
+    multiplicity: 1
+    expected_formula: C5H9NO2
+    atom_types: gaff2
+    charge_method: am1bcc
+    user_mol2: null
+    user_frcmod: null
+    preserve_atom_names: true
+    preserve_coordinates: true
+    allow_atom_renaming: false
+    allow_coordinate_changes: false
+    qmmesp: null
+  - id: alpha_ketoglutarate
+    selector:
+      chain: A
+      resname: AKG
+      resid: 501
+      icode: null
+    net_charge: -2
+    multiplicity: 1
+    expected_formula: C5H4O5
+    atom_types: gaff2
+    charge_method: mcpb_resp_pyscf
+    user_mol2: null
+    user_frcmod: null
+    preserve_atom_names: true
+    preserve_coordinates: true
+    allow_atom_renaming: false
+    allow_coordinate_changes: false
+    qmmesp: null
+
+metals:
+  - id: catalytic_fe3
+    model: bonded_mcpb
+    ions:
+      - selector: &fe3
+          chain: A
+          resname: FE
+          resid: 503
+          icode: null
+          atom_name: FE
+        element: Fe
+        charge: 3
+        multiplicity: 6
+    mcpb:
+      executable: MCPB.py
+      workflow: pyscf
+      provisional_nonbonded_parameter_set: "12_6"
+      cutoff_angstrom: 2.4
+      bonds:
+        - ion: *fe3
+          coordinator: {chain: A, resname: AKG, resid: 501, icode: null, atom_name: O1}
+        - ion: *fe3
+          coordinator: {chain: A, resname: AKG, resid: 501, icode: null, atom_name: O5}
+        - ion: *fe3
+          coordinator: {chain: A, resname: HIS, resid: 114, icode: null, atom_name: NE2}
+        - ion: *fe3
+          coordinator: {chain: A, resname: ASP, resid: 116, icode: null, atom_name: OD1}
+        - ion: *fe3
+          coordinator: {chain: A, resname: HIS, resid: 214, icode: null, atom_name: NE2}
+      additional_residues: []
+      force_constant_method: seminario
+      charge_restraint: backbone_heavy
+      software_version: gau
+      small_model_charge: 0
+      small_model_spin: 6
+      large_model_charge: 0
+      large_model_spin: 6
+      scale_factor: 1.0
+      large_opt: 0
+      artifacts: null
+      pyscf:
+        geometry_source: qmmm_refinement
+        hessian_backend: xtb
+        xtb:
+          model: gxtb
+          executable: xtb
+          release_tag: v2.0.1
+          expected_executable_sha256: null
+          accuracy: 0.001
+          num_threads: 1
+          max_scf_iterations: 1000
+        # PySCF supplies the embedded large-model ESP/RESP calculation; the
+        # small-model Seminario Hessian comes from g-xTB above.
+        method: B3LYP
+        basis: "6-31G*"
+        max_cycle: 150
+        conv_tol: 1.0e-7
+        # A complete ADIIS/CDIIS run approached the solution but did not satisfy
+        # the density criterion in 150 CDIIS cycles. Its preserved, pinned,
+        # atom-identical density now seeds the reviewed second-order recovery.
+        scf_algorithm: newton
+        initial_guess: atom
+        large_model_restart_checkpoint: reference/large_embedded_cdiis150_restart.chk
+        large_model_restart_checkpoint_sha256: 5477a7860faf5b1be9ad6c88b50fba59a05485788f22ae59a7821416a8c00cbc
+        large_model_restart_max_displacement_angstrom: 0.01
+        adiis_precondition_cycles: 15
+        adiis_precondition_dft_grid_level: null
+        level_shift_mode: static
+        level_shift_hartree: 0.5
+        damping_factor: 0.0
+        diis_space: 12
+        large_model_density_fitting: true
+        large_model_auxbasis: def2-universal-jkfit
+        dft_grid_level: 3
+        num_threads: 8
+        max_memory_mb: 12000
+        embedding_cutoff_angstrom: null
+        embedding_min_distance_angstrom: 1.2
+        esp_batch_size: 256
+        grid:
+          type: merz_kollman
+          vdw_scale_factors: [1.4, 1.6, 1.8, 2.0]
+          point_density_per_square_angstrom: 1.0
+          exclude_inside_vdw_scale: 1.4
+          max_points: 99999
+
+refinement:
+  enabled: true
+  backend: ash
+  qm_method: gfn2_xtb
+  qm_components:
+    ligands: [proline_substrate, alpha_ketoglutarate]
+    metal_sites: [catalytic_fe3]
+    metal_coordinating_residues: {}
+  active_region_cutoff_angstrom: 4.0
+  active_water_cutoff_angstrom: 8.0
+  include_contact_waters: true
+  movable_atoms: active_region_hydrogens
+  post_refinement_protonation: reuse_initial
+  total_qm_multiplicity: 6
+  ash:
+    python_executable: python
+    xtb_executable: xtb
+    # The complete Fe coordinating residues create reviewed peptide C-N
+    # QM/MM link boundaries in ASH.
+    allow_unusual_link_boundaries: true
+    max_iterations: 250
+    num_cores: 4
+    platform: CPU
+    xtb_max_iterations: 500
+    electronic_temperature_kelvin: 300.0
+    accuracy: 0.1
+
+solvation:
+  enabled: true
+  box: rectangular
+  buffer_angstrom: 10.0
+  neutralize: true
+  salt_concentration_molar: 0.0
+  positive_ion: Na+
+  negative_ion: Cl-
+
+validation:
+  run_openmm_energy_check: true
+  fail_on_warnings: false
+  fail_on_missing_parameters: true
+  fail_on_noninteger_ligand_charge: true
+
+# Optional full OpenMM equilibration/production stage. It is disabled in this
+# expensive tutorial by default; enable it after the final Amber build and set
+# production.steps to the intended simulation length.
+molecular_dynamics:
+  enabled: false

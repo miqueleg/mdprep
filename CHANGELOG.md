@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.2.0 - 2026-08-17
+
+### Added
+
+- Explicit nonbonded and bonded MCPB.py metal-center workflows, including
+  PySCF QMMESP/RESP charges and PySCF, GFN2-xTB, g-xTB, or MACE-POLAR-1
+  Hessian sources for Seminario parameters.
+- Optional ASH active-site QM/MM refinement with explicit QM components,
+  coordinating residues, 4 A residue and 8 A water active regions, and
+  hydrogen-only relaxation.
+- Manifest-driven Roe--Brooks OpenMM minimization, heating, density
+  equilibration, and production MD with accelerator-first/CPU-fallback
+  platform selection.
+- User-controlled production step and reporting/checkpoint intervals.
+- Manifest-directory-relative input paths and portable executable discovery.
+- GAFF/GAFF2, ff14SB/ff19SB, TIP3P/OPC, AM1-BCC, gas RESP, and embedded
+  QMMESP examples covering the supported preparation combinations.
+
+### Fixed
+
+- Roe--Brooks positional restraints are installed before Context creation and
+  their reference coordinates are converted explicitly from input units to nm.
+- Constraint-compatible heating handoff, evolving NPT box propagation, and
+  production progress totals.
+- MCPB/tLEaP residue-index and renamed-residue coordinate validation.
+
 ## 0.1.0 - 2026-06-15
 
 Initial usable release.

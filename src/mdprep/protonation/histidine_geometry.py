@@ -476,10 +476,11 @@ def _validate_residue_hydrogen_state(
             )
     elif residue_state == "LYN":
         count = _hydrogen_count_near_any(residue, ("NZ",))
-        if count != 2:
+        if count < 2:
             raise HistidineGeometryError(
                 f"xTB cluster residue {residue.id.display()} is assigned LYN, "
-                f"but NZ has {count} nearby hydrogens; expected 2."
+                f"but NZ has only {count} nearby hydrogens; expected at least 2 "
+                "before temporary-state canonicalization."
             )
     elif residue_state == "ARG":
         required = {"NE": 1, "NH1": 2, "NH2": 2}
@@ -544,6 +545,17 @@ def _skip_hydrogen_for_cluster_state(
         return _hydrogen_is_near_any(atom, residue, anchors)
     if residue_state in {"CYM", "CYX"}:
         return _hydrogen_is_near_any(atom, residue, ("SG",))
+    if residue_state == "LYN" and _hydrogen_is_near_any(atom, residue, ("NZ",)):
+        nz_hydrogens = sorted(
+            (
+                candidate
+                for candidate in residue.atoms
+                if is_hydrogen_like(candidate)
+                and _hydrogen_is_near_any(candidate, residue, ("NZ",))
+            ),
+            key=lambda candidate: (candidate.name, candidate.serial or 0),
+        )
+        return any(atom is candidate for candidate in nz_hydrogens[2:])
     return False
 
 

@@ -62,7 +62,7 @@ def manifest_data(input_structure: str) -> dict:
 
 
 def ligand_entry(ligand_id: str, chain: str, resname: str, resid: int) -> dict:
-    return {
+    entry = {
         "id": ligand_id,
         "selector": {"chain": chain, "resname": resname, "resid": resid, "icode": None},
         "net_charge": 0,
@@ -72,6 +72,13 @@ def ligand_entry(ligand_id: str, chain: str, resname: str, resid: int) -> dict:
         "user_mol2": None,
         "qmmesp": None,
     }
+    # The tiny test ligands are intentionally hydrogen-free. Declaring their
+    # exact formulas exercises the explicit opt-in required for such inputs.
+    if resname == "SUB":
+        entry["expected_formula"] = "CO"
+    elif resname == "COF":
+        entry["expected_formula"] = "CN"
+    return entry
 
 
 def ligand_entry_resname_only(ligand_id: str, resname: str) -> dict:

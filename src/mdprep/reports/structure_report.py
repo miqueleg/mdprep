@@ -43,6 +43,15 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "",
     ]
     lines.extend(_residue_lines(report["configured_ligands_kept"]))
+    lines.extend(["", "## Configured Metal Ions", ""])
+    if report["configured_metal_ions_kept"]:
+        for item in report["configured_metal_ions_kept"]:
+            lines.append(
+                f"- {item['site_id']}: {_format_residue(item)}@{item['atom_name']} "
+                f"({item['element']}{int(item['charge']):+d})"
+            )
+    else:
+        lines.append("- None")
     lines.extend(["", "## Unknown Heterogens Removed", ""])
     lines.extend(_residue_lines(report["unknown_heterogens_removed"]))
     lines.extend(["", "## Histidines", ""])
@@ -81,4 +90,3 @@ def _residue_lines(items: list[dict[str, Any]]) -> list[str]:
 def _format_residue(item: dict[str, Any]) -> str:
     chain = item["chain_id"] or "<blank>"
     return f"{chain}:{item['resname']}{item['resid']}{item.get('icode') or ''}"
-

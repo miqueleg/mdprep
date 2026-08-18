@@ -1,5 +1,8 @@
 name: tests
 
+permissions:
+  contents: read
+
 on:
   push:
   pull_request:
@@ -26,3 +29,24 @@ jobs:
           python -m mdprep.cli --help
           python -m mdprep.cli config-check examples/*.yaml
           python -m mdprep.cli selftest --quick
+
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build distributions
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+          python -m build
+          python -m twine check dist/*
+      - name: Test wheel installation
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+          cd /tmp
+          mdprep --version
+          mdprep --help
+          mdprep selftest --quick

@@ -13,6 +13,7 @@ def ligand_identity_dict(
     residue: ResidueRecord,
     net_charge: int,
     multiplicity: int,
+    expected_formula: str | None,
     charge_method: str,
     atom_types: str,
 ) -> dict[str, object]:
@@ -28,6 +29,7 @@ def ligand_identity_dict(
         "icode": residue.id.icode,
         "net_charge": net_charge,
         "multiplicity": multiplicity,
+        "expected_formula": expected_formula,
         "charge_method": charge_method,
         "atom_types": atom_types,
     }
@@ -35,4 +37,3 @@ def ligand_identity_dict(
 
 def atom_element(atom: AtomRecord) -> str:
     return atom.element or infer_element(atom.name) or ""
-

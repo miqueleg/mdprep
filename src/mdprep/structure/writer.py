@@ -12,18 +12,49 @@ def write_pdb(structure: PdbStructure, path: str | Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
     lines: list[str] = []
-    previous_chain: str | None = None
-    previous_was_atom = False
+    previous_atom: AtomRecord | None = None
+    ter_written_after: set[int] = set()
 
     for atom in structure.atoms:
-        if previous_chain is not None and atom.chain_id != previous_chain and previous_was_atom:
-            lines.append("TER\n")
+        if previous_atom is not None and _needs_implicit_ter(previous_atom, atom):
+            previous_serial = previous_atom.serial
+            if previous_serial is None or previous_serial not in ter_written_after:
+                lines.append("TER\n")
         lines.append(format_atom_record(atom))
-        previous_chain = atom.chain_id
-        previous_was_atom = atom.record_name == "ATOM"
+        if atom.serial is not None and atom.serial in structure.ter_after_serials:
+            lines.append("TER\n")
+            ter_written_after.add(atom.serial)
+        previous_atom = atom
 
+    lines.extend(_format_conect_records(structure))
     lines.append("END\n")
     output_path.write_text("".join(lines), encoding="utf-8")
+
+
+def _needs_implicit_ter(previous: AtomRecord, current: AtomRecord) -> bool:
+    if previous.chain_id != current.chain_id:
+        return True
+    # A same-chain HETATM must not be interpreted as the next peptide residue.
+    return previous.record_name == "ATOM" and current.record_name == "HETATM"
+
+
+def _format_conect_records(structure: PdbStructure) -> list[str]:
+    serials = {atom.serial for atom in structure.atoms if atom.serial is not None}
+    neighbors: dict[int, set[int]] = {}
+    for left, right in structure.conect_bonds:
+        if left not in serials or right not in serials:
+            continue
+        neighbors.setdefault(left, set()).add(right)
+        neighbors.setdefault(right, set()).add(left)
+    lines: list[str] = []
+    for source in sorted(neighbors):
+        targets = sorted(neighbors[source])
+        for offset in range(0, len(targets), 4):
+            group = targets[offset : offset + 4]
+            lines.append(
+                "CONECT" + f"{source:5d}" + "".join(f"{target:5d}" for target in group) + "\n"
+            )
+    return lines
 
 
 def format_atom_record(atom: AtomRecord) -> str:
@@ -51,4 +82,3 @@ def _atom_name_field(atom: AtomRecord) -> str:
     if atom.element and len(atom.element.strip()) == 1 and len(atom.name) < 4:
         return f" {atom.name:<3}"[:4]
     return f"{atom.name:>4}"[-4:]
-

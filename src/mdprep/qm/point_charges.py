@@ -1,4 +1,4 @@
-"""MM point-charge extraction for QMMESP-like embedding."""
+"""MM point-charge extraction for QMMESP electrostatic embedding."""
 
 from __future__ import annotations
 
@@ -64,8 +64,9 @@ class PointChargeSelection:
             "max_distance": self.max_distance,
             "categories": self.categories,
             "qmmesp_interpretation": (
-                "MM point charges are used only for electrostatic embedding/polarization of the "
-                "target ligand QM density; they are not fitted and are not written to the ligand mol2."
+                "The target-ligand SCF uses electrostatic QM/MM embedding through "
+                "pyscf.qmmm.mm_charge. MM point charges polarize the target-ligand QM density; "
+                "they are not fitted and are not written to the ligand mol2."
             ),
         }
 
@@ -93,6 +94,7 @@ def extract_point_charges_from_prmtop(
     ligand: LigandConfig,
     manifest: ManifestConfig,
     target_coordinates: np.ndarray,
+    target_atom_names: list[str] | None = None,
 ) -> PointChargeSelection:
     try:
         import parmed
@@ -103,7 +105,13 @@ def extract_point_charges_from_prmtop(
     except Exception as exc:
         raise PointChargeError(f"Could not load provisional Amber topology with ParmEd: {exc}") from exc
     coordinates = np.asarray(structure.coordinates, dtype=float)
-    target_indices = _find_target_ligand_atoms(structure, ligand)
+    target_indices = _find_target_ligand_atoms(
+        structure,
+        ligand,
+        topology_coordinates=coordinates,
+        target_coordinates=target_coordinates,
+        target_atom_names=target_atom_names,
+    )
     target_set = set(target_indices)
     target_coords = np.asarray(target_coordinates, dtype=float)
     charges: list[PointCharge] = []
@@ -124,7 +132,8 @@ def extract_point_charges_from_prmtop(
                 continue
         before_cutoff += 1
         distance = float(np.min(np.linalg.norm(target_coords - coordinates[index], axis=1)))
-        if ligand.qmmesp and distance > ligand.qmmesp.embedding_cutoff_angstrom:
+        cutoff = ligand.qmmesp.embedding_cutoff_angstrom if ligand.qmmesp is not None else None
+        if cutoff is not None and distance > cutoff:
             continue
         residue = atom.residue
         charge = PointCharge(
@@ -168,21 +177,51 @@ def write_point_charge_files(selection: PointChargeSelection, *, csv_path: str |
     Path(summary_path).write_text(json.dumps(selection.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _find_target_ligand_atoms(structure: object, ligand: LigandConfig) -> list[int]:
-    matches: list[list[int]] = []
+def _find_target_ligand_atoms(
+    structure: object,
+    ligand: LigandConfig,
+    *,
+    topology_coordinates: np.ndarray,
+    target_coordinates: np.ndarray,
+    target_atom_names: list[str] | None,
+    coordinate_tolerance_angstrom: float = 0.1,
+) -> list[int]:
+    target = np.asarray(target_coordinates, dtype=float)
+    if target.ndim != 2 or target.shape[1] != 3 or len(target) == 0:
+        raise PointChargeError("Target-ligand coordinates must have shape (n_atoms, 3) and be non-empty.")
+    if target_atom_names is not None and len(target_atom_names) != len(target):
+        raise PointChargeError("Target-ligand atom-name and coordinate counts do not match.")
+
+    matches: list[tuple[list[int], float]] = []
+    rejected: list[str] = []
     for residue in structure.residues:
         if residue.name != ligand.selector.resname:
             continue
         indices = [atom.idx for atom in residue.atoms]
-        if len(indices) == 0:
+        if len(indices) != len(target):
+            rejected.append(f"residue {getattr(residue, 'number', '?')}: {len(indices)} atoms")
             continue
-        matches.append(indices)
+        names = [str(atom.name) for atom in residue.atoms]
+        if target_atom_names is not None and names != target_atom_names:
+            rejected.append(f"residue {getattr(residue, 'number', '?')}: atom names {names}")
+            continue
+        candidate = topology_coordinates[indices]
+        max_deviation = float(np.max(np.linalg.norm(candidate - target, axis=1)))
+        if max_deviation <= coordinate_tolerance_angstrom:
+            matches.append((indices, max_deviation))
+        else:
+            rejected.append(
+                f"residue {getattr(residue, 'number', '?')}: coordinate max deviation "
+                f"{max_deviation:.3f} A"
+            )
     if len(matches) != 1:
+        details = "; ".join(rejected) if rejected else "no residue-name candidates"
         raise PointChargeError(
             f"Could not map ligand {ligand.id} uniquely in provisional topology; "
-            "use unique ligand residue names or selectors."
+            "mapping requires residue name, atom count/order/names, and coordinates to agree. "
+            f"Candidates: {details}."
         )
-    return matches[0]
+    return matches[0][0]
 
 
 def _category(atom: object) -> str:

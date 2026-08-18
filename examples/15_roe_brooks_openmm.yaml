@@ -1,0 +1,73 @@
+project:
+  name: roe_brooks_openmm
+  input_structure: data/protein_only.pdb
+  output_dir: prepared/roe_brooks_openmm
+
+structure:
+  keep_crystal_waters: true
+  altloc_policy: highest_occupancy
+  remove_unknown_heterogens: false
+  preserve_chain_ids: true
+  remove_input_hydrogens: true
+
+protein:
+  forcefield: ff14SB
+  water_model: TIP3P
+
+protonation:
+  ph: 7.0
+  method: propka
+  overrides: []
+  histidine:
+    neutral_tautomer_method: manual
+
+disulfides:
+  auto_detect: true
+  detection_cutoff_angstrom: 2.2
+  force: []
+  forbid: []
+
+ligands: []
+metals: []
+
+solvation:
+  enabled: true
+  box: truncated_octahedron
+  buffer_angstrom: 10.0
+  neutralize: true
+  salt_concentration_molar: 0.15
+  positive_ion: Na+
+  negative_ion: Cl-
+
+validation:
+  run_openmm_energy_check: true
+  fail_on_warnings: false
+  fail_on_missing_parameters: true
+  fail_on_noninteger_ligand_charge: true
+
+molecular_dynamics:
+  enabled: true
+  protocol: roe_brooks_2020
+  temperature_kelvin: 300.0
+  pressure_atmosphere: 1.0
+  platform: auto
+  device_index: null
+  precision: mixed
+  cpu_threads: null
+  random_seed: 20260817
+  step08_ensemble: NPT
+  density:
+    increment_ns: 1.0
+    report_interval_ps: 1.0
+    window_ps: 300.0
+    slope_threshold_g_ml_ps: 1.0e-6
+    mean_difference_threshold_g_ml: 0.02
+    minimum_points: 50
+    maximum_duration_ns: 10.0
+  production:
+    # 50,000,000 x 2 fs = 100 ns.
+    steps: 50000000
+    timestep_fs: 2.0
+    trajectory_interval_steps: 10000
+    state_interval_steps: 5000
+    checkpoint_interval_steps: 50000

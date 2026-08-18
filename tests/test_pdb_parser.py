@@ -71,6 +71,27 @@ def test_infers_alpha_carbon_as_carbon_for_standard_protein_atoms():
 
 def test_infers_calcium_for_heterogen_ca_when_element_column_missing():
     assert infer_element("CA", resname="CA", record_name="HETATM") == "Ca"
+    assert (
+        infer_element(
+            "FE",
+            resname="FE",
+            record_name="HETATM",
+            atom_field=" FE ",
+        )
+        == "Fe"
+    )
+
+
+def test_infers_ambertools_atom_record_iron_when_element_column_missing():
+    assert (
+        infer_element(
+            "FE",
+            resname="FE",
+            record_name="ATOM",
+            atom_field=" FE ",
+        )
+        == "Fe"
+    )
 
 
 def test_pdb_atom_name_alignment_disambiguates_blank_element_ca():

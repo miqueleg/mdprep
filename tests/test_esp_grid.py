@@ -1,25 +1,33 @@
+from math import pi
+
 import numpy as np
 import pytest
 
-from mdprep.charges.esp_grid import EspGridError, generate_connolly_grid, read_grid_xyz, vdw_radius, write_grid_xyz
+from mdprep.charges.esp_grid import (
+    EspGridError,
+    generate_merz_kollman_grid,
+    read_grid_xyz,
+    vdw_radius,
+    write_grid_xyz,
+)
 
 
 def test_grid_generation_is_deterministic():
     coords = np.asarray([[0.0, 0.0, 0.0], [1.2, 0.0, 0.0]], dtype=float)
-    first = generate_connolly_grid(
+    first = generate_merz_kollman_grid(
         elements=["C", "O"],
         coordinates=coords,
         vdw_scale_factors=[1.4, 1.6],
-        points_per_atom_per_shell=12,
-        exclude_inside_vdw_scale=1.1,
+        point_density_per_square_angstrom=0.5,
+        exclude_inside_vdw_scale=1.4,
         max_points=1000,
     )
-    second = generate_connolly_grid(
+    second = generate_merz_kollman_grid(
         elements=["C", "O"],
         coordinates=coords,
         vdw_scale_factors=[1.4, 1.6],
-        points_per_atom_per_shell=12,
-        exclude_inside_vdw_scale=1.1,
+        point_density_per_square_angstrom=0.5,
+        exclude_inside_vdw_scale=1.4,
         max_points=1000,
     )
 
@@ -29,12 +37,12 @@ def test_grid_generation_is_deterministic():
 
 def test_grid_points_are_outside_other_atom_exclusion_radius():
     coords = np.asarray([[0.0, 0.0, 0.0], [2.0, 0.0, 0.0]], dtype=float)
-    grid = generate_connolly_grid(
+    grid = generate_merz_kollman_grid(
         elements=["C", "O"],
         coordinates=coords,
         vdw_scale_factors=[1.4],
-        points_per_atom_per_shell=16,
-        exclude_inside_vdw_scale=1.1,
+        point_density_per_square_angstrom=1.0,
+        exclude_inside_vdw_scale=1.4,
         max_points=1000,
     )
 
@@ -43,43 +51,59 @@ def test_grid_points_are_outside_other_atom_exclusion_radius():
         for index, center in enumerate(coords):
             if index == parent:
                 continue
-            assert np.linalg.norm(point - center) >= radii[index] * 1.1
+            assert np.linalg.norm(point - center) >= radii[index] * 1.4
 
 
-def test_grid_max_points_is_respected():
+def test_grid_is_not_silently_thinned_to_max_points():
     coords = np.asarray([[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]], dtype=float)
-    grid = generate_connolly_grid(
-        elements=["C", "O"],
-        coordinates=coords,
-        vdw_scale_factors=[1.4, 1.6, 1.8],
-        points_per_atom_per_shell=40,
-        exclude_inside_vdw_scale=1.1,
-        max_points=25,
-    )
+    with pytest.raises(EspGridError, match="refusing to thin"):
+        generate_merz_kollman_grid(
+            elements=["C", "O"],
+            coordinates=coords,
+            vdw_scale_factors=[1.4, 1.6, 1.8],
+            point_density_per_square_angstrom=1.0,
+            exclude_inside_vdw_scale=1.4,
+            max_points=25,
+        )
 
-    assert len(grid.points) == 25
 
-
-def test_too_few_points_fails_clearly():
-    with pytest.raises(EspGridError, match="Too few ESP grid points"):
-        generate_connolly_grid(
+def test_nonpositive_surface_density_fails_clearly():
+    with pytest.raises(EspGridError, match="density must be finite and positive"):
+        generate_merz_kollman_grid(
             elements=["C"],
             coordinates=np.asarray([[0.0, 0.0, 0.0]], dtype=float),
             vdw_scale_factors=[1.4],
-            points_per_atom_per_shell=1,
-            exclude_inside_vdw_scale=1.1,
+            point_density_per_square_angstrom=0.0,
+            exclude_inside_vdw_scale=1.4,
             max_points=10,
         )
 
 
+def test_isolated_atom_uses_requested_surface_density_on_each_layer():
+    scales = [1.4, 1.6, 1.8, 2.0]
+    density = 1.0
+    grid = generate_merz_kollman_grid(
+        elements=["C"],
+        coordinates=np.asarray([[0.0, 0.0, 0.0]], dtype=float),
+        vdw_scale_factors=scales,
+        point_density_per_square_angstrom=density,
+        exclude_inside_vdw_scale=1.4,
+        max_points=1000,
+    )
+
+    expected = sum(max(6, round(4.0 * pi * (vdw_radius("C") * scale) ** 2 * density)) for scale in scales)
+    assert len(grid.points) == expected
+    assert grid.shell_scales.count(1.4) == round(4.0 * pi * (vdw_radius("C") * 1.4) ** 2)
+
+
 def test_grid_xyz_writer_round_trips(tmp_path):
     coords = np.asarray([[0.0, 0.0, 0.0], [3.0, 0.0, 0.0]], dtype=float)
-    grid = generate_connolly_grid(
+    grid = generate_merz_kollman_grid(
         elements=["C", "O"],
         coordinates=coords,
         vdw_scale_factors=[1.4],
-        points_per_atom_per_shell=8,
-        exclude_inside_vdw_scale=1.1,
+        point_density_per_square_angstrom=0.25,
+        exclude_inside_vdw_scale=1.4,
         max_points=100,
     )
     path = tmp_path / "grid.xyz"

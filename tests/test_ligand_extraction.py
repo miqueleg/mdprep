@@ -147,7 +147,12 @@ def test_extract_ligand_preserves_ligand_conect_records(tmp_path):
     )
     data = manifest_data(str(pdb_path))
     data["structure"]["remove_unknown_heterogens"] = False
-    data["ligands"] = [ligand_entry("sub_501", "B", "SUB", 501)]
+    data["ligands"] = [
+        {
+            **ligand_entry("sub_501", "B", "SUB", 501),
+            "expected_formula": "CHO",
+        }
+    ]
     manifest = make_manifest(data)
 
     extracted = extract_configured_ligands(read_pdb(pdb_path), manifest, output_dir=tmp_path / "out")
@@ -156,6 +161,35 @@ def test_extract_ligand_preserves_ligand_conect_records(tmp_path):
     assert "CONECT    4    5    6" in output
     assert "CONECT    4    5    1    6" not in output
     assert any("Preserved" in warning and "CONECT" in warning for warning in extracted[0].warnings)
+
+
+def test_partially_hydrogenated_ligand_fails_with_warning_and_error(tmp_path):
+    pdb_path = tmp_path / "partial.pdb"
+    pdb_path.write_text(
+        "HETATM    1  C1  SUB B 501       0.000   0.000   0.000  1.00 20.00           C\n"
+        "HETATM    2  H1  SUB B 501       1.000   0.000   0.000  1.00 20.00           H\n"
+        "END\n",
+        encoding="utf-8",
+    )
+    data = manifest_data(str(pdb_path))
+    data["structure"]["remove_unknown_heterogens"] = False
+    data["ligands"] = [
+        {
+            **ligand_entry("substrate", "B", "SUB", 501),
+            "expected_formula": "CH2",
+        }
+    ]
+
+    with pytest.raises(LigandExtractionError) as excinfo:
+        extract_configured_ligands(
+            read_pdb(pdb_path),
+            make_manifest(data),
+            output_dir=tmp_path / "out",
+        )
+
+    message = str(excinfo.value)
+    assert "WARNING [LIGAND_HYDROGENS_MISSING]" in message
+    assert "ERROR [LIGAND_CHEMISTRY_UNRESOLVED]" in message
 
 
 def test_extract_ligand_renames_duplicate_atom_names_deterministically(tmp_path):
@@ -233,7 +267,12 @@ def test_extract_ligand_renames_duplicate_atom_names_deterministically(tmp_path)
     pdb_path.write_text("".join(format_atom_record(atom) for atom in atoms) + "END\n", encoding="utf-8")
     data = manifest_data(str(pdb_path))
     data["structure"]["remove_unknown_heterogens"] = False
-    data["ligands"] = [ligand_entry("substrate_sal", "B", "SAL", 777)]
+    data["ligands"] = [
+        {
+            **ligand_entry("substrate_sal", "B", "SAL", 777),
+            "expected_formula": "C2O2",
+        }
+    ]
     manifest = make_manifest(data)
 
     extracted = extract_configured_ligands(read_pdb(pdb_path), manifest, output_dir=tmp_path / "out")

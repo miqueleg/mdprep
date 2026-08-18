@@ -30,12 +30,14 @@ class LeapInputResult:
     structure: PdbStructure
     water_renames: list[dict[str, object]]
     ligand_coordinate_anchors: list[dict[str, object]]
+    residue_renumberings: list[dict[str, object]]
 
     def to_dict(self) -> dict[str, object]:
         return {
             "path": str(self.path),
             "water_renames": self.water_renames,
             "ligand_coordinate_anchors": self.ligand_coordinate_anchors,
+            "residue_renumberings": self.residue_renumberings,
         }
 
 
@@ -89,9 +91,36 @@ def prepare_leap_input_pdb(
     *,
     manifest: ManifestConfig | None = None,
     ligand_result: "LigandStageResult | None" = None,
+    renumber_residues_sequentially: bool = False,
 ) -> LeapInputResult:
     atoms: list[AtomRecord] = []
     water_renames: list[dict[str, object]] = []
+    residue_renumberings: list[dict[str, object]] = []
+    sequential_resids: dict[tuple[str, str, int, str | None], int] = {}
+    if renumber_residues_sequentially:
+        for index, residue in enumerate(structure.residues, start=1):
+            key = (
+                residue.id.chain_id,
+                residue.id.resname,
+                residue.id.resid,
+                residue.id.icode,
+            )
+            if key in sequential_resids:
+                raise LeapResidueError(
+                    f"Residue identity {residue.id.display()} is ambiguous for sequential "
+                    "tleap renumbering."
+                )
+            sequential_resids[key] = index
+            residue_renumberings.append(
+                {
+                    "chain_id": residue.id.chain_id,
+                    "resname": residue.id.resname,
+                    "original_resid": residue.id.resid,
+                    "original_icode": residue.id.icode,
+                    "tleap_residue_index": index,
+                    "reason": "MCPB.py bond-command index alignment",
+                }
+            )
     for atom in structure.atoms:
         new_atom = atom
         if atom.resname in {"HOH", "H2O", "TIP3", "OPC"}:
@@ -111,6 +140,13 @@ def prepare_leap_input_pdb(
                         "new_atom_name": new_atom.name,
                     }
                 )
+        if renumber_residues_sequentially:
+            key = (atom.chain_id, atom.resname, atom.resid, atom.icode)
+            new_atom = replace(
+                new_atom,
+                resid=sequential_resids[key],
+                icode=None,
+            )
         atoms.append(new_atom)
     ligand_coordinate_anchors: list[dict[str, object]] = []
     if manifest is not None and ligand_result is not None:
@@ -134,6 +170,7 @@ def prepare_leap_input_pdb(
         structure=leap_structure,
         water_renames=water_renames,
         ligand_coordinate_anchors=ligand_coordinate_anchors,
+        residue_renumberings=residue_renumberings,
     )
 
 
@@ -154,12 +191,16 @@ def validate_ligand_parameter_files(
     manifest: ManifestConfig,
     structure: PdbStructure,
     ligand_result: LigandStageResult,
+    excluded_ligand_ids: set[str] | None = None,
 ) -> list[LigandParameterFiles]:
+    excluded = excluded_ligand_ids or set()
     items_by_id = {item.ligand_id: item for item in ligand_result.ligands}
     variable_names: set[str] = set()
     residue_parameter_files: dict[str, tuple[bytes, bytes]] = {}
     validated: list[LigandParameterFiles] = []
     for ligand in manifest.ligands:
+        if ligand.id in excluded:
+            continue
         item = items_by_id.get(ligand.id)
         if item is None:
             raise LeapResidueError(f"Ligand {ligand.id} was not parameterized before tleap.")
@@ -221,6 +262,7 @@ def validate_tleap_ligand_coordinates(
     output_pdb: str | Path,
     stage: str,
     tolerance_angstrom: float = 0.10,
+    output_resnames_by_ligand_id: dict[str, str] | None = None,
 ) -> list[dict[str, object]]:
     try:
         output_structure = read_pdb(output_pdb)
@@ -233,7 +275,17 @@ def validate_tleap_ligand_coordinates(
             reference = resolve_residue_selector(reference_structure, ligand.selector.model_dump())
         except SelectorError as exc:
             raise LeapResidueError(f"Ligand {ligand.id} reference selector failed during {stage} coordinate validation: {exc}") from exc
-        observed = _resolve_ligand_in_tleap_output(output_structure, reference, ligand.id, stage)
+        expected_output_resname = (output_resnames_by_ligand_id or {}).get(
+            ligand.id,
+            reference.id.resname,
+        )
+        observed = _resolve_ligand_in_tleap_output(
+            output_structure,
+            reference,
+            ligand.id,
+            stage,
+            expected_output_resname=expected_output_resname,
+        )
         _require_same_atom_names(reference, observed, ligand.id, context=f"{stage} coordinate validation")
         deviations = [
             _distance((ref.x, ref.y, ref.z), (out.x, out.y, out.z))
@@ -244,6 +296,8 @@ def validate_tleap_ligand_coordinates(
             "ligand_id": ligand.id,
             "stage": stage,
             "atom_count": len(reference.atoms),
+            "reference_resname": reference.id.resname,
+            "output_resname": observed.id.resname,
             "max_coordinate_deviation_angstrom": max_deviation,
             "tolerance_angstrom": tolerance_angstrom,
             "ok": max_deviation <= tolerance_angstrom,
@@ -512,6 +566,8 @@ def _resolve_ligand_in_tleap_output(
     reference: ResidueRecord,
     ligand_id: str,
     stage: str,
+    *,
+    expected_output_resname: str,
 ) -> ResidueRecord:
     exact = [
         residue
@@ -519,15 +575,26 @@ def _resolve_ligand_in_tleap_output(
         if residue.id.chain_id == reference.id.chain_id
         and residue.id.resid == reference.id.resid
         and residue.id.icode == reference.id.icode
-        and residue.id.resname == reference.id.resname
+        and residue.id.resname == expected_output_resname
         and residue.atom_names() == reference.atom_names()
     ]
     if len(exact) == 1:
         return exact[0]
+    same_identity_and_atoms = [
+        residue
+        for residue in structure.residues
+        if residue.id.chain_id == reference.id.chain_id
+        and residue.id.resid == reference.id.resid
+        and residue.id.icode == reference.id.icode
+        and residue.atom_names() == reference.atom_names()
+    ]
+    if len(same_identity_and_atoms) == 1:
+        return same_identity_and_atoms[0]
     candidates = [
         residue
         for residue in structure.residues
-        if residue.id.resname == reference.id.resname and residue.atom_names() == reference.atom_names()
+        if residue.id.resname == expected_output_resname
+        and residue.atom_names() == reference.atom_names()
     ]
     if len(candidates) == 1:
         return candidates[0]

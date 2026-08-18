@@ -27,6 +27,8 @@ class TLeapRun:
             "command": list(self.command_result.command),
             "cwd": self.command_result.cwd,
             "returncode": self.command_result.returncode,
+            "stdout": self.command_result.stdout,
+            "stderr": self.command_result.stderr,
             "runtime_seconds": self.command_result.runtime_seconds,
             "input_path": str(self.input_path),
             "log_path": str(self.log_path),

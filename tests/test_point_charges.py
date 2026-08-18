@@ -33,7 +33,7 @@ def qmmesp_ligand_config(**environment):
             "method": "HF",
             "basis": "STO-3G",
             "embedding_cutoff_angstrom": 4.0,
-            "resp_fitting": {"backend": "native"},
+            "resp_fitting": {"backend": "ambertools"},
             "environment": {
                 "include_protein": environment.get("include_protein", True),
                 "include_waters": environment.get("include_waters", True),
@@ -68,9 +68,10 @@ def fake_parmed_structure(include_ambiguous=False):
         atoms.append(atom)
     if include_ambiguous:
         residue = residues[-1]
-        atom = FakeAtom(len(atoms), "C1", 0.0, residue)
-        residue.atoms.append(atom)
-        atoms.append(atom)
+        for atom_name in ["C1", "O1"]:
+            atom = FakeAtom(len(atoms), atom_name, 0.0, residue)
+            residue.atoms.append(atom)
+            atoms.append(atom)
     return SimpleNamespace(
         residues=residues,
         atoms=atoms,
@@ -80,7 +81,8 @@ def fake_parmed_structure(include_ambiguous=False):
             [5.0, 5.0, 5.0],
             [6.0, 5.0, 5.0],
             [5.5, 6.0, 5.0],
-            [10.0, 10.0, 10.0],
+            [5.0, 5.0, 5.0],
+            [6.0, 5.0, 5.0],
         ][: len(atoms)]], dtype=float),
     )
 
