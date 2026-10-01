@@ -105,3 +105,30 @@ def test_tail_helper_limits_failure_snippet():
     text = "\n".join(f"line {index}" for index in range(30))
 
     assert _tail(text, max_lines=3) == "line 27\nline 28\nline 29"
+
+
+def test_xtb_openmp_threads_are_bounded_by_default():
+    """xTB opens one OpenMP thread per hardware thread unless told otherwise.
+
+    A tautomer cluster is a few hundred atoms and several clusters run at once,
+    so the unbounded default costs enormous CPU time for no wall-clock gain.
+    """
+    from mdprep.protonation.xtb_runner import xtb_environment
+
+    environment = xtb_environment(HistidineXtbConfig())
+
+    assert environment["OMP_NUM_THREADS"] == "1"
+    assert environment["MKL_NUM_THREADS"] == "1"
+    assert environment["OPENBLAS_NUM_THREADS"] == "1"
+    assert environment["OMP_STACKSIZE"] == "1G"
+
+
+def test_xtb_thread_count_is_configurable():
+    from mdprep.protonation.xtb_runner import xtb_environment
+
+    environment = xtb_environment(
+        HistidineXtbConfig(num_threads=8, omp_stacksize="4G")
+    )
+
+    assert environment["OMP_NUM_THREADS"] == "8"
+    assert environment["OMP_STACKSIZE"] == "4G"

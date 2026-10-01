@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -61,6 +62,91 @@ ION_RESNAMES = {
     "CU", "CO", "NI",
 }
 AUTO_PLATFORM_ORDER = ("CUDA", "HIP", "Metal", "OpenCL", "CPU", "Reference")
+
+
+def _normalise_ion_resname(name: str) -> str:
+    """Strip the charge decoration Amber writes into ion residue names.
+
+    tleap names monatomic ions ``Na+``, ``Cl-``, ``Mg2+`` and so on, none of
+    which match a bare element symbol, so the plain names in ION_RESNAMES miss
+    every ion in an Amber topology.
+    """
+
+    return re.sub(r"[^A-Z]", "", name.strip().upper())
+
+
+def monatomic_ion_atom_indices(topology: Any) -> set[int]:
+    """Indices of free monatomic ions, which are solvent rather than solute.
+
+    Single-atom residues are required so that a ligand or residue whose name
+    merely normalises onto an element symbol is not mistaken for an ion.
+    """
+
+    indices: set[int] = set()
+    for residue in topology.residues():
+        atoms = list(residue.atoms())
+        if len(atoms) != 1:
+            continue
+        if _normalise_ion_resname(residue.name) in ION_RESNAMES:
+            indices.add(atoms[0].index)
+    return indices
+
+
+def restrained_atom_indices(
+    topology: Any,
+    *,
+    selection: str,
+    ion_atom_indices: set[int],
+) -> list[int]:
+    """Solute atoms carrying a positional restraint, in topology order.
+
+    Hydrogens, water and free monatomic ions are solvent and stay mobile; the
+    ions in particular must be excluded by index rather than by bare residue
+    name, because Amber writes them as ``Na+``/``Cl-``.
+    """
+
+    if selection not in {"heavy", "backbone"}:
+        raise RoeBrooksError(f"Unknown restraint selection {selection!r}")
+    indices: list[int] = []
+    for atom in topology.atoms():
+        name = atom.name.strip()
+        is_hydrogen = (
+            atom.element is not None and atom.element.symbol == "H"
+        ) or name.startswith("H")
+        residue_name = atom.residue.name.strip().upper()
+        if (
+            is_hydrogen
+            or residue_name in WATER_RESNAMES
+            or atom.index in ion_atom_indices
+        ):
+            continue
+        if selection == "backbone" and name not in BACKBONE_NAMES:
+            continue
+        indices.append(atom.index)
+    return indices
+
+
+def stage_handoff_state(context: Any) -> Any:
+    """State used to seed the next protocol stage.
+
+    Coordinates must stay in the unwrapped frame of the input, because the
+    positional restraints of later stages reference those same coordinates.
+    Wrapping here moves every restrained particle that crosses a periodic face
+    a full box length from its reference, which is what made step 2 diverge.
+    """
+
+    return context.getState(
+        getPositions=True,
+        getVelocities=True,
+        getEnergy=True,
+        enforcePeriodicBox=False,
+    )
+
+
+def periodic_output_state(context: Any) -> Any:
+    """State used for files a human or a viewer reads, which are wrapped."""
+
+    return context.getState(getPositions=True, enforcePeriodicBox=True)
 
 
 def steps_from_time(time_q: Any, timestep_q: Any) -> int:
@@ -185,6 +271,7 @@ def run_roe_brooks(
         raise RoeBrooksError("prmtop and inpcrd atom counts differ")
     if box_vectors is None:
         raise RoeBrooksError("Roe--Brooks PME/NPT requires periodic box vectors")
+    ion_atom_indices = monatomic_ion_atom_indices(topology)
 
     temperature = config.temperature_kelvin * unit.kelvin
     pressure = config.pressure_atmosphere * unit.atmosphere
@@ -224,20 +311,11 @@ def run_roe_brooks(
         for parameter in ("x0", "y0", "z0"):
             force.addPerParticleParameter(parameter)
         reference_nm = reference_positions.value_in_unit(unit.nanometer)
-        for atom in topology.atoms():
-            name = atom.name.strip()
-            is_hydrogen = (
-                atom.element is not None and atom.element.symbol == "H"
-            ) or name.startswith("H")
-            residue_name = atom.residue.name.strip().upper()
-            if is_hydrogen or residue_name in WATER_RESNAMES | ION_RESNAMES:
-                continue
-            if selection == "backbone" and name not in BACKBONE_NAMES:
-                continue
-            if selection not in {"heavy", "backbone"}:
-                raise RoeBrooksError(f"Unknown restraint selection {selection!r}")
-            point = reference_nm[atom.index]
-            force.addParticle(atom.index, [point.x, point.y, point.z])
+        for index in restrained_atom_indices(
+            topology, selection=selection, ion_atom_indices=ion_atom_indices
+        ):
+            point = reference_nm[index]
+            force.addParticle(index, [point.x, point.y, point.z])
         system.addForce(force)
 
     available = [
@@ -315,18 +393,13 @@ def run_roe_brooks(
 
     def write_pdb(simulation: Any, name: str) -> Path:
         path = output / name
-        state = simulation.context.getState(getPositions=True, enforcePeriodicBox=True)
+        state = periodic_output_state(simulation.context)
         with path.open("w", encoding="utf-8") as handle:
             PDBFile.writeFile(topology, state.getPositions(), handle, keepIds=True)
         return path
 
     def record_stage(simulation: Any, label: str) -> Any:
-        state = simulation.context.getState(
-            getPositions=True,
-            getVelocities=True,
-            getEnergy=True,
-            enforcePeriodicBox=True,
-        )
+        state = stage_handoff_state(simulation.context)
         potential = state.getPotentialEnergy().value_in_unit(unit.kilojoules_per_mole)
         kinetic = state.getKineticEnergy().value_in_unit(unit.kilojoules_per_mole)
         volume = state.getPeriodicBoxVolume().value_in_unit(unit.nanometer**3)
@@ -346,10 +419,7 @@ def run_roe_brooks(
         checkpoint = output / f"{stem}.chk"
         state_path = output / f"{stem}.xml"
         simulation.saveCheckpoint(str(checkpoint))
-        state = simulation.context.getState(
-            getPositions=True, getVelocities=True, getEnergy=True,
-            enforcePeriodicBox=True,
-        )
+        state = stage_handoff_state(simulation.context)
         state_path.write_text(mm.XmlSerializer.serialize(state), encoding="utf-8")
         return checkpoint
 

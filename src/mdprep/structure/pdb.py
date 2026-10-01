@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict, defaultdict
+from dataclasses import replace
 from pathlib import Path
 from typing import Iterable, Literal
 
@@ -43,13 +44,46 @@ def read_pdb(
         if model_count > 1:
             warnings.append(f"Input contains {model_count} MODEL records; using MODEL 1 only.")
 
-    raw_atoms = [_parse_atom_line(line) for line in model_lines if line.startswith(("ATOM", "HETATM"))]
+    atom_line_indices = [
+        index
+        for index, line in enumerate(model_lines)
+        if line.startswith(("ATOM", "HETATM"))
+    ]
+    raw_atoms = [_parse_atom_line(model_lines[index]) for index in atom_line_indices]
+
+    # Writers that exhaust the five-column serial field for systems above
+    # 99,999 atoms either overflow into column 12 (tleap/ambpdb), switch to
+    # hybrid-36, or wrap around. The first two are decoded by _parse_serial;
+    # a genuine wrap leaves duplicates that are renumbered in file order so
+    # that serial-keyed bookkeeping downstream stays well defined.
+    raw_serials = [atom.serial for atom in raw_atoms if atom.serial is not None]
+    if len(set(raw_serials)) != len(raw_serials):
+        if any(line.startswith("CONECT") for line in lines):
+            raise PdbParseError(
+                "PDB atom serials are not unique and the file contains CONECT "
+                "records, so the connectivity they encode cannot be resolved. "
+                "Provide a PDB whose serials are unique or written in hybrid-36."
+            )
+        raw_atoms = [
+            replace(atom, serial=position + 1)
+            for position, atom in enumerate(raw_atoms)
+        ]
+        warnings.append(
+            f"Input contains {len(raw_serials) - len(set(raw_serials))} duplicate "
+            "atom serials (the five-column PDB serial field wrapped); atoms were "
+            "renumbered sequentially in file order."
+        )
+
     atoms = _apply_altloc_policy(raw_atoms, altloc_policy)
     residues = _build_residues(atoms)
     present_serials = {atom.serial for atom in atoms if atom.serial is not None}
-    if len(present_serials) != sum(atom.serial is not None for atom in atoms):
-        raise PdbParseError("PDB atom serials must be unique when present.")
-    ter_after_serials = _parse_ter_after_serials(model_lines, present_serials)
+    retained = {id(atom) for atom in atoms}
+    serial_by_line_index = {
+        line_index: atom.serial
+        for line_index, atom in zip(atom_line_indices, raw_atoms)
+        if id(atom) in retained and atom.serial is not None
+    }
+    ter_after_serials = _parse_ter_after_serials(model_lines, serial_by_line_index)
     # CONECT records conventionally follow ENDMDL, so inspect the complete
     # file while filtering endpoints to the selected first model/altloc.
     conect_bonds = _parse_conect_bonds(lines, present_serials)
@@ -67,14 +101,14 @@ def read_pdb(
 
 def _parse_ter_after_serials(
     lines: list[str],
-    present_serials: set[int],
+    serial_by_line_index: dict[int, int],
 ) -> set[int]:
     result: set[int] = set()
     last_serial: int | None = None
-    for line in lines:
+    for index, line in enumerate(lines):
         if line.startswith(("ATOM", "HETATM")):
-            serial = _parse_int(line[6:11])
-            if serial in present_serials:
+            serial = serial_by_line_index.get(index)
+            if serial is not None:
                 last_serial = serial
         elif line.startswith("TER") and last_serial is not None:
             result.add(last_serial)
@@ -129,7 +163,7 @@ def _parse_atom_line(line: str) -> AtomRecord:
     if record_name not in {"ATOM", "HETATM"}:
         raise PdbParseError(f"Unsupported atom record {record_name!r}")
 
-    serial = _parse_int(line[6:11])
+    serial = _parse_serial(line)
     name = line[12:16].strip()
     altloc = _blank_to_none(line[16:17])
     resname = line[17:20].strip()
@@ -487,6 +521,54 @@ def _identity_display(identity: tuple[str, str, int, str | None, str]) -> str:
     chain_id, resname, resid, icode, atom_name = identity
     chain = chain_id if chain_id else "<blank>"
     return f"{chain}:{resname}{resid}{icode or ''}@{atom_name}"
+
+
+HYBRID36_DIGITS_UPPER = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+HYBRID36_DIGITS_LOWER = "0123456789abcdefghijklmnopqrstuvwxyz"
+SERIAL_FIELD_WIDTH = 5
+# Hybrid-36 reserves the decimal range for 1..99999 and then continues with
+# "A0000"; see Brookhaven/cctbx hybrid-36 (Grosse-Kunstleve et al., 2006).
+HYBRID36_UPPER_OFFSET = 10 ** SERIAL_FIELD_WIDTH - 10 * 36 ** (SERIAL_FIELD_WIDTH - 1)
+HYBRID36_LOWER_OFFSET = HYBRID36_UPPER_OFFSET + 26 * 36 ** (SERIAL_FIELD_WIDTH - 1)
+
+
+def _decode_base36(text: str, digits: str) -> int:
+    value = 0
+    for character in text:
+        value = value * 36 + digits.index(character)
+    return value
+
+
+def _parse_serial(line: str) -> int | None:
+    """Decode the atom serial of an ATOM/HETATM line.
+
+    The PDB serial field is five columns wide, which only reaches 99,999 atoms.
+    Writers resolve the overflow in three incompatible ways, all accepted here:
+
+    * tleap/ambpdb widen the field into column 12, which is otherwise blank;
+    * cctbx-derived tools switch to hybrid-36 ("A0000" follows "99999");
+    * some writers emit "*****", which carries no serial at all.
+    """
+
+    field = line[6 : 6 + SERIAL_FIELD_WIDTH]
+    # tleap and ambpdb push the sixth digit into column 12, which the PDB
+    # format leaves blank between the serial and the atom-name field. Only an
+    # overflow can land there, so require a value past the five-column limit
+    # rather than trusting column 12 on a file whose columns are already off.
+    if len(line) > 11 and line[11].isdigit() and field.strip().isdigit():
+        widened = line[6:12].strip()
+        if widened.isdigit() and int(widened) >= 10 ** SERIAL_FIELD_WIDTH:
+            field = widened
+    stripped = field.strip()
+    if not stripped or set(stripped) == {"*"}:
+        return None
+    if stripped.lstrip("-").isdigit():
+        return int(stripped)
+    if all(character in HYBRID36_DIGITS_UPPER for character in stripped):
+        return _decode_base36(stripped, HYBRID36_DIGITS_UPPER) + HYBRID36_UPPER_OFFSET
+    if all(character in HYBRID36_DIGITS_LOWER for character in stripped):
+        return _decode_base36(stripped, HYBRID36_DIGITS_LOWER) + HYBRID36_LOWER_OFFSET
+    raise PdbParseError(f"Unparseable atom serial {field!r} in line: {line}")
 
 
 def _parse_int(text: str) -> int | None:

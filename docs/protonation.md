@@ -52,6 +52,35 @@ written to `01_protonation_assigned.pdb` or final Amber files. Set
 `protonation.histidine.xtb.add_missing_water_hydrogens: false` to preserve the
 strict requirement for pre-hydrogenated cluster waters.
 
+## xTB thread usage
+
+Left to its own defaults, xTB opens one OpenMP thread per hardware thread for
+every tautomer cluster it is given. A histidine cluster is a few hundred atoms
+at most, far below the size at which that parallelism pays for itself, and
+mdprep evaluates several clusters concurrently, so an unbounded default
+oversubscribes the machine badly: on a 63-thread host a single 257-atom cluster
+consumed 7,879 CPU seconds to reach geometry step 13, with no wall-clock
+benefit over a serial run.
+
+mdprep therefore pins `OMP_NUM_THREADS`, `MKL_NUM_THREADS` and
+`OPENBLAS_NUM_THREADS` to `protonation.histidine.xtb.num_threads` (default `1`)
+around every xTB call, and sets `OMP_STACKSIZE` from
+`protonation.histidine.xtb.omp_stacksize` (default `1G`) because xTB segfaults
+on small per-thread stacks:
+
+```yaml
+protonation:
+  histidine:
+    xtb:
+      num_threads: 1
+      omp_stacksize: 1G
+```
+
+Raise `num_threads` only for unusually large clusters, and only when clusters
+are not already running concurrently. Setting `OMP_NUM_THREADS` in the calling
+shell has no effect: mdprep sets it explicitly so that runs are reproducible
+and the recorded external-command environment matches what was executed.
+
 Disulfide-linked cysteines are assigned `CYX` from forced or detected SG-SG
 pairs unless forbidden by the manifest.
 

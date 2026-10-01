@@ -73,6 +73,24 @@ and `md_report.json` under `md/roe_brooks_2020/`. Random seeds, platform,
 thermodynamic settings, convergence statistics, energies, volumes, production
 steps, and output paths are recorded.
 
+## Restraints and the coordinate frame
+
+Steps 1-4 restrain solute heavy atoms to the coordinates of the input
+structure, and steps 6-8 restrain them to the step-5 minimum. Hydrogens, water
+and free monatomic ions are solvent and are never restrained. Ion residues are
+matched after stripping the charge decoration Amber writes, so `Na+`, `Cl-`,
+`Mg2+` and the plain `NA`/`CL` spellings are all recognised; only single-atom
+residues qualify, so a ligand whose name happens to normalise onto an element
+symbol stays solute.
+
+Coordinates passed from one stage to the next, and those written into the XML
+restarts, are deliberately **not** wrapped into the periodic box. The restraint
+reference coordinates live in the unwrapped frame of the input, so wrapping a
+restrained particle that has crossed a periodic face would place it a full box
+length from its reference. Only the per-step PDBs and the DCD trajectory are
+wrapped, because those are read by humans and viewers rather than fed back into
+a restrained stage.
+
 The protocol checks numerical stability and completion, but a short smoke test
 does not establish scientific convergence. Select production length and
 analysis requirements appropriate for the system.

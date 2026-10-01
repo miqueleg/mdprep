@@ -61,6 +61,9 @@ relative executable path when needed.
   - `scf_iterations`: xTB SCC/SCF iteration limit for histidine tautomer jobs.
   - `electronic_temperature_kelvin`: xTB electronic temperature passed as
     `--etemp`; default is `1000.0`, set null to omit the option.
+  - `num_threads`: OpenMP/BLAS threads per xTB call (default `1`). See
+    [xTB thread usage](protonation.md#xtb-thread-usage) before raising it.
+  - `omp_stacksize`: `OMP_STACKSIZE` for xTB calls (default `1G`).
 
 ## disulfides
 
