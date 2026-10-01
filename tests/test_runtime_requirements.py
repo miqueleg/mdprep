@@ -183,3 +183,17 @@ def test_a_disabled_refinement_adds_nothing():
     packages = conda_packages_for(manifest(refinement={"enabled": False}))
 
     assert "xtb" not in packages
+
+
+def test_a_ligand_with_a_smiles_requires_rdkit():
+    packages = conda_packages_for(
+        manifest(ligands=[{"charge_method": "am1bcc", "smiles": "CCO"}])
+    )
+
+    assert "rdkit" in packages
+
+
+def test_a_ligand_without_a_smiles_does_not():
+    assert "rdkit" not in conda_packages_for(
+        manifest(ligands=[{"charge_method": "am1bcc"}])
+    )

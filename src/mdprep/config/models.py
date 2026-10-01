@@ -265,6 +265,11 @@ class LigandConfig(StrictModel):
     selector: LigandResidueSelector
     net_charge: int
     multiplicity: int = Field(default=1, ge=1)
+    # The protonation the user intends, stated explicitly. A crystal structure
+    # carries no ligand hydrogens; supplying a SMILES lets mdprep place them
+    # without guessing a tautomer or a charge. A ligand that already has
+    # hydrogens is left alone whatever this says.
+    smiles: str | None = None
     expected_formula: str | None = Field(
         default=None,
         pattern=r"^(?:[A-Z][a-z]?[0-9]*)+$",

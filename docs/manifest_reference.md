@@ -82,6 +82,11 @@ Each ligand has:
 
 - `id`
 - `selector`
+- `smiles`: the protonation you intend, stated explicitly. A crystal structure
+  carries no ligand hydrogens; a SMILES lets mdprep place them rather than
+  refusing to proceed, and fixes the tautomer and the charge. A ligand that
+  already has hydrogens is never modified, and adding any always warns. Needs
+  RDKit (`pip install mdprep[ligands]`). See [ligands.md](ligands.md).
 - `net_charge`
 - `multiplicity`
 - `atom_types`: `gaff` or `gaff2`

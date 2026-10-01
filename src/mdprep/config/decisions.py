@@ -368,8 +368,19 @@ def plan_decisions(
     )
     # A metal ion is a heterogen, but it is parameterised as a metal site, not
     # as a GAFF ligand, so it must not also be offered for antechamber.
+    # A metal ion is parameterised as a metal site, and a single-atom donor --
+    # a coordinating halide, say -- belongs to the site it coordinates:
+    # antechamber's semi-empirical step cannot run on one atom.
+    monatomic_donors = {
+        donor.id
+        for metal in summary.metal_ions
+        for donor, _, _ in metal_donor_atoms(summary.structure.residues, metal)
+        if len(donor.atoms) == 1
+    }
     ligands = [
-        residue for residue in summary.likely_ligands if not is_metal_ion_residue(residue)
+        residue
+        for residue in summary.likely_ligands
+        if not is_metal_ion_residue(residue) and residue.id not in monatomic_donors
     ]
     decisions: list[Decision] = []
     decisions.extend(_project_decisions(path))

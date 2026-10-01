@@ -41,6 +41,9 @@ qm = [
   "pyscf>=2.6",
   "parmed>=4.2",
 ]
+ligands = [
+  "rdkit>=2023.3",
+]
 test = [
   "pytest>=8",
 ]

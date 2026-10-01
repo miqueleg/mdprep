@@ -131,8 +131,8 @@ def test_choosing_one_chain_prunes_the_other_copies():
 
     ligands_all = [d for d in everything if d.id.endswith(".include")]
     ligands_a = [d for d in chain_a if d.id.endswith(".include")]
-    assert len(ligands_all) == 12  # four chains x three heterogens
-    assert len(ligands_a) == 3
+    assert len(ligands_all) == 8  # four chains x two parameterised heterogens
+    assert len(ligands_a) == 2  # the chloride belongs to the metal site
     assert all(".a_" in d.id for d in ligands_a)
 
 

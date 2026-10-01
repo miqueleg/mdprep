@@ -7,6 +7,7 @@ from pathlib import Path
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from mdprep import __version__
@@ -34,7 +35,10 @@ app = typer.Typer(
     help="Reproducible Amber MD preparation workflow manager.",
     no_args_is_help=True,
 )
-console = Console()
+# Residue identifiers look like emoji shortcodes to rich: a chloride at A:CL303
+# renders as "A<emoji>303". Markup stays on for styling, but anything that came
+# from a structure, a path or an exception is escaped before it is printed.
+console = Console(emoji=False, highlight=False)
 
 
 def _print_json(payload: object) -> None:
@@ -139,7 +143,7 @@ def inspect_command(
         else:
             _render_inspection(summary)
     except (FileNotFoundError, PdbParseError, ValueError) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
 
@@ -177,7 +181,7 @@ def plan_command(
             disulfide_cutoff_angstrom=disulfide_cutoff or 2.2,
         )
     except (FileNotFoundError, PdbParseError, DecisionError, ValueError) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
     if json_output:
@@ -307,7 +311,7 @@ def init_command(
             include_ligand_placeholders=include_ligand_placeholders,
         )
     except (FileExistsError, FileNotFoundError, PdbParseError, ValueError) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
     console.print(f"Wrote starter manifest: {manifest_path}")
 
@@ -336,7 +340,7 @@ def _run_interactive_init(
             preset=preset,
         )
     except (FileExistsError, FileNotFoundError, PdbParseError, DecisionError, ValueError) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
     console.print(
@@ -391,7 +395,7 @@ def prepare_command(
         PdbParseError,
         ValueError,
     ) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
     if not quiet:
         console.print(f"Wrote output PDB: {result.output_path}")
@@ -407,7 +411,7 @@ def validate_command(
     try:
         validate_system(prmtop, inpcrd)
     except ValueError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
     console.print("Validation passed")
 
@@ -446,7 +450,7 @@ def run_md_command(
             config=manifest.molecular_dynamics,
         )
     except (FileNotFoundError, RoeBrooksError, ValueError) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
     console.print(
         f"MD completed on {result.platform}; final coordinates: {result.final_pdb}"
@@ -511,7 +515,7 @@ def compare_mcpb_command(
             output_dir=output_dir,
         )
     except (McpbParameterComparisonError, ValueError) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
     status = {
         "pass": "PASS",

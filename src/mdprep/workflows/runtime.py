@@ -46,6 +46,9 @@ def conda_packages_for(manifest: Mapping[str, Any]) -> list[str]:
     for ligand in manifest.get("ligands") or []:
         if ligand.get("charge_method") in QM_CHARGE_METHODS:
             add("pyscf")
+        if ligand.get("smiles"):
+            # Placing hydrogens from a SMILES goes through RDKit.
+            add("rdkit")
 
     for site in manifest.get("metals") or []:
         if site.get("model") == "bonded_mcpb":

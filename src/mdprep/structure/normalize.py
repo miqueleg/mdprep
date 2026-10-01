@@ -133,14 +133,26 @@ def normalize_structure_stage(
     configured_metals = _resolve_configured_metals(structure, manifest)
     _validate_disulfide_selectors(structure, manifest)
     configured_ligand_keys = {id(residue) for _, residue in configured_ligands}
-    configured_metal_residue_keys = {id(residue) for _, _, residue in configured_metals}
-    overlap = configured_ligand_keys & configured_metal_residue_keys
+    configured_metal_ion_keys = {id(residue) for _, _, residue in configured_metals}
+    # Being both a ligand and a metal ion is a contradiction. Being both a
+    # ligand and a coordinator is not: alpha-ketoglutarate needs GAFF
+    # parameters and also bonds the iron, so the two sets are kept apart.
+    overlap = configured_ligand_keys & configured_metal_ion_keys
     if overlap:
         residues = [residue for residue in structure.residues if id(residue) in overlap]
         formatted = ", ".join(_format_residue_for_error(residue) for residue in residues)
         raise StructureNormalizationError(
             "A residue cannot be configured as both a ligand and a metal ion: " + formatted
         )
+    # A residue named as an MCPB coordinator or additional residue is part of
+    # the metal site and is parameterized with it, so it is not an unknown
+    # heterogen. A coordinating halide is the case that matters: it cannot be a
+    # metal ion, because an ion's charge is positive by definition, and it
+    # cannot be a GAFF ligand either, because antechamber's semi-empirical step
+    # refuses a single atom.
+    configured_metal_residue_keys = configured_metal_ion_keys | _mcpb_model_residue_keys(
+        structure, manifest
+    )
     likely_heterogens = [residue for residue in structure.residues if is_likely_ligand_or_cofactor(residue)]
     unknown_heterogens = [
         residue
@@ -302,6 +314,30 @@ def _resolve_configured_ligands(
             ) from exc
         resolved.append((ligand.id, residue))
     return resolved
+
+
+def _mcpb_model_residue_keys(
+    structure: PdbStructure,
+    manifest: ManifestConfig,
+) -> set[int]:
+    """Residues drawn into a bonded MCPB model besides the metal itself."""
+
+    keys: set[int] = set()
+    for site in manifest.metals:
+        if site.model != "bonded_mcpb" or site.mcpb is None:
+            continue
+        selectors = [bond.coordinator.model_dump() for bond in site.mcpb.bonds]
+        selectors += [item.model_dump() for item in site.mcpb.additional_residues]
+        for selector in selectors:
+            selector.pop("atom_name", None)
+            try:
+                residue = resolve_residue_selector(structure, selector)
+            except SelectorError:
+                # An unresolvable selector is reported by the metal stage,
+                # which can say far more about it than this can.
+                continue
+            keys.add(id(residue))
+    return keys
 
 
 def _resolve_configured_metals(
