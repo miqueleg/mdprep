@@ -123,6 +123,7 @@ def test_it_works_on_a_manifest_the_builder_actually_produces():
         plan,
         {
             "structure.remove_unknown_heterogens": False,
+            "structure.repair.add_missing_heavy_atoms": False,
             "ligand.b_sub_501.net_charge": 0,
             "ligand.c_cof_601.net_charge": 0,
         },
@@ -152,3 +153,33 @@ def test_setup_commands_do_not_disturb_the_notebook_python():
 
     assert "condacolab" not in joined
     assert "MAMBA_ROOT_PREFIX" in joined
+
+
+def test_structure_repair_requires_pdbfixer():
+    packages = conda_packages_for(
+        manifest(structure={"repair": {"backend": "pdbfixer", "add_missing_heavy_atoms": True}})
+    )
+
+    assert "pdbfixer" in packages
+    assert "openmm" in packages
+
+
+def test_no_repair_means_no_pdbfixer():
+    assert "pdbfixer" not in conda_packages_for(
+        manifest(structure={"repair": {"backend": "none"}})
+    )
+
+
+def test_a_gfn2_qmmm_refinement_requires_xtb_and_openmm():
+    packages = conda_packages_for(
+        manifest(refinement={"enabled": True, "qm_method": "gfn2_xtb"})
+    )
+
+    assert "xtb" in packages
+    assert "openmm" in packages
+
+
+def test_a_disabled_refinement_adds_nothing():
+    packages = conda_packages_for(manifest(refinement={"enabled": False}))
+
+    assert "xtb" not in packages

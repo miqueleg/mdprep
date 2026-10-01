@@ -23,13 +23,26 @@ runner = CliRunner()
 
 
 def scripted_prompter(answers_by_id: dict[str, str]):
-    """Answer by decision id; anything not listed takes its default."""
+    """Answer by decision id.
+
+    Anything not listed takes its default, except a question that has no
+    default: those get a placeholder so a test can stay focused on the one
+    decision it is about.
+    """
 
     asked: list[str] = []
 
     def prompt(decision) -> str:
         asked.append(decision.id)
-        return answers_by_id.get(decision.id, "")
+        if decision.id in answers_by_id:
+            return answers_by_id[decision.id]
+        if not decision.requires_user_input:
+            return ""
+        if decision.kind == "boolean":
+            return "no"
+        if decision.kind == "choice":
+            return decision.choices[0].value
+        return "0"
 
     prompt.asked = asked  # type: ignore[attr-defined]
     return prompt
@@ -261,6 +274,7 @@ def test_init_interactive_writes_a_valid_manifest(tmp_path):
             "demo",           # project.name
             "",               # project.output_dir
             "no",             # structure.remove_unknown_heterogens
+            "yes",            # structure.repair.add_missing_heavy_atoms
             "",               # protein.forcefield
             "",               # protein.water_model
             "",               # protonation.method

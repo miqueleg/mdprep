@@ -44,6 +44,16 @@ def answer_blocking(plan: DecisionPlan, **overrides: object) -> dict[str, object
             answers[decision.id] = 2
         elif decision.id.endswith("remove_unknown_heterogens"):
             answers[decision.id] = False
+        elif decision.id.endswith("add_missing_heavy_atoms"):
+            answers[decision.id] = True
+        elif decision.id == "structure.chains":
+            answers[decision.id] = "all"
+        elif decision.id.endswith(".confirm_donors"):
+            answers[decision.id] = False
+        elif decision.id.endswith(".multiplicity"):
+            answers[decision.id] = 1
+        elif decision.id.endswith(".model_charge"):
+            answers[decision.id] = 0
         elif decision.id.endswith("production.steps"):
             answers[decision.id] = 500_000
     answers.update(overrides)
@@ -233,6 +243,7 @@ def test_a_rejected_coordination_shell_is_reported_not_invented():
     plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
     answers = {
         "structure.remove_unknown_heterogens": False,
+        "structure.repair.add_missing_heavy_atoms": True,
         "metal.z_zn_500_site.model": "bonded_mcpb",
         "metal.z_zn_500_site.charge": 2,
         "metal.z_zn_500_site.confirm_donors": False,
@@ -248,6 +259,7 @@ def test_a_confirmed_coordination_shell_is_generated():
     plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
     answers = {
         "structure.remove_unknown_heterogens": False,
+        "structure.repair.add_missing_heavy_atoms": True,
         "metal.z_zn_500_site.model": "bonded_mcpb",
         "metal.z_zn_500_site.charge": 2,
         "metal.z_zn_500_site.confirm_donors": True,
@@ -278,11 +290,21 @@ def test_enabling_md_requires_an_explicit_production_length():
     plan = plan_decisions(DATA / "protein_blank_chain.pdb")
 
     with pytest.raises(DecisionError, match="production.steps"):
-        build_manifest(plan, {"molecular_dynamics.enabled": True})
+        build_manifest(
+            plan,
+            {
+                "structure.repair.add_missing_heavy_atoms": True,
+                "molecular_dynamics.enabled": True,
+            },
+        )
 
     manifest = build_manifest(
         plan,
-        {"molecular_dynamics.enabled": True, "molecular_dynamics.production.steps": 1000},
+        {
+            "structure.repair.add_missing_heavy_atoms": True,
+            "molecular_dynamics.enabled": True,
+            "molecular_dynamics.production.steps": 1000,
+        },
     )
     assert manifest["molecular_dynamics"]["production"]["steps"] == 1000
     ManifestConfig.model_validate(manifest)
@@ -293,7 +315,11 @@ def test_reporting_intervals_never_exceed_a_short_production_run():
 
     manifest = build_manifest(
         plan,
-        {"molecular_dynamics.enabled": True, "molecular_dynamics.production.steps": 100},
+        {
+            "structure.repair.add_missing_heavy_atoms": True,
+            "molecular_dynamics.enabled": True,
+            "molecular_dynamics.production.steps": 100,
+        },
     )
 
     ManifestConfig.model_validate(manifest)

@@ -150,6 +150,7 @@ def test_the_chain_question_has_no_default_when_a_metal_is_present():
 BESD_ANSWERS = {
     "structure.chains": "A",
     "structure.remove_unknown_heterogens": False,
+    "structure.repair.add_missing_heavy_atoms": True,
     "protonation.method": "propka_xtb_his",
     "ligand.a_lys_301.net_charge": 1,
     "ligand.a_akg_304.net_charge": -2,

@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
 from mdprep.structure.classify import is_metal_ion_residue
+from mdprep.structure.completeness import chain_breaks, incomplete_residues
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
 from mdprep.structure.models import ResidueRecord
 from mdprep.structure.pdb import AltlocPolicy
@@ -374,6 +375,7 @@ def plan_decisions(
     decisions.extend(_project_decisions(path))
     decisions.extend(_chain_decision(summary))
     decisions.extend(_structure_decisions(summary))
+    decisions.extend(_repair_decisions(summary))
     decisions.extend(_protein_decisions())
     decisions.extend(_protonation_decisions(summary))
     decisions.extend(_disulfide_decisions(summary))
@@ -428,11 +430,20 @@ def plan_decisions(
         "non_protein_chains": non_protein_chain_ids(summary),
         "ligands": [residue.id.display() for residue in ligands],
         "metal_ions": [residue.id.display() for residue in summary.metal_ions],
+        "coordinating_waters": [
+            residue.id.display() for residue in coordinating_water_residues(summary)
+        ],
         "histidines": [residue.id.display() for residue in summary.histidines],
         "possible_disulfides": [
             f"{candidate.a.display()} -- {candidate.b.display()} "
             f"({candidate.distance_angstrom:.2f} A)"
             for candidate in summary.possible_disulfides
+        ],
+        "incomplete_residues": [
+            item.describe() for item in incomplete_residues(summary.structure.residues)
+        ],
+        "chain_breaks": [
+            item.describe() for item in chain_breaks(summary.structure.residues)
         ],
         "structure_warnings": list(summary.structure.warnings),
     }
@@ -542,8 +553,27 @@ def _chain_decision(summary: InspectionSummary) -> list[Decision]:
     ]
 
 
+def coordinating_water_residues(summary: InspectionSummary) -> list[ResidueRecord]:
+    """Waters in the first shell of a metal, which are part of its site."""
+
+    waters = {residue.id for residue in summary.water_residues}
+    found: list[ResidueRecord] = []
+    for metal in summary.metal_ions:
+        for residue, _, _ in metal_donor_atoms(summary.structure.residues, metal):
+            if residue.id in waters and all(
+                residue.id != seen.id for seen in found
+            ):
+                found.append(residue)
+    return found
+
+
 def _structure_decisions(summary: InspectionSummary) -> list[Decision]:
     decisions: list[Decision] = []
+    # A water coordinating a metal is part of that site. Discarding it would
+    # leave a bond pointing at a residue that no longer exists, so it is not
+    # offered as a choice, in the same way a hetero-only chain is not.
+    if coordinating_water_residues(summary):
+        return decisions
     if summary.water_residues:
         decisions.append(
             Decision(
@@ -591,6 +621,58 @@ def _structure_decisions(summary: InspectionSummary) -> list[Decision]:
                 focus="targets",
             )
         )
+    return decisions
+
+
+def _repair_decisions(summary: InspectionSummary) -> list[Decision]:
+    """Ask about incomplete residues before any expensive stage runs."""
+
+    incomplete = incomplete_residues(summary.structure.residues)
+    breaks = chain_breaks(summary.structure.residues)
+    if not incomplete and not breaks:
+        return []
+
+    shown = [item.describe() for item in incomplete[:8]]
+    if len(incomplete) > len(shown):
+        evidence = (
+            f"{len(incomplete)} residues have heavy atoms missing, including:",
+            *shown,
+            f"... and {len(incomplete) - len(shown)} more",
+        )
+    else:
+        evidence = (
+            (f"{len(incomplete)} residues have heavy atoms missing:", *shown)
+            if incomplete
+            else ()
+        )
+    if breaks:
+        evidence = evidence + (
+            f"{len(breaks)} chain break(s), which pdbfixer does NOT close here:",
+            *[item.describe() for item in breaks[:4]],
+        )
+
+    decisions = [
+        Decision(
+            id="structure.repair.add_missing_heavy_atoms",
+            section="structure",
+            question="Rebuild the side-chain atoms that are missing from the input?",
+            kind="boolean",
+            # No default: adding coordinates that were never observed is a
+            # modelling decision, and so is simulating a truncated side chain.
+            default=None,
+            requires_user_input=True,
+            why=(
+                "tleap cannot build a residue whose heavy atoms are absent, so "
+                "leaving these will stop the run. Rebuilding them with PDBFixer "
+                "invents coordinates that no experiment measured; they are usually "
+                "surface side chains where that is acceptable, but check the list "
+                "for anything near your active site."
+            ),
+            evidence=evidence,
+            targets=tuple(_target_for(item.residue) for item in incomplete[:25]),
+            focus="targets" if incomplete else "structure",
+        )
+    ]
     return decisions
 
 
@@ -1258,6 +1340,16 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
             "remove_unknown_heterogens": get("structure.remove_unknown_heterogens", False),
             "preserve_chain_ids": True,
             "remove_input_hydrogens": True,
+            **(
+                {
+                    "repair": {
+                        "backend": "pdbfixer",
+                        "add_missing_heavy_atoms": True,
+                    }
+                }
+                if resolved.get("structure.repair.add_missing_heavy_atoms")
+                else {}
+            ),
         },
         "protein": {
             "forcefield": resolved["protein.forcefield"],

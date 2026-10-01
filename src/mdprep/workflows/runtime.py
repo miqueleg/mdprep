@@ -52,6 +52,20 @@ def conda_packages_for(manifest: Mapping[str, Any]) -> list[str]:
             # MCPB sites take their ESP/Hessian work through PySCF.
             add("pyscf")
 
+    repair = (manifest.get("structure") or {}).get("repair") or {}
+    if repair.get("backend") not in (None, "none"):
+        # PDBFixer is an OpenMM application-layer package.
+        add("pdbfixer")
+        add("openmm")
+
+    refinement = manifest.get("refinement") or {}
+    if refinement.get("enabled"):
+        # ASH drives the QM/MM refinement through OpenMM, and the GFN2 engine
+        # is the xtb binary.
+        add("openmm")
+        if refinement.get("qm_method") == "gfn2_xtb":
+            add("xtb")
+
     validation = manifest.get("validation") or {}
     if validation.get("run_openmm_energy_check", True):
         add("openmm")
