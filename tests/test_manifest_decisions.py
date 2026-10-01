@@ -211,26 +211,59 @@ def test_xtb_thread_bound_is_written_for_the_xtb_histidine_method():
 def test_blocking_count_respects_answers_already_given():
     plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
 
-    everything = plan.blocking()
-    after_mcpb = plan.blocking({"metal.z_zn_500_site.model": "bonded_mcpb"})
+    nonbonded = plan.blocking({"metal.z_zn_500_site.model": "nonbonded"})
+    bonded = plan.blocking(
+        {
+            "metal.z_zn_500_site.model": "bonded_mcpb",
+            "metal.z_zn_500_site.confirm_donors": "true",
+        }
+    )
 
-    assert any(d.id == "metal.z_zn_500_site.charge" for d in everything)
-    # The nonbonded ion charge is not asked once MCPB is chosen.
-    assert not any(d.id == "metal.z_zn_500_site.charge" for d in after_mcpb)
+    bonded_ids = {d.id for d in bonded}
+    nonbonded_ids = {d.id for d in nonbonded}
+    # The oxidation state is needed either way.
+    assert "metal.z_zn_500_site.charge" in bonded_ids & nonbonded_ids
+    # The capped-model questions only arise for the bonded model.
+    assert "metal.z_zn_500_site.model_charge" in bonded_ids
+    assert "metal.z_zn_500_site.model_charge" not in nonbonded_ids
 
 
-def test_mcpb_sites_are_reported_rather_than_guessed():
-    """MCPB needs external QM artifacts, so the engine must not invent a block."""
+def test_a_rejected_coordination_shell_is_reported_not_invented():
+    """mdprep must never make up bonds the user declined to confirm."""
     plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
     answers = {
         "structure.remove_unknown_heterogens": False,
         "metal.z_zn_500_site.model": "bonded_mcpb",
+        "metal.z_zn_500_site.charge": 2,
+        "metal.z_zn_500_site.confirm_donors": False,
     }
 
     manifest = build_manifest(plan, answers)
 
     assert manifest["metals"] == []
     assert unresolved_mcpb_sites(plan, answers) == ["z_zn_500_site"]
+
+
+def test_a_confirmed_coordination_shell_is_generated():
+    plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
+    answers = {
+        "structure.remove_unknown_heterogens": False,
+        "metal.z_zn_500_site.model": "bonded_mcpb",
+        "metal.z_zn_500_site.charge": 2,
+        "metal.z_zn_500_site.confirm_donors": True,
+        "metal.z_zn_500_site.multiplicity": 1,
+        "metal.z_zn_500_site.model_charge": 2,
+    }
+
+    manifest = build_manifest(plan, answers)
+
+    assert unresolved_mcpb_sites(plan, answers) == []
+    site = manifest["metals"][0]
+    assert site["model"] == "bonded_mcpb"
+    assert site["mcpb"]["bonds"]
+    assert site["mcpb"]["pyscf"]["hessian_backend"] == "xtb"
+    assert site["mcpb"]["pyscf"]["xtb"]["model"] == "gfn2"
+    ManifestConfig.model_validate(manifest)
 
 
 def test_md_block_is_omitted_until_enabled():

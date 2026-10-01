@@ -18,9 +18,19 @@
   given manifest needs, so a generated setup cell installs PropKa, xTB or PySCF
   only when the run will actually invoke them.
 
+- `structure.keep_chains` restricts a build to named chains, which a bonded
+  MCPB site requires and a multi-copy crystal structure needs.
+- The decision engine proposes a metal coordination sphere from interatomic
+  distances, requires it to be confirmed, and generates the bonded MCPB block
+  with a GFN2 Seminario Hessian and GFN2 QM/MM refinement geometry.
+- `examples/16_besd_halogenase_gfn2_mcpb.yaml`, the BesD halogenase reference
+  case.
+
 ### Changed
 
 - Dropped the unused `scipy` and `pandas` runtime dependencies.
+- A ligand that coordinates a bonded metal site now defaults to taking its
+  charges from that site's MCPB fit instead of AM1-BCC.
 
 ## 0.2.1 - 2026-10-01
 

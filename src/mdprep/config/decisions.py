@@ -244,8 +244,14 @@ def metal_site_id_for(residue: ResidueRecord) -> str:
     return f"{_id_stem(residue)}_site"
 
 
-def _target_for(residue: ResidueRecord, *, element: str | None = None) -> "ResidueTarget":
-    atom_name = residue.atoms[0].name if len(residue.atoms) == 1 else None
+def _target_for(
+    residue: ResidueRecord,
+    *,
+    element: str | None = None,
+    atom_name: str | None = None,
+) -> "ResidueTarget":
+    if atom_name is None and len(residue.atoms) == 1:
+        atom_name = residue.atoms[0].name
     return ResidueTarget(
         chain=residue.id.chain_id,
         resname=residue.id.resname,
@@ -371,8 +377,18 @@ def plan_decisions(
     decisions.extend(_protein_decisions())
     decisions.extend(_protonation_decisions(summary))
     decisions.extend(_disulfide_decisions(summary))
+    # A ligand that coordinates a metal belongs to that site's quantum model.
+    donor_residue_ids = {
+        donor.id
+        for metal in summary.metal_ions
+        for donor, _, _ in metal_donor_atoms(summary.structure.residues, metal)
+    }
     for residue in ligands:
-        decisions.extend(_ligand_decisions(residue))
+        decisions.extend(
+            _ligand_decisions(
+                residue, coordinates_metal=residue.id in donor_residue_ids
+            )
+        )
     for residue in summary.metal_ions:
         decisions.extend(_metal_decisions(residue, summary.structure.residues))
     decisions.extend(_solvation_decisions())
@@ -713,7 +729,9 @@ def _disulfide_decisions(summary: InspectionSummary) -> list[Decision]:
     ]
 
 
-def _ligand_decisions(residue: ResidueRecord) -> list[Decision]:
+def _ligand_decisions(
+    residue: ResidueRecord, *, coordinates_metal: bool = False
+) -> list[Decision]:
     ligand_id = ligand_id_for(residue)
     display = residue.id.display()
     evidence = (f"{display}, {len(residue.atoms)} atoms",)
@@ -772,11 +790,32 @@ def _ligand_decisions(residue: ResidueRecord) -> list[Decision]:
             question=f"Partial-charge method for {display}",
             kind="choice",
             why=(
-                "AM1-BCC is fast and standard. The RESP routes are more accurate and "
-                "much more expensive, and need extra QM settings in the manifest."
+                (
+                    "This residue coordinates a metal, so it is part of the metal "
+                    "site's quantum model. Taking its charges from that same fit "
+                    "keeps the site electrostatically consistent; fitting them "
+                    "separately does not."
+                )
+                if coordinates_metal
+                else (
+                    "AM1-BCC is fast and standard. The RESP routes are more accurate "
+                    "and much more expensive, and need extra QM settings in the "
+                    "manifest."
+                )
             ),
-            default="am1bcc",
+            default="mcpb_resp_pyscf" if coordinates_metal else "am1bcc",
             choices=(
+                (
+                    Choice(
+                        "mcpb_resp_pyscf",
+                        "From the metal site's MCPB fit",
+                        "Charges come from the bonded site's large-model RESP.",
+                    ),
+                )
+                if coordinates_metal
+                else ()
+            )
+            + (
                 Choice("am1bcc", "AM1-BCC", "Fast semi-empirical charges via antechamber."),
                 Choice(
                     "gas_resp_pyscf",
@@ -801,14 +840,64 @@ def _ligand_decisions(residue: ResidueRecord) -> list[Decision]:
     ]
 
 
+# Formal charges of the donor groups that appear in a first-shell metal site at
+# neutral pH. Used only to show a user the arithmetic behind the capped-model
+# charge they must enter; it is never used as a default.
+STANDARD_DONOR_FORMAL_CHARGE = {
+    "HIS": 0, "HID": 0, "HIE": 0, "HIP": 1,
+    "ASP": -1, "ASH": 0, "GLU": -1, "GLH": 0,
+    "CYS": 0, "CYM": -1, "SER": 0, "THR": 0, "TYR": 0,
+    "ASN": 0, "GLN": 0, "MET": 0, "LYS": 1, "ARG": 1,
+    "HOH": 0, "WAT": 0,
+    "CL": -1, "BR": -1, "F": -1, "I": -1,
+}
+
+
+def model_charge_arithmetic(
+    metal_charge: int,
+    donor_residues: Sequence[ResidueRecord],
+) -> tuple[int | None, list[str]]:
+    """Capped-model charge implied by standard donor states, and its terms.
+
+    Returns ``None`` when a donor's formal charge is not something that can be
+    read off a residue name -- an organic cofactor, for instance -- because the
+    sum is then incomplete and must not be presented as an answer.
+    """
+
+    terms = [f"metal {metal_charge:+d}"]
+    total = metal_charge
+    complete = True
+    for residue in donor_residues:
+        name = residue.id.resname.strip().upper()
+        charge = STANDARD_DONOR_FORMAL_CHARGE.get(_normalise_ion_resname(name))
+        if charge is None:
+            charge = STANDARD_DONOR_FORMAL_CHARGE.get(name)
+        if charge is None:
+            terms.append(f"{residue.id.display()} ?")
+            complete = False
+            continue
+        terms.append(f"{residue.id.display()} {charge:+d}")
+        total += charge
+    return (total if complete else None), terms
+
+
 def _metal_decisions(
     residue: ResidueRecord, all_residues: Sequence[ResidueRecord]
 ) -> list[Decision]:
     site_id = metal_site_id_for(residue)
     display = residue.id.display()
     element = _residue_element(residue)
+    donors = metal_donor_atoms(all_residues, residue)
+    donor_residues: list[ResidueRecord] = []
+    for donor_residue, _, _ in donors:
+        if all(donor_residue.id != seen.id for seen in donor_residues):
+            donor_residues.append(donor_residue)
     neighbours = contact_residues(all_residues, residue)
     contacts = tuple(_target_for(neighbour) for neighbour in neighbours)
+    donor_evidence = tuple(
+        f"{donor_residue.id.display()} {atom.name} at {distance:.2f} A"
+        for donor_residue, atom, distance in donors
+    )
     evidence = (
         f"{display}, element {element}",
         (
@@ -821,45 +910,47 @@ def _metal_decisions(
     )
     targets = (_target_for(residue, element=element),) + contacts
     model_id = f"metal.{site_id}.model"
-    return [
+    bonded = (Condition(model_id, ("bonded_mcpb",)),)
+    nonbonded = (Condition(model_id, ("nonbonded",)),)
+    confirm_id = f"metal.{site_id}.confirm_donors"
+    confirmed = bonded + (Condition(confirm_id, ("true",)),)
+
+    decisions = [
         Decision(
             id=model_id,
             section="metals",
             question=f"How should the metal site at {display} be modelled?",
             kind="choice",
-            # No default: the two models give different chemistry, and the choice
-            # depends on whether the metal is structural or catalytic.
             default=None,
             requires_user_input=True,
             why=(
-                "A nonbonded model keeps the ion free and is adequate for a "
-                "structural or loosely bound metal. A bonded MCPB model is required "
-                "when coordination must be maintained, and needs external QM work "
-                "that this wizard cannot generate for you."
+                "A nonbonded model keeps the ion free and suits a structural or "
+                "loosely bound metal. A bonded MCPB model holds the coordination "
+                "sphere together and is what a catalytic centre needs; it costs a "
+                "quantum chemistry calculation."
             ),
             choices=(
                 Choice(
                     "nonbonded",
                     "Nonbonded (Li/Merz)",
-                    "Generated here. Pick an Amber ion parameter set below.",
+                    "Cheap. Pick an Amber ion parameter set below.",
                 ),
                 Choice(
                     "bonded_mcpb",
                     "Bonded (MCPB.py)",
-                    "NOT generated here: the wizard writes a commented stub and you "
-                    "complete it following docs/metals.md.",
+                    "Keeps the coordination sphere; needs a Hessian and an ESP fit.",
                 ),
             ),
-            evidence=evidence,
+            evidence=evidence + donor_evidence,
             targets=targets,
             focus="targets",
         ),
+        # Needed by both models, so it carries no condition.
         Decision(
             id=f"metal.{site_id}.charge",
             section="metals",
             question=f"Formal oxidation state (charge) of {display}",
             kind="integer",
-            # No default: neither a residue name nor an element implies a charge.
             default=None,
             requires_user_input=True,
             why=(
@@ -871,7 +962,6 @@ def _metal_decisions(
             evidence=evidence,
             targets=targets,
             focus="targets",
-            when=(Condition(model_id, ("nonbonded",)),),
         ),
         Decision(
             id=f"metal.{site_id}.parameter_set",
@@ -887,11 +977,106 @@ def _metal_decisions(
                 Choice("iod", "IOD", "Fitted to ion-oxygen distances."),
                 Choice("cm", "CM", "Compromise set."),
             ),
-            when=(Condition(model_id, ("nonbonded",)),),
+            when=nonbonded,
             targets=targets,
             focus="targets",
         ),
     ]
+
+    if not donors:
+        # Nothing to bond to, so the bonded model cannot be built here.
+        return decisions
+
+    decisions.extend(
+        [
+            Decision(
+                id=confirm_id,
+                section="metals",
+                question=(
+                    f"Are these the atoms coordinating {display}?"
+                ),
+                kind="boolean",
+                default=None,
+                requires_user_input=True,
+                why=(
+                    "mdprep proposes this shell from interatomic distances alone. "
+                    "Every bond it contains becomes a bonded parameter, so it has "
+                    "to be confirmed by someone who knows the chemistry. Answer no "
+                    "to write the site out by hand instead."
+                ),
+                evidence=donor_evidence,
+                # targets[0] is the metal; the rest are the donor ATOMS, named,
+                # because they become the bonds in the generated manifest.
+                targets=(_target_for(residue, element=element),)
+                + tuple(
+                    _target_for(donor_residue, atom_name=atom.name)
+                    for donor_residue, atom, _ in donors
+                ),
+                focus="targets",
+                when=bonded,
+            ),
+            Decision(
+                id=f"metal.{site_id}.multiplicity",
+                section="metals",
+                question=f"Spin multiplicity of {display}",
+                kind="integer",
+                default=None,
+                requires_user_input=True,
+                why=(
+                    "The spin state changes the electronic structure the Hessian "
+                    "and the charges are derived from. High-spin Fe(II) d6 is 5 and "
+                    "high-spin Fe(III) d5 is 6; low-spin states differ."
+                ),
+                minimum=1,
+                evidence=evidence,
+                targets=targets,
+                focus="targets",
+                when=confirmed,
+            ),
+            Decision(
+                id=f"metal.{site_id}.model_charge",
+                section="metals",
+                question=(
+                    f"Total formal charge of the capped QM model around {display}"
+                ),
+                kind="integer",
+                default=None,
+                requires_user_input=True,
+                why=(
+                    "This is the charge of the metal plus every residue in the "
+                    "coordination sphere, and it sets the electron count of the "
+                    "quantum calculation. A wrong value gives converged, wrong "
+                    "parameters."
+                ),
+                evidence=donor_evidence,
+                targets=targets,
+                focus="targets",
+                when=confirmed,
+            ),
+            Decision(
+                id=f"metal.{site_id}.hessian_backend",
+                section="metals",
+                question=f"Which method should compute the Hessian for {display}?",
+                kind="choice",
+                why=(
+                    "The Seminario method turns a Hessian into bonded parameters. "
+                    "GFN2 is orders of magnitude cheaper than DFT and is what makes "
+                    "this tractable outside a cluster."
+                ),
+                default="gfn2",
+                choices=(
+                    Choice("gfn2", "GFN2-xTB", "Semi-empirical; fast enough for a teaching run."),
+                    Choice("gxtb", "g-xTB", "Newer xTB parameterisation; needs the official binary."),
+                    Choice("pyscf", "DFT (PySCF)", "Most accurate and far more expensive."),
+                ),
+                evidence=evidence,
+                targets=targets,
+                focus="targets",
+                when=confirmed,
+            ),
+        ]
+    )
+    return decisions
 
 
 def _solvation_decisions() -> list[Decision]:
@@ -1087,6 +1272,7 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
         },
         "ligands": _ligand_blocks(plan, resolved),
         "metals": _metal_blocks(plan, resolved),
+        "refinement": {},
         "solvation": _solvation_block(resolved),
         "validation": {
             "run_openmm_energy_check": True,
@@ -1096,6 +1282,9 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
         },
         "molecular_dynamics": _md_block(resolved),
     }
+    manifest["refinement"] = _refinement_block(
+        plan, resolved, manifest["metals"], manifest["ligands"]
+    )
     return manifest
 
 
@@ -1149,42 +1338,152 @@ def _metal_blocks(
         if decision.section != "metals" or not decision.id.endswith(".model"):
             continue
         site_id = decision.id.split(".")[1]
-        if resolved.get(decision.id) != "nonbonded":
-            # A bonded MCPB site needs external QM artifacts that cannot be
-            # invented here; the caller reports it instead of emitting a guess.
+        model = resolved.get(decision.id)
+        if model is None:
             continue
+        ion = {
+            "selector": decision.subject.to_atom_selector(),
+            "element": decision.subject.element,
+            "charge": resolved[f"metal.{site_id}.charge"],
+        }
+        if model == "nonbonded":
+            blocks.append(
+                {
+                    "id": site_id,
+                    "model": "nonbonded",
+                    "ions": [ion],
+                    "nonbonded": {
+                        "parameter_set": resolved[f"metal.{site_id}.parameter_set"]
+                    },
+                }
+            )
+            continue
+        # A bonded site is only written once its coordination shell has been
+        # confirmed; otherwise it is reported for manual work instead.
+        if not resolved.get(f"metal.{site_id}.confirm_donors"):
+            continue
+        confirm = plan.by_id(f"metal.{site_id}.confirm_donors")
+        multiplicity = resolved[f"metal.{site_id}.multiplicity"]
+        model_charge = resolved[f"metal.{site_id}.model_charge"]
+        ion["multiplicity"] = multiplicity
+        backend = resolved[f"metal.{site_id}.hessian_backend"]
         blocks.append(
             {
                 "id": site_id,
-                "model": "nonbonded",
-                "ions": [
-                    {
-                        "selector": decision.subject.to_atom_selector(),
-                        "element": decision.subject.element,
-                        "charge": resolved[f"metal.{site_id}.charge"],
-                    }
-                ],
-                "nonbonded": {
-                    "parameter_set": resolved[f"metal.{site_id}.parameter_set"]
+                "model": "bonded_mcpb",
+                "ions": [ion],
+                "mcpb": {
+                    "workflow": "pyscf",
+                    "provisional_nonbonded_parameter_set": "12_6",
+                    "cutoff_angstrom": COORDINATION_CUTOFF_ANGSTROM,
+                    "bonds": [
+                        {
+                            "ion": confirm.subject.to_atom_selector(),
+                            "coordinator": donor.to_atom_selector(),
+                        }
+                        for donor in confirm.targets[1:]
+                    ],
+                    "additional_residues": [],
+                    "force_constant_method": "seminario",
+                    "charge_restraint": "backbone_heavy",
+                    "software_version": "gau",
+                    # The capped model carries the metal's spin; the donors are
+                    # treated as closed shell, which the question text states.
+                    "small_model_charge": model_charge,
+                    "small_model_spin": multiplicity,
+                    "large_model_charge": model_charge,
+                    "large_model_spin": multiplicity,
+                    "pyscf": _mcpb_pyscf_block(backend),
                 },
             }
         )
     return blocks
 
 
+def _mcpb_pyscf_block(hessian_backend: str) -> dict[str, Any]:
+    """QM settings for one bonded site.
+
+    The geometry comes from the QM/MM refinement stage rather than a
+    pre-optimised PDB, so that nothing has to be prepared by hand first.
+    """
+
+    block: dict[str, Any] = {
+        "geometry_source": "qmmm_refinement",
+        "hessian_backend": "xtb" if hessian_backend == "gfn2" else hessian_backend,
+        "method": "B3LYP",
+        "basis": "6-31G*",
+    }
+    if hessian_backend in {"gfn2", "gxtb"}:
+        block["xtb"] = {
+            "model": hessian_backend,
+            "executable": "xtb",
+            "num_threads": 1,
+        }
+    if hessian_backend == "gxtb":
+        block["hessian_backend"] = "gxtb"
+        block["gxtb"] = {"executable": "xtb", "num_threads": 1}
+        block.pop("xtb", None)
+    return block
+
+
+def _refinement_block(
+    plan: DecisionPlan,
+    resolved: Mapping[str, Any],
+    metals: Sequence[Mapping[str, Any]],
+    ligands: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """QM/MM refinement, which a bonded site takes its geometry from."""
+
+    bonded = [site for site in metals if site.get("model") == "bonded_mcpb"]
+    if not bonded:
+        return {"enabled": False}
+    multiplicities = {site["ions"][0]["multiplicity"] for site in bonded}
+    return {
+        "enabled": True,
+        "backend": "ash",
+        "qm_method": "gfn2_xtb",
+        "qm_components": {
+            "ligands": [entry["id"] for entry in ligands],
+            "metal_sites": [site["id"] for site in bonded],
+            "metal_coordinating_residues": {},
+        },
+        "active_region_cutoff_angstrom": 4.0,
+        "active_water_cutoff_angstrom": 8.0,
+        "include_contact_waters": True,
+        "movable_atoms": "active_region_hydrogens",
+        "post_refinement_protonation": "reuse_initial",
+        "total_qm_multiplicity": max(multiplicities),
+        "ash": {
+            "python_executable": "python",
+            "xtb_executable": "xtb",
+            "allow_unusual_link_boundaries": True,
+            "num_cores": 4,
+            "platform": "CPU",
+        },
+    }
+
+
 def unresolved_mcpb_sites(
     plan: DecisionPlan, answers: Mapping[str, Any]
 ) -> list[str]:
-    """Metal sites the user chose to model with MCPB, which need manual work."""
+    """Bonded sites that still need to be written out by hand.
+
+    A bonded site is generated once its coordination shell has been confirmed.
+    One stays unresolved when the proposed shell was rejected, or when no donor
+    was found at all, because mdprep will not invent the bonds.
+    """
 
     resolved = resolve_answers(plan, answers)
-    return [
-        decision.id.split(".")[1]
-        for decision in plan.decisions
-        if decision.section == "metals"
-        and decision.id.endswith(".model")
-        and resolved.get(decision.id) == "bonded_mcpb"
-    ]
+    unresolved: list[str] = []
+    for decision in plan.decisions:
+        if decision.section != "metals" or not decision.id.endswith(".model"):
+            continue
+        if resolved.get(decision.id) != "bonded_mcpb":
+            continue
+        site_id = decision.id.split(".")[1]
+        if not resolved.get(f"metal.{site_id}.confirm_donors"):
+            unresolved.append(site_id)
+    return unresolved
 
 
 def _solvation_block(resolved: Mapping[str, Any]) -> dict[str, Any]:

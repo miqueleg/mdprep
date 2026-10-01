@@ -145,3 +145,94 @@ def test_the_chain_question_has_no_default_when_a_metal_is_present():
 
     assert decision.default is None
     assert decision.requires_user_input is True
+
+
+BESD_ANSWERS = {
+    "structure.chains": "A",
+    "structure.remove_unknown_heterogens": False,
+    "protonation.method": "propka_xtb_his",
+    "ligand.a_lys_301.net_charge": 1,
+    "ligand.a_akg_304.net_charge": -2,
+    "ligand.a_cl_303.net_charge": -1,
+    "metal.a_fe2_302_site.model": "bonded_mcpb",
+    "metal.a_fe2_302_site.charge": 2,
+    "metal.a_fe2_302_site.confirm_donors": True,
+    "metal.a_fe2_302_site.multiplicity": 5,
+    "metal.a_fe2_302_site.model_charge": -1,
+}
+
+
+@needs_structure
+def generated() -> dict:
+    from mdprep.config.decisions import build_manifest
+
+    return build_manifest(plan_decisions(STRUCTURE), BESD_ANSWERS)
+
+
+@needs_structure
+def test_the_builder_generates_a_valid_besd_manifest():
+    ManifestConfig.model_validate(generated())
+
+
+@needs_structure
+def test_the_generated_site_reproduces_the_hand_written_bonds():
+    produced = {
+        (b["coordinator"]["resname"], b["coordinator"]["resid"], b["coordinator"]["atom_name"])
+        for b in generated()["metals"][0]["mcpb"]["bonds"]
+    }
+    declared = {
+        (b["coordinator"]["resname"], b["coordinator"]["resid"], b["coordinator"]["atom_name"])
+        for b in load_example()["metals"][0]["mcpb"]["bonds"]
+    }
+
+    assert produced == declared
+
+
+@needs_structure
+def test_the_generated_manifest_uses_gfn2_throughout():
+    manifest = generated()
+
+    assert manifest["metals"][0]["mcpb"]["pyscf"]["hessian_backend"] == "xtb"
+    assert manifest["metals"][0]["mcpb"]["pyscf"]["xtb"]["model"] == "gfn2"
+    assert manifest["refinement"]["qm_method"] == "gfn2_xtb"
+    assert manifest["refinement"]["enabled"] is True
+
+
+@needs_structure
+def test_the_coordinating_cofactor_defaults_to_the_metal_site_fit():
+    """alpha-ketoglutarate bonds the iron, so AM1-BCC would be inconsistent."""
+    ligands = {entry["id"]: entry for entry in generated()["ligands"]}
+
+    assert ligands["a_akg_304"]["charge_method"] == "mcpb_resp_pyscf"
+    assert ligands["a_lys_301"]["charge_method"] == "am1bcc"
+
+
+@needs_structure
+def test_only_the_selected_chain_reaches_the_manifest():
+    manifest = generated()
+
+    assert manifest["structure"]["keep_chains"] == ["A"]
+    assert all(entry["selector"]["chain"] == "A" for entry in manifest["ligands"])
+    assert len(manifest["metals"]) == 1
+
+
+@needs_structure
+def test_the_spin_state_is_carried_into_every_model():
+    site = generated()["metals"][0]
+
+    assert site["ions"][0]["multiplicity"] == 5
+    assert site["mcpb"]["small_model_spin"] == 5
+    assert site["mcpb"]["large_model_spin"] == 5
+    assert generated()["refinement"]["total_qm_multiplicity"] == 5
+
+
+@needs_structure
+def test_the_toolchain_for_this_run_includes_xtb_propka_and_pyscf():
+    from mdprep.workflows.runtime import conda_packages_for
+
+    packages = conda_packages_for(generated())
+
+    assert "ambertools" in packages
+    assert "propka" in packages          # propka_xtb_his
+    assert "xtb" in packages             # histidine tautomers and the Hessian
+    assert "pyscf" in packages           # bonded MCPB large-model ESP

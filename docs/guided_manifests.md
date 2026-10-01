@@ -51,12 +51,39 @@ that. These have no suggested value, and a front end cannot skip them:
 Free monatomic metals are offered as metal sites, never as GAFF ligands. Bulk
 counterions are treated as solvent and are not asked about at all.
 
+## Metal sites
+
+Choosing `bonded_mcpb` proposes a coordination sphere from interatomic
+distances: atoms of a donor element (N, O, S, P, Se, halide) within 2.6 A of
+the metal. Carbon and hydrogen are excluded, which is what keeps the carbons
+sitting behind a coordinating carboxylate oxygen out of the shell.
+
+The proposal is **not** a decision. You are shown every candidate bond with its
+measured distance and must confirm the set before anything is written; decline,
+and the site is reported for manual work rather than invented. The oxidation
+state, the spin multiplicity and the capped-model charge have no defaults
+either, because none of them can be read off a structure.
+
+A ligand that coordinates the metal takes its charges from that site's MCPB fit
+rather than an independent AM1-BCC calculation, since fitting a bonded donor
+separately leaves the site electrostatically inconsistent. A ligand that does
+not coordinate keeps AM1-BCC.
+
+The Hessian defaults to GFN2, which is orders of magnitude cheaper than DFT and
+is what makes a bonded site tractable outside a cluster; g-xTB and PySCF DFT
+are offered too. The geometry comes from the QM/MM refinement stage, which is
+enabled automatically for a bonded site, so nothing has to be optimised by hand
+first.
+
+[examples/16_besd_halogenase_gfn2_mcpb.yaml](../examples/16_besd_halogenase_gfn2_mcpb.yaml)
+is the worked reference: BesD, an alpha-ketoglutarate-dependent halogenase with
+Fe(II) in a 2-His triad, chloride in the carboxylate position, and a lysine
+substrate.
+
 ## What the wizard will not write for you
 
-A bonded MCPB metal site needs external QM artifacts that cannot be invented
-from a structure. Choosing `bonded_mcpb` records the decision, leaves the site
-out of the generated file, and prints a note; add the block by hand following
-[metals.md](metals.md).
+A bonded site whose proposed coordination shell you decline is left out of the
+generated file with a note; add it by hand following [metals.md](metals.md).
 
 The RESP charge methods likewise add a `qmmesp` block you must complete. See
 [ligands.md](ligands.md) and [qmmesp_pyscf.md](qmmesp_pyscf.md).

@@ -151,8 +151,14 @@ def test_wizard_refuses_to_overwrite_without_permission(tmp_path):
     assert output.read_text(encoding="utf-8") == "already here\n"
 
 
-def test_mcpb_choice_is_flagged_rather_than_written(tmp_path):
-    prompt = scripted_prompter({"metal.z_zn_500_site.model": "bonded_mcpb"})
+def test_a_rejected_coordination_shell_is_flagged_not_written(tmp_path):
+    prompt = scripted_prompter(
+        {
+            "metal.z_zn_500_site.model": "bonded_mcpb",
+            "metal.z_zn_500_site.charge": "2",
+            "metal.z_zn_500_site.confirm_donors": "no",
+        }
+    )
 
     result = run_wizard(
         DATA / "protein_histidine_zinc.pdb",
@@ -164,6 +170,29 @@ def test_mcpb_choice_is_flagged_rather_than_written(tmp_path):
     text = (tmp_path / "m.yaml").read_text(encoding="utf-8")
     assert "bonded_mcpb" in text  # the note
     assert yaml.safe_load(text)["metals"] == []
+
+
+def test_a_confirmed_coordination_shell_is_written(tmp_path):
+    prompt = scripted_prompter(
+        {
+            "metal.z_zn_500_site.model": "bonded_mcpb",
+            "metal.z_zn_500_site.charge": "2",
+            "metal.z_zn_500_site.confirm_donors": "yes",
+            "metal.z_zn_500_site.multiplicity": "1",
+            "metal.z_zn_500_site.model_charge": "2",
+        }
+    )
+
+    result = run_wizard(
+        DATA / "protein_histidine_zinc.pdb",
+        output_path=tmp_path / "m.yaml",
+        prompt=prompt,
+    )
+
+    assert result.mcpb_sites_needing_manual_work == ()
+    manifest = yaml.safe_load((tmp_path / "m.yaml").read_text(encoding="utf-8"))
+    ManifestConfig.model_validate(manifest)
+    assert manifest["metals"][0]["mcpb"]["bonds"]
 
 
 def test_rendered_manifest_records_that_values_were_entered_not_inferred():

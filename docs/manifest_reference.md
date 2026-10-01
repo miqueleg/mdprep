@@ -30,6 +30,10 @@ relative executable path when needed.
 
 ## structure
 
+- `keep_chains`: chains to build; empty keeps all. Naming one chain is required
+  for a bonded MCPB metal site, whose inputs are single-chain, and is how a
+  crystal structure containing several copies of a complex is reduced to one.
+  Chains holding only heterogens or water are kept regardless.
 - `keep_crystal_waters`: keep waters in the input PDB.
 - `altloc_policy`: `highest_occupancy`, `first`, or `fail`.
 - `remove_unknown_heterogens`: remove unconfigured heterogens instead of
