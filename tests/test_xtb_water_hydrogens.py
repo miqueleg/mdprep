@@ -59,7 +59,7 @@ def _run_with_fakes(monkeypatch, tmp_path, data: dict):
         ),
     )
 
-    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None):
+    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None, **kwargs):
         energy = -40.01 if Path(xyz_path).name == "HID.xyz" else -40.00
         Path(stdout_path).write_text(f":: total energy      {energy:.12f} Eh\n", encoding="utf-8")
         Path(stderr_path).write_text("", encoding="utf-8")

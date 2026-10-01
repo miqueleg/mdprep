@@ -101,3 +101,66 @@ def test_an_unconfigured_metal_still_fails_clearly():
 def test_the_error_mentions_both_places_a_heterogen_can_be_configured():
     with pytest.raises(HistidineXtbError, match="metals"):
         cluster_charge_breakdown(cluster(), manifest_with([]), {})
+
+
+# --------------------------------------------------------------------------
+# Spin state
+# --------------------------------------------------------------------------
+
+
+def test_a_closed_shell_cluster_has_no_unpaired_electrons():
+    from mdprep.protonation.histidine_xtb import cluster_unpaired_electrons
+
+    closed = {**ZINC_SITE, "ions": [{**ZINC_SITE["ions"][0], "multiplicity": 1}]}
+
+    assert cluster_unpaired_electrons(cluster(), manifest_with([closed])) == 0
+
+
+def test_high_spin_iron_two_contributes_four_unpaired_electrons():
+    """xTB will not converge a closed-shell solution for high-spin Fe(II)."""
+    from mdprep.protonation.histidine_xtb import cluster_unpaired_electrons
+
+    iron = {
+        **ZINC_SITE,
+        "ions": [{**ZINC_SITE["ions"][0], "element": "Zn", "multiplicity": 5}],
+    }
+
+    assert cluster_unpaired_electrons(cluster(), manifest_with([iron])) == 4
+
+
+def test_a_metal_without_a_declared_multiplicity_fails_clearly():
+    """A spin state cannot be inferred from an element."""
+    from mdprep.protonation.histidine_xtb import cluster_unpaired_electrons
+
+    with pytest.raises(HistidineXtbError, match="multiplicity"):
+        cluster_unpaired_electrons(cluster(), manifest_with([ZINC_SITE]))
+
+
+def test_the_spin_reaches_the_xtb_command_line():
+    from mdprep.config.models import HistidineXtbConfig
+    from mdprep.protonation.xtb_runner import build_xtb_command
+
+    command = build_xtb_command(
+        config=HistidineXtbConfig(),
+        xyz_path="cluster.xyz",
+        cluster_charge=2,
+        unpaired_electrons=4,
+        executable="xtb",
+    )
+
+    assert "--uhf" in command
+    assert command[command.index("--uhf") + 1] == "4"
+
+
+def test_a_cluster_with_no_metal_stays_closed_shell():
+    from mdprep.config.models import HistidineXtbConfig
+    from mdprep.protonation.xtb_runner import build_xtb_command
+
+    command = build_xtb_command(
+        config=HistidineXtbConfig(),
+        xyz_path="cluster.xyz",
+        cluster_charge=0,
+        executable="xtb",
+    )
+
+    assert command[command.index("--uhf") + 1] == "0"

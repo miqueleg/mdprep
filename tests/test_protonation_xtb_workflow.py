@@ -26,7 +26,7 @@ def run_with_fakes(monkeypatch, tmp_path, data: dict, *, hid_energy: float, hie_
         ),
     )
 
-    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None):
+    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None, **kwargs):
         energy = hid_energy if Path(xyz_path).name == "HID.xyz" else hie_energy
         Path(stdout_path).write_text(f":: total energy      {energy:.12f} Eh\n", encoding="utf-8")
         Path(stderr_path).write_text("", encoding="utf-8")
@@ -93,7 +93,7 @@ def test_xtb_tautomers_use_clean_isolated_work_directories(monkeypatch, tmp_path
         ),
     )
 
-    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None):
+    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None, **kwargs):
         run_dir = Path(work_dir)
         observed_work_dirs.append(run_dir)
         assert run_dir.name == Path(xyz_path).stem
@@ -165,7 +165,7 @@ def test_multiple_neutral_histidines_with_ambiguous_input_hydrogens_do_not_fail(
         ),
     )
 
-    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None):
+    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None, **kwargs):
         energy = -40.01 if Path(xyz_path).name == "HID.xyz" else -40.00
         Path(stdout_path).write_text(f":: total energy      {energy:.12f} Eh\n", encoding="utf-8")
         Path(stderr_path).write_text("", encoding="utf-8")

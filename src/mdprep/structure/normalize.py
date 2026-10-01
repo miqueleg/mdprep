@@ -212,6 +212,15 @@ def normalize_structure_stage(
         if id(residue) in keep_residue_ids:
             filtered_atoms.extend(residue.atoms)
 
+    # Ligand hydrogens belong to the structure, not just to the ligand's own
+    # file: the QM/MM refinement, the leap build and the ligand parameters all
+    # have to see the same molecule. Placing them here is what keeps them
+    # consistent; configured ligands are exempt from remove_input_hydrogens so
+    # they survive the protonation stage intact.
+    filtered_atoms, hydrogenations = _hydrogenate_configured_ligands(
+        structure, manifest, keep_residue_ids, filtered_atoms
+    )
+
     normalized_structure = PdbStructure(
         path=Path(output_path) if output_path is not None else structure.path,
         atoms=filtered_atoms,
@@ -314,6 +323,55 @@ def _resolve_configured_ligands(
             ) from exc
         resolved.append((ligand.id, residue))
     return resolved
+
+
+def _hydrogenate_configured_ligands(
+    structure: PdbStructure,
+    manifest: ManifestConfig,
+    keep_residue_ids: set[int],
+    filtered_atoms: list[AtomRecord],
+) -> tuple[list[AtomRecord], list[dict[str, object]]]:
+    """Place ligand hydrogens declared by a SMILES, in structure order."""
+
+    from mdprep.ligands.hydrogenate import (
+        LigandHydrogenationError,
+        add_ligand_hydrogens,
+    )
+
+    results: list[dict[str, object]] = []
+    additions: dict[int, list[AtomRecord]] = {}
+    for ligand in manifest.ligands:
+        if ligand.smiles is None:
+            continue
+        try:
+            residue = resolve_residue_selector(structure, ligand.selector.model_dump())
+        except SelectorError:
+            # The ligand stage reports an unresolvable selector in full.
+            continue
+        if id(residue) not in keep_residue_ids:
+            continue
+        try:
+            outcome = add_ligand_hydrogens(residue, ligand.smiles, ligand_id=ligand.id)
+        except LigandHydrogenationError as exc:
+            raise StructureNormalizationError(str(exc)) from exc
+        results.append(outcome.to_dict())
+        if outcome.skipped:
+            continue
+        existing = {id(atom) for atom in residue.atoms}
+        additions[id(residue.atoms[-1])] = [
+            atom for atom in outcome.residue.atoms if id(atom) not in existing
+        ]
+
+    if not additions:
+        return filtered_atoms, results
+
+    # Insert each ligand's hydrogens directly after its last existing atom so
+    # that residues stay contiguous in the output.
+    rebuilt: list[AtomRecord] = []
+    for atom in filtered_atoms:
+        rebuilt.append(atom)
+        rebuilt.extend(additions.get(id(atom), ()))
+    return rebuilt, results
 
 
 def _mcpb_model_residue_keys(

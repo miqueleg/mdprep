@@ -86,6 +86,7 @@ def select_histidine_tautomer(
     )
     charge_breakdown = cluster_charge_breakdown(cluster_residues, manifest, planned_states)
     cluster_charge = sum(int(item["charge"]) for item in charge_breakdown)
+    unpaired = cluster_unpaired_electrons(cluster_residues, manifest)
     hid_xyz = hist_dir / "HID.xyz"
     hie_xyz = hist_dir / "HIE.xyz"
     try:
@@ -138,6 +139,7 @@ def select_histidine_tautomer(
             xyz_path=hid_run_xyz,
             work_dir=hid_run_dir,
             cluster_charge=cluster_charge,
+            unpaired_electrons=unpaired,
             stdout_path=hid_stdout,
             stderr_path=hid_stderr,
             input_path=hid_run_input if config.mode == "opt" and hid_model.fixed_atom_indices else None,
@@ -147,6 +149,7 @@ def select_histidine_tautomer(
             xyz_path=hie_run_xyz,
             work_dir=hie_run_dir,
             cluster_charge=cluster_charge,
+            unpaired_electrons=unpaired,
             stdout_path=hie_stdout,
             stderr_path=hie_stderr,
             input_path=hie_run_input if config.mode == "opt" and hie_model.fixed_atom_indices else None,
@@ -354,6 +357,42 @@ def _ligand_charge_by_residue(
             continue
         result[id(residue)] = ligand.net_charge
     return result
+
+
+def cluster_unpaired_electrons(
+    cluster_residues: list[ResidueRecord],
+    manifest: ManifestConfig,
+) -> int:
+    """Unpaired electrons contributed by configured metals in a cluster.
+
+    High-spin Fe(II) carries four. Treating such a cluster as closed shell
+    does not converge, and would be the wrong electronic state if it did.
+    """
+
+    structure = PdbStructure(
+        path=Path("cluster"),
+        atoms=[atom for residue in cluster_residues for atom in residue.atoms],
+        residues=cluster_residues,
+        model_count=1,
+    )
+    total = 0
+    for site in manifest.metals:
+        for ion in site.ions:
+            try:
+                resolve_residue_selector(
+                    structure, ion.selector.model_dump(exclude={"atom_name"})
+                )
+            except SelectorError:
+                continue
+            if ion.multiplicity is None:
+                raise HistidineXtbError(
+                    f"Metal {ion.element} in site {site.id!r} appears in an xTB "
+                    "histidine cluster but declares no multiplicity. Set "
+                    "metals[].ions[].multiplicity: a spin state cannot be "
+                    "inferred from an element."
+                )
+            total += ion.multiplicity - 1
+    return total
 
 
 def _metal_charge_by_residue(

@@ -11,10 +11,6 @@ from dataclasses import replace
 
 from mdprep.config.models import LigandConfig, ManifestConfig
 from mdprep.ligands.identity import ligand_identity_dict
-from mdprep.ligands.hydrogenate import (
-    LigandHydrogenationError,
-    add_ligand_hydrogens,
-)
 from mdprep.structure.models import PdbStructure, ResidueRecord
 from mdprep.structure.pdb import infer_element
 from mdprep.structure.selectors import SelectorError, resolve_residue_selector
@@ -106,19 +102,9 @@ def extract_ligand(
             record_names=residue.record_names,
             original_index=residue.original_index,
         )
-    # Hydrogens, if the user supplied a SMILES saying which. This runs before
-    # the formula check so that a deposited structure with no ligand hydrogens
-    # can proceed; a ligand that already has them is left untouched.
-    if ligand.smiles is not None:
-        try:
-            hydrogenation = add_ligand_hydrogens(
-                residue, ligand.smiles, ligand_id=ligand.id
-            )
-        except LigandHydrogenationError as exc:
-            raise LigandExtractionError(str(exc)) from exc
-        residue = hydrogenation.residue
-        warnings.extend(hydrogenation.warnings)
-
+    # Hydrogens declared by ligands[].smiles were placed during structure
+    # normalization, so that the structure, the ligand files and the QM/MM
+    # refinement all see the same molecule.
     warnings.extend(_validate_ligand_formula(ligand, residue))
 
     ligand_dir = Path(output_dir) / "ligands" / ligand.id / "input"
