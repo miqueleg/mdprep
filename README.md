@@ -1,6 +1,6 @@
 # mdprep
 
-`mdprep` 0.2.0 prepares reproducible Amber molecular-dynamics systems from a
+`mdprep` 0.2.1 prepares reproducible Amber molecular-dynamics systems from a
 PDB structure and a validated YAML manifest. It supports standard proteins,
 independent ligands and cofactors, explicit metal models, optional active-site
 QM/MM refinement, final `tleap` assembly, validation, and an optional OpenMM
@@ -216,7 +216,7 @@ charge model, protonation, force field, QM method, or metal model.
 
 ## Current limitations
 
-Version 0.2.0 does not support noncanonical amino acids inside peptide chains,
+Version 0.2.1 does not support noncanonical amino acids inside peptide chains,
 covalent ligands, mmCIF input, automatic loop modeling, ORCA, Multiwfn,
 multiple independent bonded MCPB sites, or multi-chain MCPB protein inputs.
 Unsupported chemistry fails explicitly.

@@ -9,7 +9,7 @@ def test_pyproject_release_metadata_is_consistent():
     project = data["project"]
 
     assert project["name"] == "mdprep"
-    assert project["version"] == mdprep.__version__ == "0.2.0"
+    assert project["version"] == mdprep.__version__ == "0.2.1"
     assert project["requires-python"].startswith(">=3.11")
     assert project["scripts"]["mdprep"] == "mdprep.cli:app"
     assert "README.md" == project["readme"]
