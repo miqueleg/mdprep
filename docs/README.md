@@ -2,6 +2,7 @@
 
 - [Installation](installation.md)
 - [Quickstart](quickstart.md)
+- [Guided manifest generation](guided_manifests.md)
 - [Manifest reference](manifest_reference.md)
 - [Protonation](protonation.md)
 - [Ligands](ligands.md)

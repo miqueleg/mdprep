@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from mdprep.structure.classify import (
     is_histidine,
+    is_metal_ion_residue,
     is_likely_ligand_or_cofactor,
     is_nonstandard_nonwater_residue,
     is_standard_protein_residue,
@@ -28,6 +29,7 @@ class InspectionSummary:
     histidines: list[ResidueRecord]
     titratable_residues: list[ResidueRecord]
     possible_disulfides: list[DisulfideCandidate]
+    metal_ions: list[ResidueRecord] = field(default_factory=list)
 
     @property
     def chain_ids(self) -> list[str]:
@@ -54,11 +56,13 @@ class InspectionSummary:
                 "histidines": len(self.histidines),
                 "titratable_residues": len(self.titratable_residues),
                 "possible_disulfides": len(self.possible_disulfides),
+                "metal_ions": len(self.metal_ions),
             },
             "likely_ligands": [_residue_to_dict(residue) for residue in self.likely_ligands],
             "histidines": [_residue_to_dict(residue) for residue in self.histidines],
             "titratable_residues": [_residue_to_dict(residue) for residue in self.titratable_residues],
             "possible_disulfides": [candidate.to_dict() for candidate in self.possible_disulfides],
+            "metal_ions": [_residue_to_dict(residue) for residue in self.metal_ions],
         }
 
 
@@ -80,6 +84,7 @@ def inspect_pdb_structure(
     likely_ligands = [residue for residue in residues if is_likely_ligand_or_cofactor(residue)]
     histidines = [residue for residue in residues if is_histidine(residue)]
     titratable_residues = [residue for residue in residues if is_titratable_residue(residue)]
+    metal_ions = [residue for residue in residues if is_metal_ion_residue(residue)]
     possible_disulfides = detect_possible_disulfides(
         residues,
         cutoff_angstrom=disulfide_cutoff_angstrom,
@@ -93,6 +98,7 @@ def inspect_pdb_structure(
         histidines=histidines,
         titratable_residues=titratable_residues,
         possible_disulfides=possible_disulfides,
+        metal_ions=metal_ions,
     )
 
 

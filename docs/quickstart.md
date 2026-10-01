@@ -7,7 +7,22 @@ mdprep inspect input.pdb
 mdprep inspect input.pdb --json
 ```
 
-Create and validate a starter manifest:
+See which manifest decisions the structure actually requires:
+
+```bash
+mdprep plan input.pdb
+```
+
+Answer them and write a validated manifest:
+
+```bash
+mdprep init input.pdb --interactive -o system.yaml
+```
+
+The wizard asks only the questions this structure needs and refuses to default
+anything chemistry-sensitive. See [guided_manifests.md](guided_manifests.md).
+
+Or create and validate a starter manifest non-interactively:
 
 ```bash
 mdprep init input.pdb -o system.yaml

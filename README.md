@@ -60,8 +60,15 @@ Start from a standard protein PDB:
 
 ```bash
 mdprep inspect input.pdb
-mdprep init input.pdb -o system.yaml
+mdprep plan input.pdb                           # what must you decide?
+mdprep init input.pdb --interactive -o system.yaml
 ```
+
+`mdprep plan` lists only the manifest decisions this structure actually
+requires, and `--interactive` asks them and writes a validated manifest. See
+[Guided manifest generation](docs/guided_manifests.md). The non-interactive
+`mdprep init input.pdb -o system.yaml` still writes the commented starter
+manifest.
 
 A minimal protein-only `system.yaml` is:
 
@@ -187,6 +194,7 @@ specified in steps in the manifest.
 
 | Task | Documentation | Example |
 | --- | --- | --- |
+| Generating a manifest | [Guided manifest generation](docs/guided_manifests.md) | `mdprep plan`, `mdprep init --interactive` |
 | Manifest fields | [Manifest reference](docs/manifest_reference.md) | [All examples](examples/README.md) |
 | Protonation and histidines | [Protonation](docs/protonation.md) | `examples/02_manual_catalytic_protonation.yaml` |
 | Ligands, AM1-BCC, RESP, QMMESP | [Ligands](docs/ligands.md) and [QMMESP](docs/qmmesp_pyscf.md) | `examples/03_multi_ligand_am1bcc.yaml`, `04_qmmesp_pyscf_ligand.yaml` |
