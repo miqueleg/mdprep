@@ -142,6 +142,11 @@ class HistidineXtbConfig(StrictModel):
     water_hoh_angle_degrees: float = Field(default=104.52, gt=0, lt=180)
     scf_iterations: int = Field(default=500, ge=1)
     electronic_temperature_kelvin: float | None = Field(default=1000.0, gt=0)
+    # xTB otherwise opens one OpenMP thread per hardware thread for every
+    # tautomer cluster, and several clusters run concurrently, so the machine
+    # oversubscribes badly on clusters far too small to use it.
+    num_threads: int = Field(default=1, ge=1)
+    omp_stacksize: str = "1G"
 
 
 class HistidineConfig(StrictModel):

@@ -5,6 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from mdprep.structure.models import AtomRecord, PdbStructure
+from mdprep.structure.pdb import (
+    HYBRID36_DIGITS_LOWER,
+    HYBRID36_DIGITS_UPPER,
+    SERIAL_FIELD_WIDTH,
+    HYBRID36_LOWER_OFFSET,
+    HYBRID36_UPPER_OFFSET,
+)
 
 
 def write_pdb(structure: PdbStructure, path: str | Path) -> None:
@@ -57,6 +64,34 @@ def _format_conect_records(structure: PdbStructure) -> list[str]:
     return lines
 
 
+def _encode_base36(value: int, digits: str) -> str:
+    characters: list[str] = []
+    for _ in range(SERIAL_FIELD_WIDTH):
+        value, remainder = divmod(value, 36)
+        characters.append(digits[remainder])
+    return "".join(reversed(characters))
+
+
+def format_serial_field(serial: int) -> str:
+    """Render columns 7-12 of an ATOM record: the serial plus its separator.
+
+    Systems above 99,999 atoms do not fit the five-column serial field, so the
+    sixth digit is written into column 12 exactly as tleap and ambpdb do, which
+    keeps the atom-name field at columns 13-16. Beyond 999,999 atoms the field
+    switches to hybrid-36, which read_pdb decodes on the way back in.
+    """
+
+    if 0 <= serial <= 99999:
+        return f"{serial:5d} "
+    if 100000 <= serial <= 999999:
+        return f"{serial:6d}"
+    if 10 ** 6 <= serial < HYBRID36_LOWER_OFFSET:
+        return _encode_base36(serial - HYBRID36_UPPER_OFFSET, HYBRID36_DIGITS_UPPER) + " "
+    if HYBRID36_LOWER_OFFSET <= serial < HYBRID36_LOWER_OFFSET + 26 * 36 ** 4:
+        return _encode_base36(serial - HYBRID36_LOWER_OFFSET, HYBRID36_DIGITS_LOWER) + " "
+    raise ValueError(f"Atom serial {serial} cannot be represented in a PDB file")
+
+
 def format_atom_record(atom: AtomRecord) -> str:
     serial = atom.serial if atom.serial is not None else 0
     atom_name = _atom_name_field(atom)
@@ -67,7 +102,7 @@ def format_atom_record(atom: AtomRecord) -> str:
     bfactor = atom.bfactor if atom.bfactor is not None else 0.0
     element = (atom.element or "").rjust(2)
     return (
-        f"{atom.record_name:<6}{serial:5d} {atom_name}{altloc}{atom.resname:>3} "
+        f"{atom.record_name:<6}{format_serial_field(serial)}{atom_name}{altloc}{atom.resname:>3} "
         f"{chain_id}{atom.resid:4d}{icode}   "
         f"{atom.x:8.3f}{atom.y:8.3f}{atom.z:8.3f}"
         f"{occupancy:6.2f}{bfactor:6.2f}          {element}\n"

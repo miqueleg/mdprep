@@ -106,3 +106,32 @@ Load the final Amber `.prmtop` with `AmberPrmtopFile`. OpenMM represents the
 `CustomNonbondedForce`; inspecting only the first force is incomplete. The
 validation report records detection of both the Amber C4 flag and the OpenMM
 r^-4 force.
+
+## Particle Coordinate Is NaN During MD
+
+Historically caused by two defects in the Roe--Brooks stage, both fixed:
+positional restraints were applied to free `Na+`/`Cl-` ions because the ion
+residue names Amber writes do not match a bare element symbol, and coordinates
+were wrapped into the periodic box between stages while the restraint
+references stayed unwrapped. Either one puts a restrained particle a full box
+length from its reference, which at 5 kcal/mol/A^2 is a restraint force of
+order 1e5 kJ/mol/nm.
+
+If a NaN still appears, inspect `md_report.json`: a stage whose
+`potential_energy_kj_mol` jumps by a large positive amount relative to the
+previous stage indicates the input is strained rather than the protocol
+diverging. Check the input with a single-point energy before heating.
+
+## Final PDB Atom Serials
+
+The PDB atom-serial field is five columns wide and cannot hold a sixth digit,
+so systems above 99,999 atoms are written in one of three incompatible ways.
+mdprep reads all of them: `tleap`/`ambpdb` widen the field into column 12,
+cctbx-derived tools switch to hybrid-36 (`A0000` follows `99999`), and writers
+that wrap around leave duplicates, which mdprep renumbers in file order and
+reports as a warning. Duplicated serials are only fatal when the file also
+contains `CONECT` records, because the connectivity they encode cannot then be
+resolved; supply a file with unique or hybrid-36 serials in that case.
+
+mdprep writes the same convention it reads, so a structure above 99,999 atoms
+round-trips through `read_pdb`/`write_pdb` unchanged.

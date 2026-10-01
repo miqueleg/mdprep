@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -60,6 +61,29 @@ def build_xtb_command(
     return command
 
 
+def xtb_environment(config: HistidineXtbConfig) -> dict[str, str]:
+    """Process environment for an xTB call, with OpenMP bounded.
+
+    A histidine tautomer cluster is a few hundred atoms, far too small to use
+    one OpenMP thread per hardware thread; mdprep also runs several clusters
+    concurrently, so the unbounded default oversubscribes the machine and burns
+    CPU time without reducing wall time. OMP_STACKSIZE is set because xTB
+    segfaults on small per-thread stacks.
+    """
+
+    environment = dict(os.environ)
+    thread_count = str(config.num_threads)
+    environment.update(
+        {
+            "OMP_NUM_THREADS": thread_count,
+            "MKL_NUM_THREADS": thread_count,
+            "OPENBLAS_NUM_THREADS": thread_count,
+            "OMP_STACKSIZE": config.omp_stacksize,
+        }
+    )
+    return environment
+
+
 def run_xtb(
     *,
     config: HistidineXtbConfig,
@@ -78,7 +102,7 @@ def run_xtb(
         executable=executable,
         input_path=Path(input_path).name if input_path is not None else None,
     )
-    result = run_command(command, cwd=work_dir)
+    result = run_command(command, cwd=work_dir, env=xtb_environment(config))
     stdout = Path(stdout_path)
     stderr = Path(stderr_path)
     stdout.write_text(result.stdout, encoding="utf-8")
