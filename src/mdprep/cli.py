@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 
 from mdprep import __version__
+from mdprep.config.decisions import DecisionError, plan_decisions
 from mdprep.config.loader import load_manifest
 from mdprep.config.models import McpbParameterComparisonConfig
 from mdprep.metals.parameter_comparison import (
@@ -21,6 +22,7 @@ from mdprep.structure.inspect import InspectionSummary
 from mdprep.structure.normalize import StructureNormalizationError
 from mdprep.structure.pdb import PdbParseError, VALID_ALTLOC_POLICIES
 from mdprep.workflows.init import generate_starter_manifest
+from mdprep.workflows.wizard import format_question, run_wizard
 from mdprep.workflows.inspect import inspect_structure
 from mdprep.workflows.prepare import PrepareWorkflowError, prepare_system
 from mdprep.workflows.selftest import run_selftest
@@ -33,6 +35,16 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+
+def _print_json(payload: object) -> None:
+    """Emit JSON on stdout unwrapped and unstyled.
+
+    rich reflows to the console width and interprets square brackets as markup,
+    either of which would corrupt output another program has to parse.
+    """
+
+    print(json.dumps(payload, indent=2, sort_keys=True))
 
 
 def _version_callback(value: bool) -> None:
@@ -123,12 +135,99 @@ def inspect_command(
             disulfide_cutoff_angstrom=selected_disulfide_cutoff,
         )
         if json_output:
-            console.print(json.dumps(summary.to_dict(), indent=2, sort_keys=True))
+            _print_json(summary.to_dict())
         else:
             _render_inspection(summary)
     except (FileNotFoundError, PdbParseError, ValueError) as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from exc
+
+
+@app.command("plan")
+def plan_command(
+    input_structure: Path = typer.Argument(..., help="Input PDB file."),
+    json_output: bool = typer.Option(
+        False, "--json", help="Print the decision plan as machine-readable JSON."
+    ),
+    altloc_policy: str | None = typer.Option(
+        None,
+        "--altloc-policy",
+        help="Alternate-location policy: highest_occupancy, first, or fail.",
+    ),
+    disulfide_cutoff: float | None = typer.Option(
+        None, "--disulfide-cutoff", help="SG-SG distance cutoff for possible disulfides."
+    ),
+) -> None:
+    """List the manifest decisions this structure actually requires.
+
+    The JSON form is the contract any other front end builds on: an interactive
+    wizard, a generated web form, or a notebook all consume this same plan.
+    """
+
+    try:
+        selected_policy = altloc_policy or "highest_occupancy"
+        if selected_policy not in VALID_ALTLOC_POLICIES:
+            raise ValueError(
+                f"Invalid altloc policy {selected_policy!r}; expected one of "
+                f"{sorted(VALID_ALTLOC_POLICIES)}"
+            )
+        plan = plan_decisions(
+            input_structure,
+            altloc_policy=selected_policy,  # type: ignore[arg-type]
+            disulfide_cutoff_angstrom=disulfide_cutoff or 2.2,
+        )
+    except (FileNotFoundError, PdbParseError, DecisionError, ValueError) as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    if json_output:
+        _print_json(plan.to_dict())
+        return
+    _render_plan(plan)
+
+
+def _render_plan(plan) -> None:
+    findings = Table(title="What mdprep found")
+    findings.add_column("Item")
+    findings.add_column("Value")
+    for key in (
+        "total_atoms",
+        "total_residues",
+        "protein_residues",
+        "water_residues",
+    ):
+        findings.add_row(key.replace("_", " "), str(plan.findings[key]))
+    for key in ("chains", "ligands", "metal_ions", "histidines", "possible_disulfides"):
+        values = plan.findings[key]
+        findings.add_row(
+            key.replace("_", " "), ", ".join(str(value) for value in values) or "none"
+        )
+    console.print(findings)
+
+    table = Table(title="Decisions required by this structure")
+    table.add_column("Decision", overflow="fold")
+    table.add_column("Default", overflow="fold")
+    table.add_column("Conditional on", overflow="fold")
+    for decision in plan.decisions:
+        default = (
+            "[red]you must choose[/red]"
+            if decision.requires_user_input or decision.default is None
+            else decision.default
+        )
+        condition = (
+            ", ".join(
+                f"{item.decision_id}={'|'.join(item.values)}" for item in decision.when
+            )
+            or "-"
+        )
+        table.add_row(decision.id, default, condition)
+    console.print(table)
+    blocking = plan.blocking()
+    console.print(
+        f"{len(plan.decisions)} decisions, of which [red]{len(blocking)}[/red] cannot be "
+        "defaulted and must be answered by a person."
+    )
+    console.print("Run [bold]mdprep init --interactive[/bold] to answer them and write a manifest.")
 
 
 @app.command("init")
@@ -159,8 +258,23 @@ def init_command(
         "--include-ligand-placeholders",
         help="Add active placeholder ligand blocks for detected ligands. Review net charges before use.",
     ),
+    interactive: bool = typer.Option(
+        False,
+        "-i",
+        "--interactive",
+        help="Ask only the questions this structure needs, then write a validated manifest.",
+    ),
 ) -> None:
     """Create an initial manifest from an input structure."""
+
+    if interactive:
+        _run_interactive_init(
+            input_structure,
+            output=output,
+            overwrite=overwrite,
+            output_dir=output_dir,
+        )
+        return
 
     if forcefield not in {"ff14SB", "ff19SB"}:
         console.print("[red]Error:[/red] --forcefield must be ff14SB or ff19SB")
@@ -187,6 +301,46 @@ def init_command(
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from exc
     console.print(f"Wrote starter manifest: {manifest_path}")
+
+
+def _run_interactive_init(
+    input_structure: Path,
+    *,
+    output: Path,
+    overwrite: bool,
+    output_dir: str | None,
+) -> None:
+    preset: dict[str, object] = {}
+    if output_dir is not None:
+        preset["project.output_dir"] = output_dir
+
+    def prompt(decision) -> str:
+        console.print(format_question(decision))
+        return typer.prompt("  >", default="", show_default=False)
+
+    try:
+        result = run_wizard(
+            input_structure,
+            output_path=output,
+            prompt=prompt,
+            overwrite=overwrite,
+            preset=preset,
+        )
+    except (FileExistsError, FileNotFoundError, PdbParseError, DecisionError, ValueError) as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    console.print(
+        f"\nWrote validated manifest: {result.manifest_path} "
+        f"({result.questions_asked} questions answered)"
+    )
+    for site in result.mcpb_sites_needing_manual_work:
+        console.print(
+            f"[yellow]Metal site {site!r} needs a bonded MCPB block that this wizard "
+            "cannot generate.[/yellow] Add it by hand following docs/metals.md."
+        )
+    console.print("Check it with: [bold]mdprep config-check "
+                  f"{result.manifest_path}[/bold]")
 
 
 @app.command("prepare")
