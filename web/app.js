@@ -69,6 +69,7 @@ import json
 from mdprep.config.decisions import plan_decisions, build_manifest, DecisionError
 from mdprep.workflows.wizard import render_manifest_yaml
 from mdprep.config.decisions import unresolved_mcpb_sites
+from mdprep.workflows.runtime import conda_packages_for, micromamba_setup_commands
 
 _PLAN = {}
 
@@ -79,15 +80,23 @@ def mdprep_plan(text, name):
     _PLAN["plan"] = plan
     return json.dumps(plan.to_dict())
 
-def mdprep_build(answers_json):
+def mdprep_build(answers_json, mdprep_spec):
     plan = _PLAN["plan"]
     answers = json.loads(answers_json)
     try:
         sites = list(unresolved_mcpb_sites(plan, answers))
         text = render_manifest_yaml(plan, answers, mcpb_sites=tuple(sites))
+        manifest = build_manifest(plan, answers)
     except DecisionError as exc:
         return json.dumps({"ok": False, "error": str(exc)})
-    return json.dumps({"ok": True, "yaml": text, "mcpb_sites": sites})
+    return json.dumps({
+        "ok": True,
+        "yaml": text,
+        "mcpb_sites": sites,
+        # Only the packages this particular run will actually invoke.
+        "packages": conda_packages_for(manifest),
+        "setup": micromamba_setup_commands(manifest, mdprep_spec=mdprep_spec),
+    })
 `);
   state.pyodide = pyodide;
   setStatus(`Ready (mdprep ${index.version}). Load a structure to begin.`);
@@ -356,7 +365,7 @@ function buildManifest() {
     if (given !== undefined && given !== "") payload[decision.id] = given;
   });
   const buildFn = state.pyodide.globals.get("mdprep_build");
-  const resultJson = buildFn(JSON.stringify(payload));
+  const resultJson = buildFn(JSON.stringify(payload), MDPREP_INSTALL);
   buildFn.destroy();
   const result = JSON.parse(resultJson);
 
@@ -375,59 +384,76 @@ function buildManifest() {
         are deliberately not in the manifest &mdash; add them by hand following
         docs/metals.md.</p>`
     : "";
-  renderColabCell(result.yaml);
+  window.mdprepLastResultForTest = result;
+  renderColabCell(result);
   hide("question-panel");
   show("result-panel");
   window.scrollTo({ top: document.body.scrollHeight, behavior: "smooth" });
 }
 
-function renderColabCell(manifestYaml) {
+function renderColabCell(result) {
   const manifestName = "system.yaml";
-  let intro;
-  let lines;
+  const manifestYaml = result.yaml;
 
+  // Cell 1: build a runtime. mdprep shells out to tleap and antechamber, which
+  // pip cannot provide but conda-forge can, so this is a real install rather
+  // than a prerequisite the user has to arrange themselves. Only the packages
+  // this manifest will actually invoke are included, which keeps the solve as
+  // small as the job allows.
+  const setup = ["%%bash", ...result.setup].join("\n");
+
+  // Cell 2: get the inputs in place and run.
+  let intro;
+  let runLines;
   if (state.pdbId) {
-    // Colab can fetch the structure itself, so the whole job is one paste.
     intro =
-      "Paste this into a Colab cell. It re-downloads the same structure by ID, " +
-      "so nothing needs uploading.";
-    lines = [
-      `%pip install -q ${MDPREP_INSTALL}`,
+      `Your structure is in the PDB, so this re-downloads ${state.pdbId} by ID. ` +
+      "Nothing needs uploading.";
+    runLines = [
       "import pathlib, urllib.request",
       "",
-      `urllib.request.urlretrieve(`,
+      "urllib.request.urlretrieve(",
       `    "https://files.rcsb.org/download/${state.pdbId}.pdb", "${state.structureName}"`,
-      `)`,
+      ")",
       `pathlib.Path("${manifestName}").write_text("""`,
       manifestYaml.trimEnd(),
-      `""")`,
+      '""")',
       "",
-      `!mdprep prepare ${manifestName}`,
+      RUN_COMMAND(manifestName),
     ];
   } else {
     intro =
       "Your structure is not in the PDB, so download the bundle above and " +
-      "upload it when this cell asks. That guarantees Colab prepares the same " +
-      "file this page planned.";
-    lines = [
-      `%pip install -q ${MDPREP_INSTALL}`,
+      "upload it when this cell asks. That is what guarantees Colab prepares " +
+      "the same file this page planned.";
+    runLines = [
       "import zipfile",
       "from google.colab import files",
       "",
       "uploaded = files.upload()   # choose mdprep-bundle.zip",
       'zipfile.ZipFile(next(iter(uploaded))).extractall(".")',
       "",
-      `!mdprep prepare ${manifestName}`,
+      RUN_COMMAND(manifestName),
     ];
   }
+
+  el("colab-setup").textContent = setup;
   el("colab-intro").textContent = intro;
-  el("colab-command").textContent = lines.join("\n");
-  el("toolchain-note").innerHTML =
-    "<strong>Run this in a Colab runtime that already has AmberTools.</strong> " +
-    "<code>mdprep prepare</code> calls <code>tleap</code> and " +
-    "<code>antechamber</code>, which pip cannot install. The " +
-    `<a href="${COLAB_NOTEBOOK_URL}" target="_blank" rel="noopener">mdprep Colab ` +
-    "notebook</a> sets that up; paste the cell above into it.";
+  el("colab-command").textContent = runLines.join("\n");
+  el("toolchain-note").textContent =
+    `This installs ${result.packages.join(", ")} from conda-forge, which is a ` +
+    "large download, so the first cell takes several minutes. It only has to " +
+    "run once per Colab session, and only the packages this manifest actually " +
+    "uses are installed.";
+}
+
+// mdprep lives in the micromamba environment, not the notebook's Python, so it
+// has to be invoked through it.
+function RUN_COMMAND(manifestName) {
+  return (
+    "!MAMBA_ROOT_PREFIX=/content/mamba-root /content/bin/micromamba run " +
+    `-n mdprep-runtime mdprep prepare ${manifestName}`
+  );
 }
 
 async function downloadBundle() {
@@ -520,6 +546,9 @@ function wire() {
   );
   el("copy-colab").addEventListener("click", (event) =>
     copyText(el("colab-command").textContent, event.target),
+  );
+  el("copy-setup").addEventListener("click", (event) =>
+    copyText(el("colab-setup").textContent, event.target),
   );
   el("download-bundle").addEventListener("click", downloadBundle);
 

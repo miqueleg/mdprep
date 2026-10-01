@@ -13,7 +13,10 @@
 - `mdprep inspect` reports free monatomic metal ions.
 - A static web input builder (`web/`) that runs mdprep in the browser under
   Pyodide, shows a 3D view framed on whatever each question is about, and
-  produces a validated manifest plus the Colab cell that runs it.
+  produces a validated manifest plus runnable Colab cells.
+- `mdprep.workflows.runtime.conda_packages_for` derives the external toolchain a
+  given manifest needs, so a generated setup cell installs PropKa, xTB or PySCF
+  only when the run will actually invoke them.
 
 ### Changed
 

@@ -89,6 +89,7 @@ try {
 
   report.manifest = await page.$eval("#manifest-yaml", (n) => n.textContent);
   report.colabUpload = await page.$eval("#colab-command", (n) => n.textContent);
+  report.colabSetup = await page.$eval("#colab-setup", (n) => n.textContent);
   report.toolchainNote = await page.$eval("#toolchain-note", (n) => n.textContent);
 
   // The other handoff path: a structure fetched from RCSB is re-fetched by
@@ -97,7 +98,7 @@ try {
     window.mdprepState.pdbId = "1AKI";
     window.mdprepState.structureName = "1AKI.pdb";
     const render = window.renderColabCellForTest;
-    render(document.getElementById("manifest-yaml").textContent);
+    render(window.mdprepLastResultForTest);
     return document.getElementById("colab-command").textContent;
   });
 

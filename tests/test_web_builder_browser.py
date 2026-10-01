@@ -180,15 +180,40 @@ def test_the_rcsb_path_refetches_by_id_instead(report):
 
 def test_the_colab_cell_does_not_promise_a_pypi_release_that_lacks_the_fixes(report):
     """0.2.0 is the published wheel and predates the stage-2 NaN fix."""
-    assert "git+https://github.com/miqueleg/mdprep" in report["colabUpload"]
+    assert "git+https://github.com/miqueleg/mdprep" in report["colabSetup"]
 
 
-def test_the_page_says_ambertools_is_needed(report):
-    """`pip install mdprep` cannot provide tleap, so the page must not imply it."""
+def test_the_setup_cell_actually_installs_the_toolchain(report):
+    """pip cannot provide tleap, but conda-forge can, so the cell installs it."""
+    setup = report["colabSetup"]
+
+    assert "micromamba" in setup
+    assert "-c conda-forge" in setup
+    assert "ambertools" in setup
+    assert "pip install -q" in setup
+
+
+def test_the_setup_cell_only_installs_what_this_manifest_uses(report):
+    """Both ligands default to AM1-BCC and protonation is manual, so no QM."""
+    setup = report["colabSetup"]
+
+    assert "pyscf" not in setup
+    assert "xtb" not in setup
+    assert "propka" not in setup
+
+
+def test_the_page_warns_that_the_install_is_slow(report):
     note = report["toolchainNote"]
 
-    assert "AmberTools" in note
-    assert "tleap" in note
+    assert "conda-forge" in note
+    assert "once" in note
+
+
+def test_the_run_cell_invokes_mdprep_inside_that_environment(report):
+    """mdprep is not on the notebook's Python, so a bare call would not find it."""
+    cell = report["colabUpload"]
+
+    assert "micromamba run -n mdprep-runtime mdprep prepare system.yaml" in cell
 
 
 def test_the_bundle_writer_runs_in_the_browser(report):

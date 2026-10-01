@@ -57,11 +57,34 @@ Two paths, because they have different constraints:
 `.github/workflows/pages.yml` builds the wheel and publishes `web/` to GitHub
 Pages on every push to `master`. Pull requests build but do not deploy.
 
+## The generated Colab cells
+
+The page emits two cells, both runnable in a stock Colab notebook.
+
+**Cell 1 builds the runtime.** `mdprep prepare` shells out to `tleap` and
+`antechamber`, which pip cannot provide — but conda-forge can, so the cell
+installs them rather than treating them as a prerequisite you have to arrange.
+It uses micromamba in its own prefix rather than `condacolab`, because
+condacolab replaces the notebook's interpreter and forces a kernel restart.
+
+The package list is derived from your manifest by
+`mdprep.workflows.runtime.conda_packages_for`, so a job is not made to wait on
+a quantum chemistry package it never calls:
+
+| Manifest | Installed |
+| --- | --- |
+| manual protonation, AM1-BCC ligand | `ambertools openmm parmed` |
+| PropKa + xTB histidines | adds `propka xtb` |
+| RESP/QMMESP charges, or a bonded MCPB site | adds `pyscf` |
+
+It is still a large conda solve and takes several minutes, but only once per
+session. The page says so.
+
+**Cell 2 puts the inputs in place and runs**, invoking mdprep through the
+micromamba environment since it is not on the notebook's own Python.
+
 ## Things worth knowing
 
-- `mdprep prepare` needs AmberTools (`tleap`, `antechamber`), which pip cannot
-  install, so the generated cell is meant for a Colab runtime that already has
-  them. The page says so rather than handing you a command that fails.
 - The generated cell installs mdprep **from the repository**, not PyPI: the
   published 0.2.0 wheel predates the Roe--Brooks NaN and large-PDB fixes.
   Change `MDPREP_INSTALL` in `app.js` once a release carrying them is on PyPI.
