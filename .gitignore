@@ -16,3 +16,5 @@ runs/
 *.tar.gz
 *.tar.gz.sha256
 .DS_Store
+node_modules/
+package-lock.json

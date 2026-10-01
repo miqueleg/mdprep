@@ -11,6 +11,9 @@
 - Each decision carries viewer hints (`focus`, `targets`, `target_resnames`) so
   a 3D front end can frame exactly the residues a question is about.
 - `mdprep inspect` reports free monatomic metal ions.
+- A static web input builder (`web/`) that runs mdprep in the browser under
+  Pyodide, shows a 3D view framed on whatever each question is about, and
+  produces a validated manifest plus the Colab cell that runs it.
 
 ### Changed
 

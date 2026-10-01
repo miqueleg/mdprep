@@ -61,6 +61,13 @@ out of the generated file, and prints a note; add the block by hand following
 The RESP charge methods likewise add a `qmmesp` block you must complete. See
 [ligands.md](ligands.md) and [qmmesp_pyscf.md](qmmesp_pyscf.md).
 
+## The web input builder
+
+[`web/`](../web/README.md) is a static page that does all of the above in a
+browser, with a 3D viewer that frames the residues each question is about. It
+runs this same package under Pyodide rather than reimplementing any of it, and
+hands you a manifest plus the Colab cell that runs it.
+
 ## Building another front end
 
 The decision plan is the contract. `mdprep plan --json` emits it in full:

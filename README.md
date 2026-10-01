@@ -195,6 +195,7 @@ specified in steps in the manifest.
 | Task | Documentation | Example |
 | --- | --- | --- |
 | Generating a manifest | [Guided manifest generation](docs/guided_manifests.md) | `mdprep plan`, `mdprep init --interactive` |
+| Generating one in a browser | [Web input builder](web/README.md) | `python web/build.py` |
 | Manifest fields | [Manifest reference](docs/manifest_reference.md) | [All examples](examples/README.md) |
 | Protonation and histidines | [Protonation](docs/protonation.md) | `examples/02_manual_catalytic_protonation.yaml` |
 | Ligands, AM1-BCC, RESP, QMMESP | [Ligands](docs/ligands.md) and [QMMESP](docs/qmmesp_pyscf.md) | `examples/03_multi_ligand_am1bcc.yaml`, `04_qmmesp_pyscf_ligand.yaml` |
