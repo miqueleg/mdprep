@@ -72,8 +72,33 @@ mdprep plan input.pdb --json
 Each decision carries a stable `id`, the `question`, its `kind`
 (`choice`, `integer`, `number`, `text`, `boolean`), the allowed `choices`, the
 `default` (`null` when there is none), `requires_user_input`, the `evidence`
-from the structure, the `target` residue where one applies, and a `when` list
-naming the earlier answers that make it relevant.
+from the structure, and a `when` list naming the earlier answers that make it
+relevant.
+
+### Driving a 3D viewer
+
+Each decision also says what a viewer should put on screen while it is being
+answered:
+
+- `focus` is `none` (no structural aspect, such as a project name),
+  `targets` (emphasise and frame the residues below), or `structure` (show the
+  whole system, as for the force field or the solvent box).
+- `targets` lists the residues to highlight, each with `chain`, `resname`,
+  `resid`, `icode`, and `element`/`atom_name` where they apply. **`targets[0]`
+  is the subject of the decision** -- the ligand being charged, the ion being
+  modelled -- and any later entries are surrounding context.
+- `target_resnames` stands in for a set too large to enumerate usefully, such
+  as every crystallographic water; a viewer selects on the names directly.
+
+So a ligand charge question frames that ligand, a disulfide question frames
+both cysteines of every candidate pair, the unknown-heterogen question frames
+every residue at stake, and a metal question frames the ion together with
+whatever lies within 3 A of it.
+
+That contact search exists only to frame the view. It is **not** a
+determination of coordination: mdprep requires coordinating bonds to be
+declared explicitly, and the evidence string says "within 3.0 A" rather than
+claiming a coordination shell.
 
 A web form, a notebook or another CLI consumes that JSON and never needs to
 re-implement any of the logic. In Python:

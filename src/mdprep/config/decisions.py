@@ -29,6 +29,12 @@ from mdprep.structure.pdb import AltlocPolicy
 
 DecisionKind = Literal["choice", "integer", "number", "text", "boolean"]
 
+# What a 3D viewer should show while a question is on screen.
+#   none      -- the question has no structural aspect (a project name, a step count)
+#   targets   -- emphasise and frame `targets` / `target_resnames`
+#   structure -- show the whole system (force field, solvation, box)
+FocusMode = Literal["none", "targets", "structure"]
+
 
 class DecisionError(ValueError):
     """Raised when a decision plan cannot be built or answered."""
@@ -118,9 +124,24 @@ class Decision:
     when: tuple[Condition, ...] = ()
     requires_user_input: bool = False
     evidence: tuple[str, ...] = ()
-    target: ResidueTarget | None = None
+    # targets[0] is the subject of the decision -- the ligand being charged, the
+    # ion being modelled -- and any further entries are surrounding context the
+    # viewer should also show. The manifest builders rely on that ordering.
+    targets: tuple[ResidueTarget, ...] = ()
+    # Residue names standing in for a set too large to enumerate usefully, such
+    # as every crystallographic water. A viewer selects on these directly.
+    target_resnames: tuple[str, ...] = ()
+    focus: FocusMode = "none"
     minimum: int | float | None = None
     maximum: int | float | None = None
+
+    @property
+    def subject(self) -> "ResidueTarget":
+        """The residue this decision is about."""
+
+        if not self.targets:
+            raise DecisionError(f"{self.id}: no residue recorded")
+        return self.targets[0]
 
     def is_applicable(self, answers: Mapping[str, Any]) -> bool:
         return all(condition.is_met(answers) for condition in self.when)
@@ -137,7 +158,9 @@ class Decision:
             "choices": [choice.to_dict() for choice in self.choices],
             "when": [condition.to_dict() for condition in self.when],
             "evidence": list(self.evidence),
-            "target": self.target.to_dict() if self.target is not None else None,
+            "targets": [target.to_dict() for target in self.targets],
+            "target_resnames": list(self.target_resnames),
+            "focus": self.focus,
             "minimum": self.minimum,
             "maximum": self.maximum,
         }
@@ -217,6 +240,48 @@ def _target_for(residue: ResidueRecord, *, element: str | None = None) -> "Resid
     )
 
 
+# Generous enough to catch first-shell metal-nitrogen and metal-oxygen
+# distances. This frames the 3D view; it is NOT a determination of coordination,
+# which mdprep requires the user to declare explicitly.
+CONTACT_CUTOFF_ANGSTROM = 3.0
+
+
+def contact_residues(
+    residues: Sequence[ResidueRecord],
+    centre: ResidueRecord,
+    *,
+    cutoff_angstrom: float = CONTACT_CUTOFF_ANGSTROM,
+) -> list[ResidueRecord]:
+    """Residues with any atom within ``cutoff_angstrom`` of ``centre``.
+
+    Used to show a metal ion together with whatever surrounds it, so that the
+    person answering "what is this site?" can see what they are answering about.
+    """
+
+    origin = centre.atoms[0]
+    found: list[ResidueRecord] = []
+    for residue in residues:
+        if residue.id == centre.id:
+            continue
+        for atom in residue.atoms:
+            dx = atom.x - origin.x
+            dy = atom.y - origin.y
+            dz = atom.z - origin.z
+            if dx * dx + dy * dy + dz * dz <= cutoff_angstrom * cutoff_angstrom:
+                found.append(residue)
+                break
+    return found
+
+
+def _target_from_id(residue_id: Any) -> "ResidueTarget":
+    return ResidueTarget(
+        chain=residue_id.chain_id,
+        resname=residue_id.resname,
+        resid=residue_id.resid,
+        icode=residue_id.icode,
+    )
+
+
 def _residue_element(residue: ResidueRecord) -> str:
     element = (residue.atoms[0].element or residue.id.resname).strip()
     return element.capitalize() if len(element) == 2 else element.upper()
@@ -250,7 +315,7 @@ def plan_decisions(
     for residue in ligands:
         decisions.extend(_ligand_decisions(residue))
     for residue in summary.metal_ions:
-        decisions.extend(_metal_decisions(residue))
+        decisions.extend(_metal_decisions(residue, summary.structure.residues))
     decisions.extend(_solvation_decisions())
     decisions.extend(_md_decisions())
 
@@ -312,6 +377,10 @@ def _structure_decisions(summary: InspectionSummary) -> list[Decision]:
                 ),
                 default="true",
                 evidence=(f"{len(summary.water_residues)} water residues in the input",),
+                target_resnames=tuple(
+                    sorted({residue.id.resname for residue in summary.water_residues})
+                ),
+                focus="targets",
             )
         )
     unknown = [
@@ -338,6 +407,8 @@ def _structure_decisions(summary: InspectionSummary) -> list[Decision]:
                     "genuinely disposable; otherwise answer false and configure them."
                 ),
                 evidence=tuple(residue.id.display() for residue in unknown),
+                targets=tuple(_target_for(residue) for residue in unknown),
+                focus="targets",
             )
         )
     return decisions
@@ -352,6 +423,7 @@ def _protein_decisions() -> list[Decision]:
             kind="choice",
             why="Sets the amino-acid parameters used by tleap.",
             default="ff14SB",
+            focus="structure",
             choices=(
                 Choice("ff14SB", "ff14SB", "Established general-purpose choice; pairs with TIP3P."),
                 Choice("ff19SB", "ff19SB", "Newer backbone parameters; intended to be paired with OPC."),
@@ -364,6 +436,7 @@ def _protein_decisions() -> list[Decision]:
             kind="choice",
             why="Must match the force field the protein parameters were fitted against.",
             default="TIP3P",
+            focus="structure",
             choices=(
                 Choice("TIP3P", "TIP3P", "The conventional partner for ff14SB."),
                 Choice("OPC", "OPC", "The water model ff19SB was parameterised with."),
@@ -409,6 +482,8 @@ def _protonation_decisions(summary: InspectionSummary) -> list[Decision]:
                 if histidine_evidence
                 else ("no histidines found",)
             ),
+            targets=tuple(_target_for(residue) for residue in summary.histidines),
+            focus="targets" if summary.histidines else "structure",
         ),
         Decision(
             id="protonation.ph",
@@ -417,6 +492,7 @@ def _protonation_decisions(summary: InspectionSummary) -> list[Decision]:
             kind="number",
             why="PropKa assigns states at this pH.",
             default="7.0",
+            focus="structure",
             when=(Condition("protonation.method", ("propka", "propka_xtb_his")),),
         ),
     ]
@@ -460,6 +536,15 @@ def _disulfide_decisions(summary: InspectionSummary) -> list[Decision]:
             ),
             default="true",
             evidence=evidence,
+            targets=tuple(
+                target
+                for candidate in summary.possible_disulfides
+                for target in (
+                    _target_from_id(candidate.a),
+                    _target_from_id(candidate.b),
+                )
+            ),
+            focus="targets",
         )
     ]
 
@@ -468,7 +553,7 @@ def _ligand_decisions(residue: ResidueRecord) -> list[Decision]:
     ligand_id = ligand_id_for(residue)
     display = residue.id.display()
     evidence = (f"{display}, {len(residue.atoms)} atoms",)
-    target = _target_for(residue)
+    targets = (_target_for(residue),)
     include_id = f"ligand.{ligand_id}.include"
     return [
         Decision(
@@ -482,7 +567,8 @@ def _ligand_decisions(residue: ResidueRecord) -> list[Decision]:
             ),
             default="true",
             evidence=evidence,
-            target=target,
+            targets=targets,
+            focus="targets",
         ),
         Decision(
             id=f"ligand.{ligand_id}.net_charge",
@@ -497,7 +583,8 @@ def _ligand_decisions(residue: ResidueRecord) -> list[Decision]:
                 "produces a plausible-looking topology with the wrong electrostatics."
             ),
             evidence=evidence,
-            target=target,
+            targets=targets,
+            focus="targets",
             when=(Condition(include_id, ("true",)),),
         ),
         Decision(
@@ -512,7 +599,8 @@ def _ligand_decisions(residue: ResidueRecord) -> list[Decision]:
                 Choice("gaff", "GAFF", "Original version; use for consistency with older work."),
             ),
             when=(Condition(include_id, ("true",)),),
-            target=target,
+            targets=targets,
+            focus="targets",
         ),
         Decision(
             id=f"ligand.{ligand_id}.charge_method",
@@ -543,17 +631,31 @@ def _ligand_decisions(residue: ResidueRecord) -> list[Decision]:
                 ),
             ),
             when=(Condition(include_id, ("true",)),),
-            target=target,
+            targets=targets,
+            focus="targets",
         ),
     ]
 
 
-def _metal_decisions(residue: ResidueRecord) -> list[Decision]:
+def _metal_decisions(
+    residue: ResidueRecord, all_residues: Sequence[ResidueRecord]
+) -> list[Decision]:
     site_id = metal_site_id_for(residue)
     display = residue.id.display()
     element = _residue_element(residue)
-    evidence = (f"{display}, element {element}",)
-    target = _target_for(residue, element=element)
+    neighbours = contact_residues(all_residues, residue)
+    contacts = tuple(_target_for(neighbour) for neighbour in neighbours)
+    evidence = (
+        f"{display}, element {element}",
+        (
+            "within "
+            f"{CONTACT_CUTOFF_ANGSTROM:.1f} A: "
+            + ", ".join(neighbour.id.display() for neighbour in neighbours)
+        )
+        if neighbours
+        else f"nothing within {CONTACT_CUTOFF_ANGSTROM:.1f} A",
+    )
+    targets = (_target_for(residue, element=element),) + contacts
     model_id = f"metal.{site_id}.model"
     return [
         Decision(
@@ -585,7 +687,8 @@ def _metal_decisions(residue: ResidueRecord) -> list[Decision]:
                 ),
             ),
             evidence=evidence,
-            target=target,
+            targets=targets,
+            focus="targets",
         ),
         Decision(
             id=f"metal.{site_id}.charge",
@@ -602,7 +705,8 @@ def _metal_decisions(residue: ResidueRecord) -> list[Decision]:
             minimum=1,
             maximum=4,
             evidence=evidence,
-            target=target,
+            targets=targets,
+            focus="targets",
             when=(Condition(model_id, ("nonbonded",)),),
         ),
         Decision(
@@ -620,7 +724,8 @@ def _metal_decisions(residue: ResidueRecord) -> list[Decision]:
                 Choice("cm", "CM", "Compromise set."),
             ),
             when=(Condition(model_id, ("nonbonded",)),),
-            target=target,
+            targets=targets,
+            focus="targets",
         ),
     ]
 
@@ -634,6 +739,7 @@ def _solvation_decisions() -> list[Decision]:
             kind="boolean",
             why="Answer false only for a gas-phase or pre-solvated build.",
             default="true",
+            focus="structure",
         ),
         Decision(
             id="solvation.box",
@@ -642,6 +748,7 @@ def _solvation_decisions() -> list[Decision]:
             kind="choice",
             why="A truncated octahedron needs fewer waters than a box for the same padding.",
             default="truncated_octahedron",
+            focus="structure",
             choices=(
                 Choice("truncated_octahedron", "Truncated octahedron", "Fewer waters for the same buffer."),
                 Choice("rectangular", "Rectangular", "Use for strongly elongated solutes."),
@@ -655,6 +762,7 @@ def _solvation_decisions() -> list[Decision]:
             kind="number",
             why="Distance from the solute to the box edge. Below about 10 A, periodic images interact.",
             default="10.0",
+            focus="structure",
             minimum=0,
             when=(Condition("solvation.enabled", ("true",)),),
         ),
@@ -665,6 +773,7 @@ def _solvation_decisions() -> list[Decision]:
             kind="number",
             why="0.15 M approximates physiological ionic strength.",
             default="0.15",
+            focus="structure",
             minimum=0,
             when=(Condition("solvation.enabled", ("true",)),),
         ),
@@ -847,11 +956,10 @@ def _ligand_blocks(
         if not resolved.get(decision.id):
             continue
         ligand_id = decision.id.split(".")[1]
-        assert decision.target is not None
         blocks.append(
             {
                 "id": ligand_id,
-                "selector": decision.target.to_selector(),
+                "selector": decision.subject.to_selector(),
                 "net_charge": resolved[f"ligand.{ligand_id}.net_charge"],
                 "multiplicity": 1,
                 "atom_types": resolved[f"ligand.{ligand_id}.atom_types"],
@@ -873,15 +981,14 @@ def _metal_blocks(
             # A bonded MCPB site needs external QM artifacts that cannot be
             # invented here; the caller reports it instead of emitting a guess.
             continue
-        assert decision.target is not None
         blocks.append(
             {
                 "id": site_id,
                 "model": "nonbonded",
                 "ions": [
                     {
-                        "selector": decision.target.to_atom_selector(),
-                        "element": decision.target.element,
+                        "selector": decision.subject.to_atom_selector(),
+                        "element": decision.subject.element,
                         "charge": resolved[f"metal.{site_id}.charge"],
                     }
                 ],

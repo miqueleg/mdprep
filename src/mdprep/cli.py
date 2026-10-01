@@ -207,6 +207,7 @@ def _render_plan(plan) -> None:
     table = Table(title="Decisions required by this structure")
     table.add_column("Decision", overflow="fold")
     table.add_column("Default", overflow="fold")
+    table.add_column("Shows", overflow="fold")
     table.add_column("Conditional on", overflow="fold")
     for decision in plan.decisions:
         default = (
@@ -220,7 +221,15 @@ def _render_plan(plan) -> None:
             )
             or "-"
         )
-        table.add_row(decision.id, default, condition)
+        if decision.focus == "targets":
+            shown = ", ".join(
+                f"{target.resname}{target.resid}" for target in decision.targets
+            ) or ", ".join(decision.target_resnames)
+        elif decision.focus == "structure":
+            shown = "whole structure"
+        else:
+            shown = "-"
+        table.add_row(decision.id, default, shown, condition)
     console.print(table)
     blocking = plan.blocking()
     console.print(

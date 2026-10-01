@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `mdprep plan` and `mdprep init --interactive`: a structure-aware decision
+  engine that reduces a 250+ setting schema to the questions one structure
+  actually needs, and asks them. Chemistry-sensitive values have no default and
+  cannot be skipped.
+- Each decision carries viewer hints (`focus`, `targets`, `target_resnames`) so
+  a 3D front end can frame exactly the residues a question is about.
+- `mdprep inspect` reports free monatomic metal ions.
+
+### Changed
+
+- Dropped the unused `scipy` and `pandas` runtime dependencies.
+
 ## 0.2.1 - 2026-10-01
 
 ### Fixed
