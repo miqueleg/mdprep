@@ -218,14 +218,30 @@ def _as_answer_token(value: Any) -> str:
     return str(value)
 
 
+def _id_stem(residue: ResidueRecord) -> str:
+    """Identifier parts for one residue, including its chain.
+
+    The chain is required: a crystal structure with several copies of the same
+    complex in the asymmetric unit repeats every residue number, and manifest
+    ligand and metal-site ids have to stay unique across them.
+    """
+
+    parts = [part for part in (residue.id.chain_id.strip().lower(),) if part]
+    parts.append(residue.id.resname.lower())
+    parts.append(str(residue.id.resid))
+    if residue.id.icode:
+        parts.append(residue.id.icode.strip().lower())
+    return "_".join(parts)
+
+
 def ligand_id_for(residue: ResidueRecord) -> str:
     """Stable manifest id for a detected ligand residue."""
 
-    return f"{residue.id.resname.lower()}_{residue.id.resid}"
+    return _id_stem(residue)
 
 
 def metal_site_id_for(residue: ResidueRecord) -> str:
-    return f"{residue.id.resname.lower()}_{residue.id.resid}_site"
+    return f"{_id_stem(residue)}_site"
 
 
 def _target_for(residue: ResidueRecord, *, element: str | None = None) -> "ResidueTarget":

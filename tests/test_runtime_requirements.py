@@ -123,8 +123,8 @@ def test_it_works_on_a_manifest_the_builder_actually_produces():
         plan,
         {
             "structure.remove_unknown_heterogens": False,
-            "ligand.sub_501.net_charge": 0,
-            "ligand.cof_601.net_charge": 0,
+            "ligand.b_sub_501.net_charge": 0,
+            "ligand.c_cof_601.net_charge": 0,
         },
     )
 

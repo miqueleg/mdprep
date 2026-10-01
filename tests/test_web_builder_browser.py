@@ -155,7 +155,7 @@ def test_the_generated_manifest_validates(report):
     manifest = yaml.safe_load(report["manifest"])
 
     ManifestConfig.model_validate(manifest)
-    assert [entry["id"] for entry in manifest["ligands"]] == ["sub_501", "cof_601"]
+    assert [entry["id"] for entry in manifest["ligands"]] == ["b_sub_501", "c_cof_601"]
     assert manifest["ligands"][0]["selector"]["resname"] == "SUB"
 
 
