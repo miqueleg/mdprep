@@ -89,6 +89,10 @@ class StructureRepairConfig(StrictModel):
 
 
 class StructureConfig(StrictModel):
+    # Empty keeps every chain. Naming chains restricts the build to them, which
+    # a bonded MCPB site requires because MCPB inputs are single-chain, and
+    # which crystal structures containing several copies of a complex need.
+    keep_chains: list[str] = Field(default_factory=list)
     keep_crystal_waters: bool = True
     altloc_policy: Literal["highest_occupancy", "first", "fail"] = "highest_occupancy"
     remove_unknown_heterogens: bool = False

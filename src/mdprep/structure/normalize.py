@@ -52,6 +52,7 @@ class StructureNormalizationResult:
     configured_ligands_kept: list[NormalizedLigand] = field(default_factory=list)
     configured_metal_ions_kept: list[NormalizedMetalIon] = field(default_factory=list)
     unknown_heterogens_removed: list[dict[str, object]] = field(default_factory=list)
+    chains_removed: list[dict[str, object]] = field(default_factory=list)
     unknown_heterogens_causing_failure: list[dict[str, object]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     repair_result: StructureRepairResult | None = None
@@ -81,6 +82,7 @@ class StructureNormalizationResult:
                 for metal in self.configured_metal_ions_kept
             ],
             "unknown_heterogens_removed": self.unknown_heterogens_removed,
+            "chains_removed": self.chains_removed,
             "unknown_heterogens_causing_failure": self.unknown_heterogens_causing_failure,
             "histidines": _residue_dicts(self.input_summary.histidines),
             "titratable_residues": _residue_dicts(self.input_summary.titratable_residues),
@@ -160,8 +162,22 @@ def normalize_structure_stage(
     waters_kept: list[ResidueRecord] = []
     waters_removed: list[ResidueRecord] = []
     unknown_removed: list[ResidueRecord] = []
+    chains_removed: list[ResidueRecord] = []
+
+    selected_chains = {chain.strip() for chain in manifest.structure.keep_chains}
+    if selected_chains:
+        present = {residue.id.chain_id for residue in structure.residues}
+        missing = sorted(selected_chains - present)
+        if missing:
+            raise StructureNormalizationError(
+                f"structure.keep_chains names chains not present in the input: "
+                f"{missing}; the input has {sorted(present)}."
+            )
 
     for residue in structure.residues:
+        if selected_chains and residue.id.chain_id not in selected_chains:
+            chains_removed.append(residue)
+            continue
         if is_standard_protein_residue(residue):
             keep_residue_ids.add(id(residue))
         elif is_water_residue(residue):
@@ -237,6 +253,7 @@ def normalize_structure_stage(
             for site_id, (element, charge, atom), residue in configured_metals
         ],
         unknown_heterogens_removed=_residue_dicts(unknown_removed),
+        chains_removed=_residue_dicts(chains_removed),
         unknown_heterogens_causing_failure=unknown_heterogen_dicts
         if unknown_heterogens and not manifest.structure.remove_unknown_heterogens
         else [],

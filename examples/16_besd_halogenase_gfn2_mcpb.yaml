@@ -1,0 +1,121 @@
+# BesD, an alpha-ketoglutarate-dependent halogenase (PDB 6NIE).
+#
+# The reference case for the student-facing workflow: Fe(II) in a 2-His facial
+# triad with chloride in the carboxylate position, alpha-ketoglutarate as the
+# coordinating cofactor, and a lysine substrate.
+#
+# Every chemistry-sensitive value below was entered deliberately and none of it
+# is inferred by mdprep:
+#   * keep_chains: [A]       6NIE is four copies; MCPB inputs are single-chain.
+#   * Fe charge 2, spin 5    high-spin d6 Fe(II).
+#   * small/large model -1   Fe(2+) + AKG(2-) + Cl(1-) + 2 x His(0).
+#   * five explicit bonds    measured at 2.16-2.39 A in the deposited structure.
+#
+# alpha-ketoglutarate coordinates the iron, so it takes its charges from the
+# MCPB large-model fit rather than an independent AM1-BCC calculation. The
+# lysine substrate does not coordinate and uses AM1-BCC.
+#
+# The Hessian and the QM/MM refinement geometry both use GFN2, which is far
+# cheaper than DFT and is what makes this tractable as a teaching example.
+project:
+  name: besd_6nie
+  input_structure: data/6NIE.pdb
+  output_dir: prepared/besd
+
+structure:
+  keep_chains: [A]
+  keep_crystal_waters: true
+  altloc_policy: highest_occupancy
+  remove_unknown_heterogens: false
+  preserve_chain_ids: true
+  remove_input_hydrogens: true
+
+protein: {forcefield: ff14SB, water_model: TIP3P}
+
+protonation:
+  ph: 7.0
+  method: propka_xtb_his
+  overrides: []
+  histidine:
+    neutral_tautomer_method: xtb
+    xtb: {model: gfn2, mode: opt, num_threads: 1}
+
+disulfides: {auto_detect: true, detection_cutoff_angstrom: 2.2, force: [], forbid: []}
+
+ligands:
+  - id: a_lys_301
+    selector: {chain: A, resname: LYS, resid: 301, icode: null}
+    net_charge: 1
+    multiplicity: 1
+    atom_types: gaff2
+    charge_method: am1bcc
+  - id: a_akg_304
+    selector: {chain: A, resname: AKG, resid: 304, icode: null}
+    net_charge: -2
+    multiplicity: 1
+    atom_types: gaff2
+    charge_method: mcpb_resp_pyscf
+  - id: a_cl_303
+    selector: {chain: A, resname: CL, resid: 303, icode: null}
+    net_charge: -1
+    multiplicity: 1
+    atom_types: gaff2
+    charge_method: am1bcc
+
+metals:
+  - id: a_fe2_302_site
+    model: bonded_mcpb
+    ions:
+      - selector: &fe {chain: A, resname: FE2, resid: 302, icode: null, atom_name: FE}
+        element: Fe
+        charge: 2
+        multiplicity: 5
+    mcpb:
+      workflow: pyscf
+      provisional_nonbonded_parameter_set: "12_6"
+      cutoff_angstrom: 2.6
+      bonds:
+        - {ion: *fe, coordinator: {chain: A, resname: AKG, resid: 304, icode: null, atom_name: O1}}
+        - {ion: *fe, coordinator: {chain: A, resname: AKG, resid: 304, icode: null, atom_name: O5}}
+        - {ion: *fe, coordinator: {chain: A, resname: HIS, resid: 204, icode: null, atom_name: NE2}}
+        - {ion: *fe, coordinator: {chain: A, resname: HIS, resid: 137, icode: null, atom_name: NE2}}
+        - {ion: *fe, coordinator: {chain: A, resname: CL, resid: 303, icode: null, atom_name: CL}}
+      additional_residues: []
+      force_constant_method: seminario
+      charge_restraint: backbone_heavy
+      software_version: gau
+      small_model_charge: -1
+      small_model_spin: 5
+      large_model_charge: -1
+      large_model_spin: 5
+      pyscf:
+        geometry_source: qmmm_refinement
+        hessian_backend: xtb
+        xtb: {model: gfn2, executable: xtb, num_threads: 1}
+        method: B3LYP
+        basis: "6-31G*"
+
+refinement:
+  enabled: true
+  backend: ash
+  qm_method: gfn2_xtb
+  qm_components:
+    ligands: [a_lys_301, a_akg_304, a_cl_303]
+    metal_sites: [a_fe2_302_site]
+    metal_coordinating_residues: {}
+  active_region_cutoff_angstrom: 4.0
+  active_water_cutoff_angstrom: 8.0
+  include_contact_waters: true
+  movable_atoms: active_region_hydrogens
+  post_refinement_protonation: reuse_initial
+  total_qm_multiplicity: 5
+  ash:
+    python_executable: python
+    xtb_executable: xtb
+    allow_unusual_link_boundaries: true
+    num_cores: 4
+    platform: CPU
+
+solvation: {enabled: true, box: truncated_octahedron, buffer_angstrom: 10.0, neutralize: true, salt_concentration_molar: 0.15, positive_ion: "Na+", negative_ion: "Cl-"}
+validation: {run_openmm_energy_check: true, fail_on_warnings: false, fail_on_missing_parameters: true, fail_on_noninteger_ligand_charge: true}
+molecular_dynamics: {enabled: false}

@@ -17,7 +17,7 @@ a guess without noticing.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
@@ -261,6 +261,15 @@ def _target_for(residue: ResidueRecord, *, element: str | None = None) -> "Resid
 # which mdprep requires the user to declare explicitly.
 CONTACT_CUTOFF_ANGSTROM = 3.0
 
+# First-shell metal-donor distances sit near 2.0-2.4 A. 2.6 A admits a long
+# halide or carboxylate contact while excluding the second-shell carbons that
+# sit behind a coordinating oxygen, which a 3.0 A search picks up.
+COORDINATION_CUTOFF_ANGSTROM = 2.6
+
+# Carbon and hydrogen are not metal donors; admitting them turns the atom
+# behind a coordinating oxygen into a spurious bond.
+METAL_DONOR_ELEMENTS = {"N", "O", "S", "SE", "P", "F", "CL", "BR", "I"}
+
 
 def contact_residues(
     residues: Sequence[ResidueRecord],
@@ -298,6 +307,39 @@ def _target_from_id(residue_id: Any) -> "ResidueTarget":
     )
 
 
+def metal_donor_atoms(
+    residues: Sequence[ResidueRecord],
+    metal: ResidueRecord,
+    *,
+    cutoff_angstrom: float = COORDINATION_CUTOFF_ANGSTROM,
+) -> list[tuple[ResidueRecord, Any, float]]:
+    """Candidate first-shell donors of a metal, nearest first.
+
+    This proposes a coordination shell for a user to confirm; it does not
+    decide one. mdprep requires coordinating bonds to be explicit in the
+    manifest, and the questions built from this keep them so.
+    """
+
+    origin = metal.atoms[0]
+    found: list[tuple[ResidueRecord, Any, float]] = []
+    for residue in residues:
+        if residue.id == metal.id:
+            continue
+        for atom in residue.atoms:
+            element = (atom.element or "").strip().upper()
+            if element not in METAL_DONOR_ELEMENTS:
+                continue
+            distance = (
+                (atom.x - origin.x) ** 2
+                + (atom.y - origin.y) ** 2
+                + (atom.z - origin.z) ** 2
+            ) ** 0.5
+            if distance <= cutoff_angstrom:
+                found.append((residue, atom, distance))
+    found.sort(key=lambda item: item[2])
+    return found
+
+
 def _residue_element(residue: ResidueRecord) -> str:
     element = (residue.atoms[0].element or residue.id.resname).strip()
     return element.capitalize() if len(element) == 2 else element.upper()
@@ -324,6 +366,7 @@ def plan_decisions(
     ]
     decisions: list[Decision] = []
     decisions.extend(_project_decisions(path))
+    decisions.extend(_chain_decision(summary))
     decisions.extend(_structure_decisions(summary))
     decisions.extend(_protein_decisions())
     decisions.extend(_protonation_decisions(summary))
@@ -335,12 +378,38 @@ def plan_decisions(
     decisions.extend(_solvation_decisions())
     decisions.extend(_md_decisions())
 
+    # A ligand or metal in a chain the user did not select must not be asked
+    # about, and must not reach the manifest.
+    selectable = set(protein_chain_ids(summary))
+    if any(decision.id == "structure.chains" for decision in decisions):
+        decisions = [
+            replace(
+                decision,
+                when=decision.when
+                + (
+                    Condition(
+                        "structure.chains", ("all", decision.targets[0].chain)
+                    ),
+                ),
+            )
+            if (
+                decision.section in {"ligands", "metals"}
+                and decision.targets
+                and decision.targets[0].chain in selectable
+            )
+            else decision
+            for decision in decisions
+        ]
+
     findings = {
         "total_atoms": len(summary.structure.atoms),
         "total_residues": len(summary.structure.residues),
         "protein_residues": len(summary.protein_residues),
         "water_residues": len(summary.water_residues),
         "chains": summary.chain_ids,
+        "protein_chains": protein_chain_ids(summary),
+        # Kept whichever protein chain is chosen, so they are never offered.
+        "non_protein_chains": non_protein_chain_ids(summary),
         "ligands": [residue.id.display() for residue in ligands],
         "metal_ions": [residue.id.display() for residue in summary.metal_ions],
         "histidines": [residue.id.display() for residue in summary.histidines],
@@ -375,6 +444,85 @@ def _project_decisions(path: Path) -> list[Decision]:
             why="Where prepared structures, logs and Amber files are written.",
             default=f"prepared/{name}",
         ),
+    ]
+
+
+def protein_chain_ids(summary: InspectionSummary) -> list[str]:
+    """Chains containing protein, in input order."""
+
+    seen: list[str] = []
+    for residue in summary.protein_residues:
+        chain = residue.id.chain_id
+        if chain and chain not in seen:
+            seen.append(chain)
+    return seen
+
+
+def non_protein_chain_ids(summary: InspectionSummary) -> list[str]:
+    """Chains holding only heterogens or water, which are never dropped."""
+
+    protein = set(protein_chain_ids(summary))
+    seen: list[str] = []
+    for residue in summary.structure.residues:
+        chain = residue.id.chain_id
+        if chain and chain not in protein and chain not in seen:
+            seen.append(chain)
+    return seen
+
+
+def _chain_decision(summary: InspectionSummary) -> list[Decision]:
+    """Which chain to build, when the input holds more than one."""
+
+    # Only chains carrying protein are copies of the complex. A chain holding
+    # nothing but a metal or a ligand is part of whichever copy it belongs to
+    # and is kept regardless, so offering it here would invite discarding it.
+    chains = protein_chain_ids(summary)
+    if len(chains) < 2:
+        return []
+    # A bonded MCPB site is single-chain, and a crystal structure with several
+    # copies of a metalloenzyme is the usual reason to be asked at all, so the
+    # presence of a metal makes this a decision with no safe default.
+    has_metal = bool(summary.metal_ions)
+    choices = [
+        Choice(
+            chain,
+            f"Chain {chain} only",
+            "One copy of the complex; required for a bonded MCPB metal site.",
+        )
+        for chain in chains
+    ]
+    choices.append(
+        Choice(
+            "all",
+            "All chains",
+            "Build the whole asymmetric unit. Not usable with a bonded MCPB site.",
+        )
+    )
+    return [
+        Decision(
+            id="structure.chains",
+            section="structure",
+            question="Which chain should be prepared?",
+            kind="choice",
+            why=(
+                "The input contains more than one chain. MCPB metal-site inputs "
+                "are single-chain, and a crystallographic multimer is usually "
+                "several copies of the same complex rather than the assembly you "
+                "want to simulate."
+            ),
+            default=None if has_metal else "all",
+            requires_user_input=has_metal,
+            choices=tuple(choices),
+            evidence=(
+                f"chains present: {', '.join(chains)}",
+                *(
+                    (f"metal ions found: {len(summary.metal_ions)}",)
+                    if has_metal
+                    else ()
+                ),
+            ),
+            focus="structure",
+        )
     ]
 
 
@@ -912,6 +1060,14 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
             "output_dir": resolved["project.output_dir"],
         },
         "structure": {
+            "keep_chains": (
+                []
+                if resolved.get("structure.chains", "all") == "all"
+                else [
+                    resolved["structure.chains"],
+                    *plan.findings.get("non_protein_chains", []),
+                ]
+            ),
             "keep_crystal_waters": get("structure.keep_crystal_waters", True),
             "altloc_policy": "highest_occupancy",
             "remove_unknown_heterogens": get("structure.remove_unknown_heterogens", False),

@@ -504,3 +504,32 @@ def test_blank_chain_ids_do_not_gain_an_empty_prefix():
     manifest = build_manifest(plan, answer_blocking(plan))
 
     assert not manifest["ligands"][0]["id"].startswith("_")
+
+
+# --------------------------------------------------------------------------
+# Chain selection
+# --------------------------------------------------------------------------
+
+
+def test_a_single_chain_structure_is_not_asked_about_chains():
+    plan = plan_decisions(DATA / "protein_two_ligands.pdb")
+
+    assert not any(d.id == "structure.chains" for d in plan.decisions)
+
+
+def test_a_chain_holding_only_a_metal_is_not_offered_for_selection():
+    """Chain Z is the zinc; discarding it would break the structure."""
+    plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
+
+    assert plan.findings["protein_chains"] == ["A"]
+    assert plan.findings["non_protein_chains"] == ["Z"]
+    assert not any(d.id == "structure.chains" for d in plan.decisions)
+
+
+def test_hetero_only_chains_are_kept_whichever_protein_chain_is_chosen():
+    plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
+
+    manifest = build_manifest(plan, answer_blocking(plan))
+
+    # No selection was made, so every chain is kept.
+    assert manifest["structure"]["keep_chains"] == []
