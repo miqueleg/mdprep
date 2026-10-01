@@ -269,8 +269,19 @@ def cluster_charge_breakdown(
     planned_states: dict[int, str],
 ) -> list[dict[str, object]]:
     ligand_charges = _ligand_charge_by_residue(cluster_residues, manifest)
+    metal_charges = _metal_charge_by_residue(cluster_residues, manifest)
     terms: list[dict[str, object]] = []
     for residue in cluster_residues:
+        if id(residue) in metal_charges:
+            terms.append(
+                {
+                    "residue": residue.id.display(),
+                    "state": residue.id.resname,
+                    "charge": metal_charges[id(residue)],
+                    "source": "configured_metal_ion",
+                }
+            )
+            continue
         if id(residue) in ligand_charges:
             terms.append(
                 {
@@ -294,7 +305,9 @@ def cluster_charge_breakdown(
             continue
         if is_likely_ligand_or_cofactor(residue):
             raise HistidineXtbError(
-                f"Unknown heterogen {residue.id.display()} encountered in xTB cluster; configure it under ligands."
+                f"Unknown heterogen {residue.id.display()} encountered in xTB "
+                "cluster; configure it under ligands, or under metals if it is "
+                "a metal ion."
             )
         residue_charge = {
             "ASP": -1,
@@ -340,6 +353,35 @@ def _ligand_charge_by_residue(
         except SelectorError:
             continue
         result[id(residue)] = ligand.net_charge
+    return result
+
+
+def _metal_charge_by_residue(
+    residues: list[ResidueRecord],
+    manifest: ManifestConfig,
+) -> dict[int, int]:
+    """Formal charges of configured metal ions appearing in a cluster.
+
+    A metal is not an unknown heterogen: its oxidation state is declared in the
+    manifest, which is the only place it could legitimately come from.
+    """
+
+    result: dict[int, int] = {}
+    structure = PdbStructure(
+        path=Path("cluster"),
+        atoms=[atom for residue in residues for atom in residue.atoms],
+        residues=residues,
+        model_count=1,
+    )
+    for site in manifest.metals:
+        for ion in site.ions:
+            try:
+                residue = resolve_residue_selector(
+                    structure, ion.selector.model_dump(exclude={"atom_name"})
+                )
+            except SelectorError:
+                continue
+            result[id(residue)] = ion.charge
     return result
 
 

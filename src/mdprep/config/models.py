@@ -47,6 +47,12 @@ class StructureRepairConfig(StrictModel):
     sequence_source: str | None = None
     add_missing_heavy_atoms: bool = False
     missing_residues: list[ResidueSelector] = Field(default_factory=list)
+    # What to do about whole residues the deposition never resolved. "fail"
+    # requires every one to be approved in missing_residues before anything
+    # proceeds. "leave_absent" declines to build the ones not listed and records
+    # them, which is what an unresolved expression tag calls for: modelling a
+    # disordered His-tag is worse than omitting it.
+    unresolved_residues: Literal["fail", "leave_absent"] = "fail"
     random_seed: int = Field(default=20260722, ge=0)
     platform: Literal["Reference", "CPU"] = "Reference"
     peptide_bond_min_angstrom: float = Field(default=1.10, gt=0)
