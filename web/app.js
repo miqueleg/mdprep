@@ -18,7 +18,7 @@ const WHEEL_INDEX_URL = "vendor/wheel.json";
 // "mdprep" once a release carrying them is published.
 const MDPREP_INSTALL = '"mdprep @ git+https://github.com/miqueleg/mdprep@master"';
 const COLAB_NOTEBOOK_URL =
-  "https://colab.research.google.com/github/miqueleg/mdprep/blob/master/examples/mdprep_interactive_colab.ipynb";
+  "https://colab.research.google.com/github/miqueleg/mdprep/blob/master/examples/mdprep_colab_run.ipynb";
 
 const state = {
   pyodide: null,

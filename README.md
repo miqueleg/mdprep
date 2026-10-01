@@ -202,7 +202,8 @@ specified in steps in the manifest.
 | Metal centers and MCPB.py | [Metal centers](docs/metals.md) | `examples/08_nonbonded_zinc_1264.yaml`, `09_bonded_zinc_mcpb_prepare.yaml` |
 | Active-site QM/MM refinement | [QM/MM refinement](docs/qmmm_refinement.md) | `examples/10_qmmm_refinement_ash.yaml` |
 | Roe–Brooks OpenMM MD | [Molecular dynamics](docs/molecular_dynamics.md) | `examples/15_roe_brooks_openmm.yaml` |
-| Guided Colab builder | [Colab example notes](examples/README.md) | `examples/mdprep_interactive_colab.ipynb` |
+| Running a manifest in Colab | [Colab example notes](examples/README.md) | `examples/mdprep_colab_run.ipynb` |
+| Guided Colab builder (legacy) | [Colab example notes](examples/README.md) | `examples/mdprep_interactive_colab.ipynb` |
 | Complete Fe(III) workflow | [7E07 tutorial](examples/tutorials/7E07_bonded_fe3/README.md) | `examples/tutorials/7E07_bonded_fe3/system.yaml` |
 
 All public example manifests are schema-validated in the test suite.

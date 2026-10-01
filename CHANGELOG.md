@@ -25,6 +25,10 @@
   with a GFN2 Seminario Hessian and GFN2 QM/MM refinement geometry.
 - `examples/16_besd_halogenase_gfn2_mcpb.yaml`, the BesD halogenase reference
   case.
+- Detection of incomplete residues and chain breaks, asked about before any
+  expensive stage runs, and protection for waters coordinating a metal.
+- `examples/mdprep_colab_run.ipynb`, a Colab notebook that runs a manifest and
+  installs only the toolchain that manifest needs.
 
 ### Changed
 
