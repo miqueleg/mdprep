@@ -94,6 +94,32 @@ def test_infers_ambertools_atom_record_iron_when_element_column_missing():
     )
 
 
+def test_infers_iron_for_an_amber_ion_residue_named_for_its_oxidation_state():
+    """Amber names an ion residue after its oxidation state: FE2 is Fe(II).
+
+    tleap then writes the atom as " FE " in a file with no element column, and
+    by the column convention a two-letter symbol starts in column 13 -- so
+    " FE " is literally fluorine with remoteness E. The residue name settles
+    it, but only once reduced to its symbol. Before that, a prepared
+    structure's iron came back as fluorine and the refinement mapping could
+    not match the metal to itself.
+    """
+
+    for resname in ("FE2", "FE3"):
+        assert (
+            infer_element("FE", resname=resname, record_name="ATOM", atom_field=" FE ")
+            == "Fe"
+        )
+    assert (
+        infer_element("CU", resname="CU1", record_name="HETATM", atom_field=" CU ")
+        == "Cu"
+    )
+    assert (
+        infer_element("YB", resname="YB2", record_name="HETATM", atom_field=" YB ")
+        == "Yb"
+    )
+
+
 def test_pdb_atom_name_alignment_disambiguates_blank_element_ca():
     assert infer_element("CA", resname="LIG", record_name="HETATM", atom_field=" CA ") == "C"
     assert infer_element("CA", resname="CA", record_name="HETATM", atom_field="CA  ") == "Ca"

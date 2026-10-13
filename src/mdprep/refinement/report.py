@@ -25,40 +25,90 @@ def write_refinement_reports(
     )
     selection = report["selection"]
     assert isinstance(selection, dict)
-    ash = report["ash"]
-    assert isinstance(ash, dict)
+    # The force-field backend is the default and reports no ASH run, so the
+    # fields that only a QM/MM run produces -- the quantum method, the
+    # embedding, the external command -- have to be read from whichever
+    # backend actually ran.
+    backend = report["backend"]
+    ash = report.get("ash")
+    openmm_run = report.get("openmm")
+
     lines = [
-        "# QM/MM refinement report",
+        "# Hydrogen refinement report",
         "",
         "- Status: complete",
-        "- Backend: ASH",
-        f"- QM method: {report['qm_method']}",
-        "- MM theory: provisional Amber/OpenMM",
-        f"- Embedding: {report['embedding']}",
-        "- Provisional ligand/cofactor charges: AM1-BCC",
-        f"- QM atoms: {len(selection['qm_atom_indices_zero_based'])}",
-        f"- Active atoms: {len(selection['active_atom_indices_zero_based'])}",
-        f"- Movable-atom policy: {selection['movable_atom_policy']}",
-        f"- Active waters: {report['active_water_residue_count']}",
-        f"- Non-water active-region cutoff (Å): {selection['active_region_cutoff_angstrom']}",
-        f"- Active-water cutoff (Å): {selection['active_water_cutoff_angstrom']}",
-        f"- Total QM charge: {selection['total_qm_charge']}",
-        f"- Total QM multiplicity: {selection['total_qm_multiplicity']}",
-        f"- Final energy (Eh): {ash['final_energy_hartree']}",
-        f"- Refined hydrogenated PDB: `{report['refined_hydrogenated_pdb_path']}`",
-        "",
-        "## QM charge derivation",
-        "",
+        f"- Backend: {'ASH QM/MM' if backend == 'ash' else 'OpenMM force field'}",
     ]
+    if backend == "ash":
+        assert isinstance(ash, dict)
+        lines.extend(
+            [
+                f"- QM method: {report['qm_method']}",
+                "- MM theory: provisional Amber/OpenMM",
+                f"- Embedding: {report['embedding']}",
+            ]
+        )
+    else:
+        assert isinstance(openmm_run, dict)
+        lines.extend(
+            [
+                "- Theory: provisional Amber force field, no quantum step",
+                f"- Moved: {report['moved']}",
+                f"- Platform: {openmm_run['platform']}",
+            ]
+        )
+    lines.extend(
+        [
+            "- Provisional ligand/cofactor charges: AM1-BCC",
+            f"- QM atoms: {len(selection['qm_atom_indices_zero_based'])}",
+            f"- Active atoms: {len(selection['active_atom_indices_zero_based'])}",
+            f"- Movable-atom policy: {selection['movable_atom_policy']}",
+            f"- Active waters: {report['active_water_residue_count']}",
+            f"- Non-water active-region cutoff (Å): {selection['active_region_cutoff_angstrom']}",
+            f"- Active-water cutoff (Å): {selection['active_water_cutoff_angstrom']}",
+            f"- Total QM charge: {selection['total_qm_charge']}",
+            f"- Total QM multiplicity: {selection['total_qm_multiplicity']}",
+        ]
+    )
+    if backend == "ash":
+        assert isinstance(ash, dict)
+        lines.append(f"- Final energy (Eh): {ash['final_energy_hartree']}")
+    else:
+        assert isinstance(openmm_run, dict)
+        lines.extend(
+            [
+                f"- Hydrogens refined: {openmm_run['hydrogen_count']}",
+                f"- Heavy atoms held: {openmm_run['held_heavy_atoms']}",
+                f"- Largest heavy-atom shift (Å): {openmm_run['max_heavy_atom_shift_angstrom']}",
+                f"- Hydrogen RMS displacement (Å): {openmm_run['hydrogen_rms_displacement_angstrom']}",
+                f"- Hydrogen largest displacement (Å): {openmm_run['hydrogen_max_displacement_angstrom']}",
+                f"- Energy (kJ/mol): {openmm_run['initial_energy_kj_mol']} -> {openmm_run['final_energy_kj_mol']}",
+            ]
+        )
+    lines.extend(
+        [
+            f"- Refined hydrogenated PDB: `{report['refined_hydrogenated_pdb_path']}`",
+            "",
+            "## QM charge derivation",
+            "",
+        ]
+    )
     for component in selection["charge_components"]:
         lines.append(
             f"- {component['label']}: {component['charge']:+d} ({component['kind']})"
         )
-    lines.extend(["", "## External command", ""])
-    lines.append(f"- Command: `{' '.join(ash['command'])}`")
-    lines.append(f"- Working directory: `{ash['cwd']}`")
-    lines.append(f"- Return code: {ash['returncode']}")
-    lines.append(f"- Runtime (s): {ash['runtime_seconds']}")
+    if backend == "ash":
+        assert isinstance(ash, dict)
+        lines.extend(["", "## External command", ""])
+        lines.append(f"- Command: `{' '.join(ash['command'])}`")
+        lines.append(f"- Working directory: `{ash['cwd']}`")
+        lines.append(f"- Return code: {ash['returncode']}")
+        lines.append(f"- Runtime (s): {ash['runtime_seconds']}")
+    else:
+        assert isinstance(openmm_run, dict)
+        lines.extend(["", "## Run", ""])
+        lines.append(f"- Runtime (s): {openmm_run['seconds']}")
+        lines.append(f"- Atoms: {openmm_run['atom_count']}")
     lines.extend(["", "## Notes", ""])
     for warning in report["warnings"]:
         lines.append(f"- {warning}")

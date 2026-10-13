@@ -153,6 +153,7 @@ def select_refinement_regions(
         raise RefinementSelectionError(str(exc)) from exc
     resolved_by_id = {site.config.id: site for site in resolved_metal_sites}
     selected_metal_residues: dict[int, tuple[str, int]] = {}
+    selected_coordinating_ions: dict[int, tuple[str, object]] = {}
     coordinator_residue_indices: set[int] = set()
     selected_sites = manifest.refinement.qm_components.metal_sites
     configured_coordinators = (
@@ -167,12 +168,36 @@ def select_refinement_regions(
             coordinator_residue_indices.add(
                 input_index_by_object[id(bond.coordinator_residue)]
             )
+        # A coordinating ion is declared on the site rather than among its
+        # ions, because an ion entry is a metal and a halide is not. It still
+        # belongs to the site: it sits in the QM region and brings its own
+        # declared charge, so it must not be mistaken for an undeclared
+        # heterogen that wandered into the coordination sphere.
+        for ion_config in site.config.coordinating_ions:
+            # Resolved by residue, not atom: the selector names the atom so
+            # the ion can be identified, but it is the whole one-atom residue
+            # that enters the QM region. No protonation-aware fallback is
+            # needed, since an ion has no alternative residue names.
+            try:
+                residue = resolve_residue_selector(
+                    leap_input_structure,
+                    ion_config.selector.model_dump(exclude={"atom_name"}),
+                )
+            except SelectorError as exc:
+                raise RefinementSelectionError(
+                    f"Coordinating ion of metal site {site_id} could not be "
+                    f"found in the provisional input: {exc}"
+                ) from exc
+            residue_index = input_index_by_object[id(residue)]
+            selected_coordinating_ions[residue_index] = (site_id, ion_config)
+            coordinator_residue_indices.add(residue_index)
         for selector in configured_coordinators.get(site_id, []):
             residue = _resolve_protonation_aware(leap_input_structure, selector)
             coordinator_residue_indices.add(input_index_by_object[id(residue)])
 
     qm_residue_indices = set(selected_ligand_residues)
     qm_residue_indices.update(selected_metal_residues)
+    qm_residue_indices.update(selected_coordinating_ions)
     qm_residue_indices.update(coordinator_residue_indices)
     if not qm_residue_indices:
         raise RefinementSelectionError("The configured QM region contains no residues")
@@ -269,6 +294,7 @@ def select_refinement_regions(
         manifest=manifest,
         selected_ligand_residues=selected_ligand_residues,
         selected_metal_residues=selected_metal_residues,
+        selected_coordinating_ions=selected_coordinating_ions,
         coordinator_residue_indices=coordinator_residue_indices,
     )
     multiplicity = _total_multiplicity(manifest)
@@ -328,6 +354,7 @@ def _charge_components(
     manifest: ManifestConfig,
     selected_ligand_residues: dict[int, str],
     selected_metal_residues: dict[int, tuple[str, int]],
+    selected_coordinating_ions: dict[int, tuple[str, object]],
     coordinator_residue_indices: set[int],
 ) -> list[ChargeComponent]:
     ligand_by_id = {ligand.id: ligand for ligand in manifest.ligands}
@@ -352,12 +379,25 @@ def _charge_components(
                 charge=ion.charge,
             )
         )
+    for residue_index, (site_id, ion_config) in sorted(
+        selected_coordinating_ions.items()
+    ):
+        residue = pairs[residue_index].input_residue
+        components.append(
+            ChargeComponent(
+                label=f"coordinating_ion:{site_id}:{residue.id.display()}",
+                kind="metal",
+                charge=ion_config.charge,
+            )
+        )
     for residue_index in sorted(coordinator_residue_indices):
         input_residue = pairs[residue_index].input_residue
         topology_residue = pairs[residue_index].topology_residue
         if residue_index in selected_ligand_residues:
             continue
         if residue_index in selected_metal_residues:
+            continue
+        if residue_index in selected_coordinating_ions:
             continue
         if not is_standard_protein_residue(input_residue):
             raise RefinementSelectionError(
