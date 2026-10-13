@@ -53,6 +53,15 @@
 
 ### Fixed
 
+- A ligand whose residue name is one the Amber force fields already define is
+  now built under a name they do not. `tleap` resolves residues by name and
+  maps an amino-acid name to its terminal form first, so the BesD free-lysine
+  substrate was built from the `NLYS` protein template and the run died with
+  "Atom .R<NLYS 252>.A<OXT 25> does not have a type" for every one of its
+  ligand-named atoms; binding the ligand unit to `LYS` instead would have
+  pointed every lysine in the protein at the ligand's parameters. The leap
+  input PDB, a copy of the fitted mol2, the `tleap` script and the final
+  validation all use the new name, and every rename is reported.
 - The temporary xTB hydrogen environment no longer hydrogenates a residue
   twice. OpenMM matches the hydrogens a residue already has through the bonds
   its residue templates define, so hydrogens mdprep placed from

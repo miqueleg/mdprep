@@ -13,6 +13,7 @@ from mdprep.leap.log_parser import assert_tleap_success
 from mdprep.leap.residues import (
     append_disulfide_conect_records,
     disulfide_bond_commands,
+    plan_ligand_residue_renames,
     prepare_leap_input_pdb,
     validate_ligand_parameter_files,
     validate_tleap_ligand_coordinates,
@@ -76,11 +77,16 @@ def hydrogenate_for_mcpb(
     work = Path(output_dir)
     input_dir = work / "input"
     work.mkdir(parents=True, exist_ok=True)
+    ligand_residue_renames = plan_ligand_residue_renames(
+        manifest=manifest,
+        structure=structure,
+    )
     leap_input = prepare_leap_input_pdb(
         structure,
         input_dir / "system.pre_mcpb.pdb",
         manifest=manifest,
         ligand_result=ligand_result,
+        ligand_residue_renames=ligand_residue_renames,
     )
     sources = forcefield_sources(
         protein_forcefield=manifest.protein.forcefield,
@@ -91,6 +97,7 @@ def hydrogenate_for_mcpb(
         manifest=manifest,
         structure=leap_input.structure,
         ligand_result=ligand_result,
+        residue_renames=ligand_residue_renames,
     )
     disulfides = disulfide_bond_commands(
         structure=leap_input.structure,
