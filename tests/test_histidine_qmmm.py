@@ -16,6 +16,22 @@ from mdprep.protonation.histidine_qmmm import (
 from mdprep.structure.pdb import ATOMIC_NUMBER, read_pdb
 
 
+@pytest.fixture
+def templates():
+    """The ff14SB and TIP3P charge tables, which OpenMM ships.
+
+    OpenMM is an optional dependency, so a run without it skips these rather
+    than failing. The embedding itself refuses to proceed instead of guessing;
+    that refusal is asserted in test_the_missing_dependency_is_reported.
+    """
+
+    pytest.importorskip(
+        "openmm",
+        reason="the MM point charges are read from OpenMM's force field files",
+    )
+    return residue_charge_templates()
+
+
 def _structure():
     return read_pdb("tests/data/protein_histidine_ring_hydrogenated.pdb")
 
@@ -45,7 +61,7 @@ def test_qm_region_is_neutral_closed_shell_for_both_tautomers():
     assert formulas == {"C5H8N2"}
 
 
-def test_point_charge_positions_are_written_in_bohr():
+def test_point_charge_positions_are_written_in_bohr(templates):
     """xTB reads pcharge positions in bohr, which its help output does not say."""
 
     structure = _structure()
@@ -66,8 +82,7 @@ def test_point_charge_positions_are_written_in_bohr():
     assert model.qm_charge == 0
 
 
-def test_charges_come_from_the_force_field_tleap_will_use():
-    templates = residue_charge_templates()
+def test_charges_come_from_the_force_field_tleap_will_use(templates):
     # ff14SB, checked against the published Amber charges.
     assert templates["ASP"]["OD1"] == pytest.approx(-0.8014)
     assert templates["ARG"]["NH1"] == pytest.approx(-0.8627)
@@ -84,13 +99,13 @@ def test_charges_come_from_the_force_field_tleap_will_use():
     [("ALA", 0), ("ASP", -1), ("GLU", -1), ("ARG", 1), ("LYS", 1), ("HIP", 1),
      ("HID", 0), ("HIE", 0), ("HOH", 0), ("CASP", -2), ("NLYS", 2)],
 )
-def test_a_complete_residue_contributes_its_formal_charge(resname, formal_charge):
+def test_a_complete_residue_contributes_its_formal_charge(templates, resname, formal_charge):
     """Whole residues carry integral charges, which is why the cutoff keeps
     them whole. A fractional embedding total means atoms went missing."""
 
     from mdprep.structure.models import AtomRecord, ResidueId, ResidueRecord
 
-    template = residue_charge_templates()[resname]
+    template = templates[resname]
     pdb_resname = {"HOH": "HOH"}.get(resname, resname)
     atoms = [
         AtomRecord(
@@ -112,7 +127,7 @@ def test_a_complete_residue_contributes_its_formal_charge(resname, formal_charge
     )
 
 
-def test_a_residue_missing_an_atom_is_reported_not_silently_discharged():
+def test_a_residue_missing_an_atom_is_reported_not_silently_discharged(templates):
     """The fixture histidine has no ring N-H, so a template atom is absent.
 
     Its charge would otherwise vanish into a fractional embedding total with
@@ -126,7 +141,7 @@ def test_a_residue_missing_an_atom_is_reported_not_silently_discharged():
     assert total != pytest.approx(round(total), abs=1e-4)
 
 
-def test_monatomic_ion_is_matched_by_residue_not_atom_name():
+def test_monatomic_ion_is_matched_by_residue_not_atom_name(templates):
     """A PDB FE2 residue names its atom FE; the force field names it FE2."""
 
     from mdprep.structure.models import AtomRecord, ResidueId, ResidueRecord
@@ -152,7 +167,7 @@ def test_monatomic_ion_is_matched_by_residue_not_atom_name():
     assert charges[0].charge == pytest.approx(3.0)
 
 
-def test_undeclared_cofactor_is_reported_rather_than_silently_zeroed():
+def test_undeclared_cofactor_is_reported_rather_than_silently_zeroed(templates):
     from mdprep.structure.models import AtomRecord, ResidueId, ResidueRecord
 
     atoms = [
@@ -213,3 +228,29 @@ def test_open_shell_side_chain_is_refused(monkeypatch):
         histidine_qmmm.build_qmmm_tautomer_model(
             structure, histidine, tautomer="HID"
         )
+
+
+def test_the_missing_dependency_is_reported(monkeypatch):
+    """Without OpenMM the embedding refuses rather than guessing charges.
+
+    Falling back to the cluster backend on its own would quietly return to the
+    charge arithmetic this replaces, so the error names the option instead.
+    """
+
+    import builtins
+
+    real_import = builtins.__import__
+
+    def no_openmm(name, *args, **kwargs):
+        if name == "openmm" or name.startswith("openmm."):
+            raise ImportError("No module named 'openmm'")
+        return real_import(name, *args, **kwargs)
+
+    residue_charge_templates.cache_clear()
+    monkeypatch.setattr(builtins, "__import__", no_openmm)
+    try:
+        with pytest.raises(HistidineQmmmError, match="embedding: cluster"):
+            residue_charge_templates()
+    finally:
+        monkeypatch.undo()
+        residue_charge_templates.cache_clear()
