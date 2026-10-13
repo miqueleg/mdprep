@@ -45,23 +45,21 @@ disulfides: {auto_detect: true, detection_cutoff_angstrom: 2.2, force: [], forbi
 ligands:
   - id: a_lys_301
     selector: {chain: A, resname: LYS, resid: 301, icode: null}
-    net_charge: 1
+    # Neutral free lysine as deposited; 6NIE has no ligand hydrogens, so the
+    # protonation has to be stated rather than inferred.
+    net_charge: 0
+    smiles: "C(CCN)CC(C(=O)O)N"
     multiplicity: 1
     atom_types: gaff2
     charge_method: am1bcc
   - id: a_akg_304
     selector: {chain: A, resname: AKG, resid: 304, icode: null}
+    # The dianion, which is how it coordinates the iron.
     net_charge: -2
+    smiles: "C(CC(=O)[O-])C(=O)C(=O)[O-]"
     multiplicity: 1
     atom_types: gaff2
     charge_method: mcpb_resp_pyscf
-  - id: a_cl_303
-    selector: {chain: A, resname: CL, resid: 303, icode: null}
-    net_charge: -1
-    multiplicity: 1
-    atom_types: gaff2
-    charge_method: am1bcc
-
 metals:
   - id: a_fe2_302_site
     model: bonded_mcpb
@@ -100,7 +98,7 @@ refinement:
   backend: ash
   qm_method: gfn2_xtb
   qm_components:
-    ligands: [a_lys_301, a_akg_304, a_cl_303]
+    ligands: [a_lys_301, a_akg_304]
     metal_sites: [a_fe2_302_site]
     metal_coordinating_residues: {}
   active_region_cutoff_angstrom: 4.0
