@@ -21,6 +21,56 @@ also supported in single-point or optimization mode. Temporary tautomer
 hydrogens used for ranking are written only to local XYZ files and never to the
 final prepared PDB.
 
+## How the two tautomers are compared
+
+`protonation.histidine.xtb.embedding` chooses what xTB is actually given.
+
+### `qmmm` (the default)
+
+The QM region is the histidine side chain alone, capped at CA. That is
+4-methylimidazole: neutral, closed shell, and the same C5H8N2 for both
+tautomers with one proton moved between the ring nitrogens. The charge and
+spin handed to xTB are therefore constants, not quantities derived from the
+surroundings, and the two energies being compared differ only by the thing
+being decided.
+
+Everything within `embedding_cutoff_angstrom` (default 12 A) enters as fixed MM
+point charges, read from the ff14SB and TIP3P residue templates that `tleap`
+will later use for the same atoms. Residues enter whole: a cutoff that cuts
+through one would leave a fragment carrying a charge the residue does not have.
+mdprep checks that the embedded charges sum to an integer and says which
+residue is responsible when they do not.
+
+A cofactor has no force-field residue template, so a declared ligand gets GFN2
+atomic charges from a cached single point, written to
+`protonation/histidine_xtb/embedding_cofactor_charges/`. Leaving it out would
+put a hole in the field where a charge should be; on BesD, including
+alpha-ketoglutarate at 2- changes the answer for two of the six histidines. A
+heterogen that is neither declared nor templated is reported by name rather
+than silently treated as neutral.
+
+MM charges within `link_exclusion_angstrom` (default 1.8 A) of a capping
+hydrogen are redistributed over the rest of their own residue, so the link atom
+is not polarised by the atoms it replaced while that residue keeps its charge.
+Because both tautomers use the same caps in the same field, whatever the caps
+get wrong they get wrong equally, and the difference that decides the tautomer
+is unaffected.
+
+### `cluster`
+
+The older treatment: a few hundred atoms are carved out around the histidine
+and the whole fragment is given to xTB. That requires stating the fragment's
+total charge, which mdprep computes by summing formal per-residue charges -- a
+quantity a CA-truncated, hydrogen-capped fragment does not actually carry. On
+BesD three of six clusters came out with a charge contradicting their own atom
+composition and xTB refused them outright. Use it when the neighbours of a
+histidine have no force-field charges to embed, and read the warnings.
+
+The sections below on temporary hydrogens, metal sites and thread counts apply
+to the `cluster` backend. Under `qmmm` the metal and its ligands are point
+charges rather than part of the QM region, so none of the cluster's charge and
+spin bookkeeping arises.
+
 If the input protein is not fully hydrogenated,
 `histidine.xtb.add_missing_protein_hydrogens: true` (the default) uses
 PDBFixer/OpenMM to create a complete temporary protein environment before the

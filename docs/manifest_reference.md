@@ -53,6 +53,17 @@ relative executable path when needed.
 - `method`: `manual_only`, `propka`, or `propka_xtb_his`.
 - `overrides`: manual residue-state assignments.
 - `histidine.xtb`: xTB/g-xTB settings for HID/HIE ranking.
+  - `embedding`: `qmmm` (the default) puts only the histidine side chain in the
+    QM region and the surroundings in as ff14SB/TIP3P point charges, so the QM
+    region is neutral and closed shell whichever tautomer it is. `cluster` is
+    the older whole-fragment treatment, which has to compute the carved
+    fragment's total charge. See
+    [how the two tautomers are compared](protonation.md#how-the-two-tautomers-are-compared).
+  - `embedding_cutoff_angstrom`: radius for the MM point charges under `qmmm`
+    (default `12.0`). Residues enter whole, so a residue with any atom inside
+    the radius contributes all of them.
+  - `link_exclusion_angstrom`: MM charges nearer than this to a capping
+    hydrogen are redistributed over the rest of their residue (default `1.8`).
   - `add_missing_protein_hydrogens`: use a validated, temporary
     PDBFixer/OpenMM hydrogenated environment when the input protein is
     incomplete (default `true`). These hydrogens never enter the prepared PDB.
