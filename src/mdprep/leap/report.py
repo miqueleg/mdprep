@@ -59,6 +59,18 @@ def _render_markdown(report: dict[str, Any]) -> str:
             )
     else:
         lines.append("- None")
+    lines.extend(["", "## Ligand Residue Renames", ""])
+    renames = (report.get("leap_input") or {}).get("ligand_residue_renames", [])
+    if renames:
+        for rename in renames:
+            icode = rename["icode"] or ""
+            lines.append(
+                f"- `{rename['ligand_id']}` "
+                f"{rename['chain_id']}:{rename['original_resname']}{rename['resid']}{icode} "
+                f"-> `{rename['tleap_resname']}`: {rename['reason']}"
+            )
+    else:
+        lines.append("- None")
     lines.extend(["", "## Disulfide Bonds", ""])
     bonds = report.get("disulfide_bond_commands", [])
     if bonds:

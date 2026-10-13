@@ -18,6 +18,7 @@ from mdprep.leap.residues import (
     LigandParameterFiles,
     append_disulfide_conect_records,
     disulfide_bond_commands,
+    plan_ligand_residue_renames,
     prepare_leap_input_pdb,
     validate_ligand_parameter_files,
     validate_tleap_ligand_coordinates,
@@ -153,6 +154,10 @@ def run_tleap_stage(
                 f"{sorted(mcpb_resp_ligand_ids)}, obtained "
                 f"{sorted(item.ligand_id for item in refitted_ligands)}."
             )
+        ligand_residue_renames = plan_ligand_residue_renames(
+            manifest=manifest,
+            structure=structure,
+        )
         leap_input = prepare_leap_input_pdb(
             metal_structure,
             input_dir / "system.leap_input.pdb",
@@ -165,12 +170,14 @@ def run_tleap_stage(
             # and coordinates unchanged while making the input numbering
             # match MCPB's command indices exactly.
             renumber_residues_sequentially=bonded_mcpb_complete,
+            ligand_residue_renames=ligand_residue_renames,
         )
         ligand_files = validate_ligand_parameter_files(
             manifest=manifest,
             structure=structure,
             ligand_result=ligand_result,
             excluded_ligand_ids=mcpb_resp_ligand_ids,
+            residue_renames=ligand_residue_renames,
         )
         disulfide_bonds = (
             []
@@ -221,12 +228,21 @@ def run_tleap_stage(
             output_pdb=dry_outputs.pdb,
             stage="dry",
             output_resnames_by_ligand_id={
-                item.ligand_id: item.final_resname
-                for item in refitted_ligands
+                **{
+                    rename.ligand_id: rename.tleap_resname
+                    for rename in ligand_residue_renames
+                },
+                **{item.ligand_id: item.final_resname for item in refitted_ligands},
             },
         )
 
         warnings = list(sources.warnings)
+        warnings.extend(
+            f"Ligand {rename.ligand_id} was built as residue {rename.tleap_resname} "
+            f"rather than {rename.original_resname}, which the Amber force fields "
+            "already define."
+            for rename in ligand_residue_renames
+        )
         if conect_records:
             warnings.append(
                 "Disulfide SG-SG bonds were encoded as PDB CONECT records in the tleap input PDB."

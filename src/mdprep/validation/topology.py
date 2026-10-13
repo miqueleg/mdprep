@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Sequence
 
 from mdprep.config.models import ManifestConfig
 from mdprep.structure.classify import is_water_residue, likely_ligands_or_cofactors
@@ -27,6 +27,7 @@ def validate_final_outputs(
     inpcrd: str | Path,
     pdb: str | Path,
     metal_result: "MetalStageResult | None" = None,
+    ligand_residue_renames: Sequence[dict[str, Any]] = (),
 ) -> dict[str, Any]:
     warnings: list[str] = []
     errors: list[str] = []
@@ -59,6 +60,13 @@ def validate_final_outputs(
         for ligand in manifest.ligands:
             expected = ligand.selector.resname
             accepted_resnames = {expected}
+            # A ligand whose own name the force fields already define is built
+            # under a name tleap had free, so that is the name it comes back as.
+            accepted_resnames.update(
+                str(rename["tleap_resname"])
+                for rename in ligand_residue_renames
+                if rename.get("ligand_id") == ligand.id
+            )
             if metal_result is not None and metal_result.mcpb_site is not None:
                 accepted_resnames.update(
                     str(rename["final_resname"])
@@ -96,7 +104,10 @@ def validate_final_outputs(
         unexpected = [
             residue.id.to_dict()
             for residue in likely_ligands_or_cofactors(final_structure.residues)
-            if residue.id.resname not in _allowed_final_heterogen_resnames(manifest, metal_result)
+            if residue.id.resname
+            not in _allowed_final_heterogen_resnames(
+                manifest, metal_result, ligand_residue_renames
+            )
         ]
         if unexpected:
             errors.append(f"Unexpected heterogen residues found in final PDB: {unexpected}")
@@ -170,8 +181,10 @@ def _expected_ligand_atom_names(ligand_id: str, output_dir: Path) -> list[str]:
 def _allowed_final_heterogen_resnames(
     manifest: ManifestConfig,
     metal_result: "MetalStageResult | None" = None,
+    ligand_residue_renames: Sequence[dict[str, Any]] = (),
 ) -> set[str]:
     allowed = {ligand.selector.resname for ligand in manifest.ligands}
+    allowed.update(str(rename["tleap_resname"]) for rename in ligand_residue_renames)
     allowed.update(
         ion.selector.resname
         for site in manifest.metals

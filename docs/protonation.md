@@ -86,6 +86,16 @@ option to `false` to require a fully hydrogenated input and retain strict
 failure on an incomplete xTB environment. If temporary hydrogenation is needed
 but PDBFixer/OpenMM is unavailable, protonation fails clearly.
 
+A residue that already carries hydrogens OpenMM's own residue templates do not
+list -- a ligand built from `ligands[].smiles`, whose hydrogen names come from
+the parent heavy atom -- is handed back exactly as it arrived rather than
+hydrogenated again. OpenMM recognises the hydrogens already in a residue
+through the bonds its templates define, so without this it sees a bare heavy
+atom and builds a second complete set beside the first. The protonation report
+lists every residue left with the hydrogens it arrived with. A residue whose
+protonation state was decided by PropKa or an override is still rebuilt in that
+state, hydrogens and all.
+
 HID and HIE trials run in separate, freshly created work directories. This
 prevents xTB restart, optimized-coordinate, and charge files from one tautomer
 or an earlier preparation attempt from contaminating another trial. The common
