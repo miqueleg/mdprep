@@ -78,7 +78,13 @@ def select_histidine_tautomer(
 ) -> HistidineXtbSelection:
     config = manifest.protonation.histidine.xtb
     hist_dir = Path(work_dir) / _histidine_dir_name(histidine)
-    hist_dir.mkdir(parents=True, exist_ok=True)
+    # The summary files below are written only once the run succeeds, so a
+    # failed run would otherwise leave the previous run's cluster_model.json
+    # sitting next to this run's geometries -- a charge and an atom count that
+    # describe a different cluster entirely.
+    if hist_dir.exists():
+        shutil.rmtree(hist_dir)
+    hist_dir.mkdir(parents=True)
     cluster_residues = build_histidine_cluster(
         structure,
         histidine,
