@@ -18,6 +18,11 @@ from tests.test_structure_normalize import make_manifest, manifest_data
 
 
 def run_with_fakes(monkeypatch, tmp_path, data: dict, *, hid_energy: float, hie_energy: float):
+    # These exercise the cluster backend, which is no longer the default. The
+    # embedded QM/MM backend has its own tests in test_histidine_qmmm.py.
+    data.setdefault("protonation", {}).setdefault("histidine", {}).setdefault(
+        "xtb", {}
+    )["embedding"] = "cluster"
     monkeypatch.setattr(
         "mdprep.protonation.apply.run_propka_workflow",
         lambda structure, manifest, work_dir: fake_propka_result(
@@ -154,6 +159,9 @@ def test_multiple_neutral_histidines_with_ambiguous_input_hydrogens_do_not_fail(
     pdb = _two_histidine_pdb_with_ambiguous_neighbor(tmp_path)
     data = manifest_data(str(pdb))
     data["protonation"]["method"] = "propka_xtb_his"
+    data["protonation"].setdefault("histidine", {}).setdefault("xtb", {})[
+        "embedding"
+    ] = "cluster"
     monkeypatch.setattr(
         "mdprep.protonation.apply.run_propka_workflow",
         lambda structure, manifest, work_dir: fake_propka_result(

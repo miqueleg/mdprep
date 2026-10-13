@@ -18,3 +18,6 @@ runs/
 .DS_Store
 node_modules/
 package-lock.json
+
+# Worktrees created for spawned background tasks.
+.claude/worktrees/

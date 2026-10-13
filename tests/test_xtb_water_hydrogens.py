@@ -51,6 +51,11 @@ def _with_water_atoms(tmp_path: Path, atom_lines: list[str]) -> Path:
 
 
 def _run_with_fakes(monkeypatch, tmp_path, data: dict):
+    # These exercise the cluster backend, which is no longer the default. The
+    # embedded QM/MM backend has its own tests in test_histidine_qmmm.py.
+    data.setdefault("protonation", {}).setdefault("histidine", {}).setdefault(
+        "xtb", {}
+    )["embedding"] = "cluster"
     monkeypatch.setattr(
         "mdprep.protonation.apply.run_propka_workflow",
         lambda structure, manifest, work_dir: fake_propka_result(

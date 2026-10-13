@@ -142,7 +142,19 @@ class HistidineXtbConfig(StrictModel):
     mode: Literal["sp", "opt"] = "opt"
     opt_level: Literal["loose", "normal", "tight"] = "loose"
     solvent: str | None = "water"
+    # "qmmm" puts only the histidine side chain in the QM region and the
+    # surroundings in as MM point charges. The side chain is neutral and closed
+    # shell whichever tautomer it is, so there is no cluster charge to compute
+    # and get wrong. "cluster" is the older whole-fragment treatment, kept for
+    # comparison and for systems whose neighbours have no force-field charges.
+    embedding: Literal["qmmm", "cluster"] = "qmmm"
     cutoff_angstrom: float = Field(default=5.0, gt=0)
+    # Point charges cost almost nothing, so this reaches well past the distance
+    # at which a tautomer preference stops changing.
+    embedding_cutoff_angstrom: float = Field(default=12.0, gt=0)
+    # MM charges nearer than this to a capping hydrogen are redistributed over
+    # the rest of their residue instead of polarising the link atom.
+    link_exclusion_angstrom: float = Field(default=1.8, ge=0)
     extra_args: list[str] = Field(default_factory=list)
     energy_close_call_kcal_mol: float = Field(default=0.5, ge=0)
     add_missing_protein_hydrogens: bool = True
