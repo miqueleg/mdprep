@@ -153,7 +153,18 @@ def normalize_structure_stage(
     configured_metal_residue_keys = configured_metal_ion_keys | _mcpb_model_residue_keys(
         structure, manifest
     )
-    likely_heterogens = [residue for residue in structure.residues if is_likely_ligand_or_cofactor(residue)]
+    # Only the chains the build keeps. A deposition of four copies has four
+    # sets of cofactors, and demanding a declaration for the three about to be
+    # discarded would reject a manifest that is already complete. The repair
+    # stage filters chains before PDBFixer sees them, so this check used to
+    # look correct whenever repair was enabled, and wrong when it was not.
+    kept_chains = {chain.strip() for chain in manifest.structure.keep_chains}
+    likely_heterogens = [
+        residue
+        for residue in structure.residues
+        if is_likely_ligand_or_cofactor(residue)
+        and (not kept_chains or residue.id.chain_id in kept_chains)
+    ]
     unknown_heterogens = [
         residue
         for residue in likely_heterogens
