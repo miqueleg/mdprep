@@ -157,6 +157,122 @@ def test_undeclared_heterogen_in_a_kept_chain_is_still_demanded():
         normalize_structure_stage(make_manifest(data))
 
 
+def test_a_configured_ligand_in_a_discarded_chain_is_rejected():
+    """Selectors see the whole input, so they can name a residue being dropped.
+
+    Resolving it and filtering afterwards removed the ligand's atoms without a
+    word while still reporting the ligand as kept.
+    """
+
+    data = manifest_data("tests/data/protein_two_ligands.pdb")
+    data["structure"]["keep_chains"] = ["A"]
+    data["ligands"] = [ligand_entry("SUB_501", "B", "SUB", 501)]
+
+    with pytest.raises(StructureNormalizationError, match="keep_chains discards"):
+        normalize_structure_stage(make_manifest(data))
+
+
+def test_a_configured_metal_ion_in_a_discarded_chain_is_rejected():
+    data = manifest_data("tests/data/protein_histidine_zinc.pdb")
+    data["structure"]["keep_chains"] = ["A"]
+    data["metals"] = [
+        {
+            "id": "zn_site",
+            "model": "nonbonded",
+            "ions": [
+                {
+                    "selector": {
+                        "chain": "Z",
+                        "resname": "ZN",
+                        "resid": 500,
+                        "icode": None,
+                        "atom_name": "ZN",
+                    },
+                    "element": "Zn",
+                    "charge": 2,
+                    "multiplicity": 1,
+                }
+            ],
+            "nonbonded": {"parameter_set": "12_6"},
+        }
+    ]
+
+    with pytest.raises(StructureNormalizationError, match="Metal site 'zn_site' ion"):
+        normalize_structure_stage(make_manifest(data))
+
+
+def test_an_mcpb_coordinator_in_a_discarded_chain_is_rejected():
+    """Keeping the metal's chain and dropping its protein is a contradiction.
+
+    The coordinator resolves, so nothing failed until MCPB met a bond whose
+    other end had been filtered out of the structure.
+    """
+
+    data = manifest_data("tests/data/protein_histidine_zinc.pdb")
+    data["structure"]["keep_chains"] = ["Z"]
+    ion = {
+        "chain": "Z",
+        "resname": "ZN",
+        "resid": 500,
+        "icode": None,
+        "atom_name": "ZN",
+    }
+    data["metals"] = [
+        {
+            "id": "zn_site",
+            "model": "bonded_mcpb",
+            "ions": [{"selector": ion, "element": "Zn", "charge": 2, "multiplicity": 1}],
+            "mcpb": {
+                "provisional_nonbonded_parameter_set": "12_6",
+                "bonds": [
+                    {
+                        "ion": ion,
+                        "coordinator": {
+                            "chain": "A",
+                            "resname": "HIS",
+                            "resid": 2,
+                            "icode": None,
+                            "atom_name": "NE2",
+                        },
+                    }
+                ],
+                "small_model_charge": 1,
+                "small_model_spin": 1,
+                "large_model_charge": 1,
+                "large_model_spin": 1,
+            },
+        }
+    ]
+
+    with pytest.raises(StructureNormalizationError, match="A metal-site residue"):
+        normalize_structure_stage(make_manifest(data))
+
+
+def test_a_forced_disulfide_in_a_discarded_chain_is_rejected():
+    data = manifest_data("tests/data/protein_disulfide_two_chains.pdb")
+    data["structure"]["keep_chains"] = ["A"]
+    data["disulfides"]["force"] = [
+        {
+            "a": {"chain": "A", "resname": "CYS", "resid": 10, "icode": None},
+            "b": {"chain": "B", "resname": "CYS", "resid": 10, "icode": None},
+        }
+    ]
+
+    with pytest.raises(StructureNormalizationError, match=r"Disulfide force\[1\].b"):
+        normalize_structure_stage(make_manifest(data))
+
+
+def test_configured_selectors_in_kept_chains_are_unaffected():
+    data = manifest_data("tests/data/protein_two_ligands.pdb")
+    data["structure"]["keep_chains"] = ["A", "B"]
+    data["ligands"] = [ligand_entry("SUB_501", "B", "SUB", 501)]
+
+    result = normalize_structure_stage(make_manifest(data))
+
+    assert [ligand.ligand_id for ligand in result.configured_ligands_kept] == ["SUB_501"]
+    assert "SUB" in [residue.id.resname for residue in result.normalized_structure.residues]
+
+
 def test_atom_record_ligand_can_be_configured_by_resname_only():
     data = manifest_data("tests/data/protein_atom_record_ligand_blank_chain.pdb")
     data["structure"]["remove_unknown_heterogens"] = False

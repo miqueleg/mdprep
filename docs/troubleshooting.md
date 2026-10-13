@@ -3,7 +3,16 @@
 ## Unknown Heterogens
 
 Add the residue to `ligands:`, configure a one-atom ion under `metals:`, or set
-`structure.remove_unknown_heterogens: true` if removal is intended.
+`structure.remove_unknown_heterogens: true` if removal is intended. Only the
+chains named by `structure.keep_chains` are examined, so a heterogen belonging
+to a copy of the complex that is not being built needs no entry.
+
+## A Selector Names A Discarded Chain
+
+`structure.keep_chains` is applied before selectors are checked, so a `ligands`,
+`metals`, or `disulfides` selector resolving into a chain that is not kept is
+reported as a contradiction. Point the selector at a kept chain, or add the
+chain it names to `structure.keep_chains`.
 
 ## Missing External Tool
 

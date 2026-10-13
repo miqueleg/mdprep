@@ -129,9 +129,31 @@ def normalize_structure_stage(
             altloc_policy=manifest.structure.altloc_policy,
         )
 
+    # keep_chains selects the build, so it selects what the rest of this
+    # function may look at. Every check below runs against the whole input, so
+    # the restriction has to be known before any of them, not after.
+    selected_chains = {chain.strip() for chain in manifest.structure.keep_chains}
+    if selected_chains:
+        present = {residue.id.chain_id for residue in structure.residues}
+        missing = sorted(selected_chains - present)
+        if missing:
+            raise StructureNormalizationError(
+                f"structure.keep_chains names chains not present in the input: "
+                f"{missing}; the input has {sorted(present)}."
+            )
+
     configured_ligands = _resolve_configured_ligands(structure, manifest)
     configured_metals = _resolve_configured_metals(structure, manifest)
-    _validate_disulfide_selectors(structure, manifest)
+    _validate_disulfide_selectors(structure, manifest, selected_chains)
+    # A selector resolves against the whole input, so it can name a residue
+    # that is about to be discarded. Saying so is the only honest answer: the
+    # alternative is to drop a declared ligand or metal without a word and then
+    # report it as kept while its atoms are gone from the structure.
+    for ligand_id, residue in configured_ligands:
+        _require_kept_chain(residue, selected_chains, f"Ligand {ligand_id!r}")
+    for site_id, _ion, residue in configured_metals:
+        _require_kept_chain(residue, selected_chains, f"Metal site {site_id!r} ion")
+
     configured_ligand_keys = {id(residue) for _, residue in configured_ligands}
     configured_metal_ion_keys = {id(residue) for _, _, residue in configured_metals}
     # Being both a ligand and a metal ion is a contradiction. Being both a
@@ -150,20 +172,26 @@ def normalize_structure_stage(
     # metal ion, because an ion's charge is positive by definition, and it
     # cannot be a GAFF ligand either, because antechamber's semi-empirical step
     # refuses a single atom.
-    configured_metal_residue_keys = configured_metal_ion_keys | _mcpb_model_residue_keys(
-        structure, manifest
-    )
+    mcpb_model_residue_keys = _mcpb_model_residue_keys(structure, manifest)
+    for residue in structure.residues:
+        if id(residue) in mcpb_model_residue_keys:
+            _require_kept_chain(
+                residue,
+                selected_chains,
+                "A metal-site residue (an MCPB coordinator, an additional residue, "
+                "or a coordinating ion)",
+            )
+    configured_metal_residue_keys = configured_metal_ion_keys | mcpb_model_residue_keys
     # Only the chains the build keeps. A deposition of four copies has four
     # sets of cofactors, and demanding a declaration for the three about to be
     # discarded would reject a manifest that is already complete. The repair
     # stage filters chains before PDBFixer sees them, so this check used to
     # look correct whenever repair was enabled, and wrong when it was not.
-    kept_chains = {chain.strip() for chain in manifest.structure.keep_chains}
     likely_heterogens = [
         residue
         for residue in structure.residues
         if is_likely_ligand_or_cofactor(residue)
-        and (not kept_chains or residue.id.chain_id in kept_chains)
+        and (not selected_chains or residue.id.chain_id in selected_chains)
     ]
     unknown_heterogens = [
         residue
@@ -186,16 +214,6 @@ def normalize_structure_stage(
     waters_removed: list[ResidueRecord] = []
     unknown_removed: list[ResidueRecord] = []
     chains_removed: list[ResidueRecord] = []
-
-    selected_chains = {chain.strip() for chain in manifest.structure.keep_chains}
-    if selected_chains:
-        present = {residue.id.chain_id for residue in structure.residues}
-        missing = sorted(selected_chains - present)
-        if missing:
-            raise StructureNormalizationError(
-                f"structure.keep_chains names chains not present in the input: "
-                f"{missing}; the input has {sorted(present)}."
-            )
 
     for residue in structure.residues:
         if selected_chains and residue.id.chain_id not in selected_chains:
@@ -452,7 +470,11 @@ def _resolve_configured_metals(
     return resolved
 
 
-def _validate_disulfide_selectors(structure: PdbStructure, manifest: ManifestConfig) -> None:
+def _validate_disulfide_selectors(
+    structure: PdbStructure,
+    manifest: ManifestConfig,
+    selected_chains: set[str],
+) -> None:
     for group_name, pairs in (
         ("force", manifest.disulfides.force),
         ("forbid", manifest.disulfides.forbid),
@@ -460,11 +482,40 @@ def _validate_disulfide_selectors(structure: PdbStructure, manifest: ManifestCon
         for index, pair in enumerate(pairs, start=1):
             for side_name, selector in (("a", pair.a), ("b", pair.b)):
                 try:
-                    resolve_residue_selector(structure, selector.model_dump())
+                    residue = resolve_residue_selector(structure, selector.model_dump())
                 except SelectorError as exc:
                     raise StructureNormalizationError(
                         f"Disulfide {group_name}[{index}].{side_name} selector did not resolve exactly one residue: {exc}"
                     ) from exc
+                _require_kept_chain(
+                    residue,
+                    selected_chains,
+                    f"Disulfide {group_name}[{index}].{side_name}",
+                )
+
+
+def _require_kept_chain(
+    residue: ResidueRecord,
+    selected_chains: set[str],
+    description: str,
+) -> None:
+    """Reject a manifest selector aimed at a chain keep_chains discards.
+
+    The residue is there to resolve against, because selectors see the whole
+    input, but it is not part of the system being prepared. Letting it through
+    would hand the later stages a declaration whose atoms the chain filter has
+    already removed.
+    """
+
+    if not selected_chains or residue.id.chain_id in selected_chains:
+        return
+    chain = residue.id.chain_id if residue.id.chain_id else "<blank>"
+    raise StructureNormalizationError(
+        f"{description} selects {_format_residue_for_error(residue)}, which "
+        f"structure.keep_chains discards; it keeps {sorted(selected_chains)}. "
+        f"Point the selector at a kept chain, or add chain {chain} to "
+        "structure.keep_chains."
+    )
 
 
 def _filter_residues_by_ids(
