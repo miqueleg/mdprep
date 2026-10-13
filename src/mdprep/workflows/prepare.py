@@ -241,6 +241,16 @@ def prepare_system(
                     refinement_result.refined_hydrogenated_pdb_path
                 ),
                 output_protonation_pdb_path=final_protonation_pdb,
+                # A declared ligand's protonation comes from its SMILES, not
+                # from a protein template it happens to share a name with.
+                ligand_residue_keys={
+                    (
+                        ligand.selector.chain,
+                        ligand.selector.resid,
+                        ligand.selector.icode,
+                    )
+                    for ligand in manifest.ligands
+                },
             )
         else:
             protonation_result = apply_protonation_stage(

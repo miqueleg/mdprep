@@ -199,11 +199,27 @@ def plan_ligand_residue_renames(
     return renames
 
 
-def _available_residue_name(original: str, taken: set[str]) -> str:
+def ligand_rename_candidates(original: str) -> list[str]:
+    """The names a ligand called ``original`` may be renamed to, in order.
+
+    Shared with the readers of a renamed structure, so that recognising a
+    rename and choosing one cannot drift apart.
+    """
+
     stem = original[:2].upper()
     candidates = [f"{stem}{digit}" for digit in "123456789"]
     candidates += [f"{original[:1].upper()}{index:02d}" for index in range(100)]
-    for candidate in candidates:
+    return candidates
+
+
+def is_ligand_rename_of(candidate: str, original: str) -> bool:
+    """Whether ``candidate`` is a name this module would have chosen."""
+
+    return candidate.strip().upper() in set(ligand_rename_candidates(original))
+
+
+def _available_residue_name(original: str, taken: set[str]) -> str:
+    for candidate in ligand_rename_candidates(original):
         if candidate not in taken:
             return candidate
     raise LeapResidueError(

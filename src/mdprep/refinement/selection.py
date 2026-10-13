@@ -19,6 +19,7 @@ from mdprep.structure.classify import (
     is_water_residue,
 )
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord
+from mdprep.leap.residues import is_ligand_rename_of
 from mdprep.structure.selectors import SelectorError, resolve_residue_selector
 
 
@@ -133,10 +134,7 @@ def select_refinement_regions(
     for ligand_id in manifest.refinement.qm_components.ligands:
         ligand = ligand_by_id[ligand_id]
         try:
-            residue = resolve_residue_selector(
-                leap_input_structure,
-                ligand.selector.model_dump(),
-            )
+            residue = _resolve_rename_aware(leap_input_structure, ligand.selector)
         except SelectorError as exc:
             raise RefinementSelectionError(
                 f"Refinement ligand {ligand_id!r} selector failed: {exc}"
@@ -321,6 +319,37 @@ def select_refinement_regions(
         active_water_cutoff_angstrom=water_cutoff,
         movable_atom_policy=movable_atom_policy,
     )
+
+
+def _resolve_rename_aware(
+    structure: PdbStructure,
+    selector: ResidueSelector,
+) -> ResidueRecord:
+    """Resolve a ligand selector against a structure tleap may have renamed.
+
+    A ligand whose deposited name is one the force fields already define --
+    a free lysine called LYS -- is built under a name tleap has not taken,
+    because loadpdb would otherwise map it to the protein template. The
+    manifest still names it LYS, so the selector has to recognise the
+    substitute. Only a name this codebase would itself have chosen is
+    accepted, so an unrelated residue at the same position is still an error.
+    """
+
+    data = selector.model_dump()
+    try:
+        return resolve_residue_selector(structure, data)
+    except SelectorError as original:
+        if selector.resname is None:
+            raise
+        relaxed = dict(data)
+        relaxed.pop("resname", None)
+        try:
+            residue = resolve_residue_selector(structure, relaxed)
+        except SelectorError:
+            raise original from None
+        if not is_ligand_rename_of(residue.id.resname, selector.resname):
+            raise original from None
+        return residue
 
 
 def _resolve_protonation_aware(
