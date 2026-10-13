@@ -161,10 +161,13 @@ def _temporary_protein_hydrogenation_lines(
 ) -> list[str]:
     if hydrogenation is None:
         return ["- Not required"]
+    preserved = hydrogenation.get("residues_left_hydrogenated_as_found") or []
     return [
         f"- Backend: `{hydrogenation['backend']}` "
         f"({hydrogenation['backend_version'] or 'unknown version'})",
         f"- Temporary hydrogens added: {hydrogenation['added_hydrogen_count']}",
+        "- Residues left with the hydrogens they arrived with: "
+        + (", ".join(preserved) if preserved else "None"),
         "- Maximum displacement of an original atom: "
         f"{hydrogenation['maximum_original_atom_displacement_angstrom']:.6f} A",
         f"- Final prepared PDB modified: {hydrogenation['final_prepared_pdb_modified']}",

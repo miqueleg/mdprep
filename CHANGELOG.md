@@ -53,6 +53,14 @@
 
 ### Fixed
 
+- The temporary xTB hydrogen environment no longer hydrogenates a residue
+  twice. OpenMM matches the hydrogens a residue already has through the bonds
+  its residue templates define, so hydrogens mdprep placed from
+  `ligands[].smiles`, named after their parent heavy atom, were invisible to it
+  and it built a second complete set beside them: the BesD free-lysine
+  substrate came out carrying both HB2/HB3 and HB/HBA. Such a residue is now
+  passed through untouched and reported, unless a protonation state was decided
+  for it, in which case OpenMM still rebuilds it in that state.
 - Amber ion atom types were built as `element + charge + "+"`, which produced
   `Na1+` for every monovalent cation and could not express an anion at all.
 
