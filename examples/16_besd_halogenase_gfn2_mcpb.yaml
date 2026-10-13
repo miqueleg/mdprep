@@ -68,6 +68,13 @@ metals:
         element: Fe
         charge: 2
         multiplicity: 5
+    # The chloride occupies the position a carboxylate takes in a hydroxylase.
+    # It is an ion, not a cofactor: Amber parameterises Cl- directly, and
+    # antechamber could not treat a single atom anyway.
+    coordinating_ions:
+      - selector: {chain: A, resname: CL, resid: 303, icode: null, atom_name: CL}
+        element: Cl
+        charge: -1
     mcpb:
       workflow: pyscf
       provisional_nonbonded_parameter_set: "12_6"

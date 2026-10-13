@@ -30,6 +30,10 @@
 - `examples/mdprep_colab_run.ipynb`, a Colab notebook that runs a manifest and
   installs only the toolchain that manifest needs.
 
+- `metals[].coordinating_ions` declares a non-metal ion bound in a metal site,
+  such as a coordinating halide, which previously had nowhere to live: it is
+  not a metal and antechamber cannot treat a single atom.
+
 ### Changed
 
 - The refinement stage defaults to `backend: openmm`, a force-field hydrogen
@@ -48,6 +52,9 @@
 ## 0.2.1 - 2026-10-01
 
 ### Fixed
+
+- Amber ion atom types were built as `element + charge + "+"`, which produced
+  `Na1+` for every monovalent cation and could not express an anion at all.
 
 - Roe--Brooks stage 2 no longer fails with "Particle coordinate is NaN" on
   solvated systems. Free ions were positionally restrained because Amber names

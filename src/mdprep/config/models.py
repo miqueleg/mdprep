@@ -339,6 +339,30 @@ class MetalIonConfig(StrictModel):
     multiplicity: int | None = Field(default=None, ge=1)
 
 
+class CoordinatingIonConfig(StrictModel):
+    """A single-atom non-metal ion bound in a metal site.
+
+    A coordinating halide belongs nowhere else. It is not a metal, so it does
+    not go in ions[], where MCPB would treat it as a metal centre. And it
+    cannot be a GAFF ligand, because antechamber's semi-empirical step refuses
+    a single atom. Amber's Li/Merz sets parameterise F-, Cl-, Br- and I-
+    directly, which is what the force-field relaxation uses.
+
+    A polyatomic coordinating anion -- azide, for instance -- has no Amber ion
+    parameters and does not need them: antechamber handles it. Configure it
+    under ligands[] as a cofactor and name it as an mcpb coordinator, which is
+    what alpha-ketoglutarate already does.
+
+    Either way the ion is part of the metal site's QM region.
+    """
+
+    selector: AtomSelector
+    element: str = Field(pattern=r"^[A-Z][a-z]?$", min_length=1, max_length=2)
+    # Anions only: a coordinating cation is a metal and belongs in ions[].
+    charge: int = Field(le=-1, ge=-1)
+    parameter_set: Literal["12_6", "12_6_4", "hfe", "iod", "cm"] = "12_6"
+
+
 class NonbondedMetalConfig(StrictModel):
     """Li/Merz Amber ion model selection."""
 
@@ -690,6 +714,8 @@ class MetalSiteConfig(StrictModel):
     id: str = Field(min_length=1)
     model: Literal["nonbonded", "bonded_mcpb"]
     ions: list[MetalIonConfig] = Field(min_length=1)
+    # Non-metal ions bound in this site, such as a coordinating halide.
+    coordinating_ions: list[CoordinatingIonConfig] = Field(default_factory=list)
     nonbonded: NonbondedMetalConfig | None = None
     mcpb: McpbConfig | None = None
 

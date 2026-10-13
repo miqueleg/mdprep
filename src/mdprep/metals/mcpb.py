@@ -20,6 +20,7 @@ from mdprep.metals.coordination import ResolvedMetalSite
 from mdprep.metals.nonbonded import (
     AmberIonParameter,
     NonbondedMetalError,
+    ion_atom_type,
     resolve_amberhome,
     write_single_ion_mol2,
 )
@@ -761,7 +762,7 @@ def _write_mcpb_ion_mol2(
 ) -> list[Path]:
     paths: list[Path] = []
     for index, ion in enumerate(site.ions, start=1):
-        atom_type = f"{ion.element}{ion.charge}+"
+        atom_type = ion_atom_type(ion.element, ion.charge)
         parameter = AmberIonParameter(
             element=ion.element,
             charge=ion.charge,

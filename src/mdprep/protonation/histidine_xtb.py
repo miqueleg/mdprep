@@ -301,6 +301,13 @@ def complete_metal_spheres(
             continue
 
         wanted = list(ion_residues)
+        for coordinating in site.coordinating_ions:
+            selector = coordinating.selector.model_dump()
+            selector.pop("atom_name", None)
+            try:
+                wanted.append(resolve_residue_selector(structure, selector))
+            except SelectorError:
+                continue
         if site.mcpb is not None:
             selectors = [bond.coordinator.model_dump() for bond in site.mcpb.bonds]
             selectors += [item.model_dump() for item in site.mcpb.additional_residues]
@@ -444,6 +451,8 @@ def cluster_unpaired_electrons(
     )
     total = 0
     for site in manifest.metals:
+        # Only the metal carries unpaired electrons; a closed-shell halide
+        # bound beside it does not.
         for ion in site.ions:
             try:
                 resolve_residue_selector(
@@ -480,7 +489,9 @@ def _metal_charge_by_residue(
         model_count=1,
     )
     for site in manifest.metals:
-        for ion in site.ions:
+        # Metal centres and the non-metal ions bound with them both carry a
+        # declared formal charge, which is the only place it could come from.
+        for ion in list(site.ions) + list(site.coordinating_ions):
             try:
                 residue = resolve_residue_selector(
                     structure, ion.selector.model_dump(exclude={"atom_name"})

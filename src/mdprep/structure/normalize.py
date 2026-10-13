@@ -382,6 +382,14 @@ def _mcpb_model_residue_keys(
 
     keys: set[int] = set()
     for site in manifest.metals:
+        # A coordinating ion is part of the site under either metal model.
+        for coordinating in site.coordinating_ions:
+            selector = coordinating.selector.model_dump()
+            selector.pop("atom_name", None)
+            try:
+                keys.add(id(resolve_residue_selector(structure, selector)))
+            except SelectorError:
+                continue
         if site.model != "bonded_mcpb" or site.mcpb is None:
             continue
         selectors = [bond.coordinator.model_dump() for bond in site.mcpb.bonds]

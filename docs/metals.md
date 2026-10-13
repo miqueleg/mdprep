@@ -529,3 +529,42 @@ silently choosing one charge model.
   output appropriate to the selected method; the `pyscf` workflow requires
   PySCF and either a completed selected-site QM/MM refinement or a user-supplied
   optimized small-model PDB.
+
+## Ions bound in a metal site
+
+A halide, azide or hydroxide bound to the metal is part of the site, and where
+it is declared depends on whether a force field already knows it.
+
+**Monatomic ions** -- F-, Cl-, Br-, I- -- go in `metals[].coordinating_ions`:
+
+```yaml
+metals:
+  - id: catalytic_fe
+    ions:
+      - selector: {chain: A, resname: FE2, resid: 302, icode: null, atom_name: FE}
+        element: Fe
+        charge: 2
+        multiplicity: 5
+    coordinating_ions:
+      - selector: {chain: A, resname: CL, resid: 303, icode: null, atom_name: CL}
+        element: Cl
+        charge: -1
+```
+
+They belong nowhere else. `ions[]` would have MCPB treat the halide as a metal
+centre, and `ligands[]` would send it to antechamber, whose semi-empirical step
+refuses a single atom. Amber's Li/Merz sets parameterise all four halides
+directly, in the same file as the monovalent cations, so the force-field
+relaxation has what it needs.
+
+**Polyatomic ions** -- azide, for instance -- need none of this. antechamber
+handles them, so configure one under `ligands[]` as a cofactor and name it as
+an `mcpb.bonds` coordinator. That is what alpha-ketoglutarate already does in
+[the BesD example](../examples/16_besd_halogenase_gfn2_mcpb.yaml).
+
+Either way the ion is part of the metal site's QM region, contributes its
+declared formal charge to any xTB cluster it falls into, and is kept by
+structure normalization rather than treated as an unknown heterogen.
+
+Only the metal contributes unpaired electrons; a closed-shell halide beside it
+does not.
