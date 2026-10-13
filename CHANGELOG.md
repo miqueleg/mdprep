@@ -32,6 +32,15 @@
 
 ### Changed
 
+- The refinement stage defaults to `backend: openmm`, a force-field hydrogen
+  relaxation, instead of GFN2 QM/MM. The stage only ever moved hydrogens, and
+  a force field settles them in seconds. `backend: ash` keeps the QM/MM route
+  and is required to relax heavy atoms. `movable_atoms` and
+  `post_refinement_protonation` default to match the hydrogen-only backend.
+- Histidine HID/HIE selection stays with xTB: force-field energies of the two
+  tautomers are not comparable, because they are different residue templates
+  rather than one molecule with a proton moved.
+
 - Dropped the unused `scipy` and `pandas` runtime dependencies.
 - A ligand that coordinates a bonded metal site now defaults to taking its
   charges from that site's MCPB fit instead of AM1-BCC.

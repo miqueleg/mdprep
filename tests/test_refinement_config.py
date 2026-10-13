@@ -21,6 +21,9 @@ def _ligand(*, multiplicity: int | None = 1) -> dict:
 def _enabled_refinement() -> dict:
     return {
         "enabled": True,
+        # These fixtures exercise the ASH QM/MM backend; the default is now
+        # the force-field hydrogen refinement.
+        "backend": "ash",
         "qm_components": {"ligands": ["substrate"]},
         "ash": {
             "python_executable": "/opt/ash/bin/python",
@@ -40,7 +43,9 @@ def test_ligand_refinement_configuration_validates():
     assert manifest.refinement.active_region_cutoff_angstrom == 4.0
     assert manifest.refinement.active_water_cutoff_angstrom == 8.0
     assert manifest.refinement.include_contact_waters is True
-    assert manifest.refinement.movable_atoms == "all_active_region"
+    # The default backend only moves hydrogens, so these default to match.
+    assert manifest.refinement.movable_atoms == "active_region_hydrogens"
+    assert manifest.refinement.post_refinement_protonation == "reuse_initial"
     assert manifest.refinement.ash is not None
     assert manifest.refinement.ash.xtb_executable == "xtb"
     assert manifest.refinement.ash.allow_unusual_link_boundaries is False
@@ -150,6 +155,9 @@ def test_nonbonded_metal_refinement_requires_coordinating_residues_and_spin():
     ]
     data["refinement"] = {
         "enabled": True,
+        # These fixtures exercise the ASH QM/MM backend; the default is now
+        # the force-field hydrogen refinement.
+        "backend": "ash",
         "qm_components": {"metal_sites": ["zinc"]},
         "ash": {"python_executable": "/opt/ash/bin/python"},
     }
@@ -276,6 +284,9 @@ def test_mcpb_qmmm_geometry_source_requires_selected_refined_metal_site():
 
     data["refinement"] = {
         "enabled": True,
+        # These fixtures exercise the ASH QM/MM backend; the default is now
+        # the force-field hydrogen refinement.
+        "backend": "ash",
         "qm_components": {"metal_sites": ["catalytic_zinc"]},
         "ash": {"python_executable": "/opt/ash/bin/python"},
     }

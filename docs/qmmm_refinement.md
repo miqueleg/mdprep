@@ -1,4 +1,40 @@
-# Active-site QM/MM refinement
+# Active-site refinement
+
+The refinement stage moves hydrogens. Every heavy atom is held at its
+experimental position, and the only question being answered is where the
+protons sit.
+
+## Which backend
+
+`refinement.backend: openmm` is the default and answers that question with a
+force field, against the provisional AM1-BCC/GAFF2 system the stage already
+builds. On a 163,469-atom solvated system it relaxed 106,852 hydrogens in 161
+seconds on CPU, holding every heavy atom to 0.0 A. It relaxes **all**
+hydrogens rather than only those in an active region: a force field is cheap
+enough that freezing the rest would put a seam through the hydrogen-bond
+network for no saving.
+
+`refinement.backend: ash` keeps the GFN2 QM/MM route, and is the one to use
+when heavy atoms must relax too -- `movable_atoms: all_active_region`, which
+the force-field backend rejects rather than silently ignoring.
+
+## The charges used here are provisional
+
+Both backends place hydrogens using AM1-BCC charges. That is not what reaches
+the final build. Whatever QMMESP or MCPB calculation the manifest configures
+runs afterwards, and its charges and parameters override the provisional ones;
+`mcpb_resp_pyscf` in particular promotes MCPB's joint-RESP residue mol2. The
+force field positions protons, it does not decide electrostatics.
+
+## Histidine tautomers are not decided here
+
+HID/HIE selection stays with xTB, and deliberately. The xTB comparison works
+because the two tautomers are the same molecule with one proton moved: one
+Hamiltonian, two geometries. In a force field they are different residue
+templates with different atom types, charges and bonded parameters, so their
+energies sit on different arbitrary baselines and the difference between them
+is dominated by a parameter-set offset rather than by which tautomer the site
+prefers. See [protonation.md](protonation.md).
 
 `mdprep` can optionally refine an active-site geometry before the final ligand,
 cofactor, metal, and Amber parameterization stages. The refinement uses ASH as

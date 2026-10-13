@@ -731,6 +731,20 @@ class RefinementQmComponentsConfig(StrictModel):
     )
 
 
+class OpenmmRefinementConfig(StrictModel):
+    """Force-field hydrogen refinement settings.
+
+    There is no active region here: a force field is cheap enough to relax
+    every hydrogen, and freezing those outside an arbitrary radius would put a
+    seam through the hydrogen-bond network for no saving.
+    """
+
+    platform: Literal["auto", "CUDA", "OpenCL", "CPU", "Reference"] = "auto"
+    tolerance_kj_mol_per_nm: float = Field(default=1.0, gt=0)
+    max_iterations: int = Field(default=0, ge=0)  # 0 means until converged
+    nonbonded_cutoff_nanometer: float = Field(default=1.0, gt=0)
+
+
 class AshRefinementConfig(StrictModel):
     """Executable and optimizer settings for the isolated ASH environment."""
 
@@ -760,7 +774,11 @@ class RefinementConfig(StrictModel):
     """Optional pre-parameterization active-site QM/MM refinement."""
 
     enabled: bool = False
-    backend: Literal["ash"] = "ash"
+    # The refinement only ever moves hydrogens. A force field answers that
+    # question in seconds where GFN2 QM/MM takes far longer, so it is the
+    # default; the charges and parameters that reach the final build still
+    # come from whatever QMMESP or MCPB calculation the manifest configures.
+    backend: Literal["openmm", "ash"] = "openmm"
     qm_method: Literal["gfn2_xtb", "gxtb", "mace_polar1"] = "gfn2_xtb"
     embedding: Literal["electrostatic", "mechanical"] = "electrostatic"
     qm_components: RefinementQmComponentsConfig = Field(
@@ -769,12 +787,17 @@ class RefinementConfig(StrictModel):
     active_region_cutoff_angstrom: Literal[4.0] = 4.0
     active_water_cutoff_angstrom: Literal[8.0] = 8.0
     include_contact_waters: Literal[True] = True
+    # The default backend only moves hydrogens, so these default to match it.
+    # Relaxing heavy atoms means backend: ash and setting both explicitly.
     movable_atoms: Literal[
         "all_active_region", "active_region_hydrogens"
-    ] = "all_active_region"
-    post_refinement_protonation: Literal["rerun", "reuse_initial"] = "rerun"
+    ] = "active_region_hydrogens"
+    post_refinement_protonation: Literal["rerun", "reuse_initial"] = "reuse_initial"
     total_qm_multiplicity: int | None = Field(default=None, ge=1)
     ash: AshRefinementConfig | None = None
+    openmm: OpenmmRefinementConfig = Field(
+        default_factory=lambda: OpenmmRefinementConfig()
+    )
     mace_polar1: MacePolar1RefinementConfig | None = None
 
     @model_validator(mode="after")
@@ -1051,8 +1074,17 @@ class ManifestConfig(StrictModel):
                 "refinement requires structure.keep_crystal_waters: true so active-site "
                 "waters are protonated and included"
             )
-        if refinement.ash is None:
-            raise ValueError("refinement.enabled: true requires refinement.ash settings")
+        if refinement.backend == "ash" and refinement.ash is None:
+            raise ValueError(
+                "refinement.backend: ash requires refinement.ash settings"
+            )
+        if refinement.backend == "openmm":
+            if refinement.movable_atoms != "active_region_hydrogens":
+                raise ValueError(
+                    "refinement.backend: openmm only moves hydrogens, so "
+                    "movable_atoms must be active_region_hydrogens. Select "
+                    "backend: ash to relax heavy atoms as well."
+                )
         selected_ligands = refinement.qm_components.ligands
         selected_metals = refinement.qm_components.metal_sites
         if not selected_ligands and not selected_metals:
