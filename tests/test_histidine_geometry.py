@@ -5,11 +5,12 @@ from mdprep.protonation.histidine_geometry import (
     HistidineGeometryError,
     build_tautomer_cluster_model,
     build_tautomer_xyz_atoms,
+    parent_heavy_atom,
     place_histidine_tautomer_hydrogen,
     write_xcontrol_fix_file,
 )
 from mdprep.structure.models import AtomRecord, ResidueId, ResidueRecord
-from mdprep.structure.pdb import read_pdb
+from mdprep.structure.pdb import ATOMIC_NUMBER, read_pdb
 
 
 def histidine():
@@ -250,3 +251,40 @@ def _shift_residue(residue: ResidueRecord, *, resid: int, dx: float) -> ResidueR
         record_names=residue.record_names,
         original_index=residue.original_index,
     )
+
+
+def test_hydrogen_parentage_follows_naming_not_proximity():
+    """A side-chain hydrogen must not be adopted by a closer backbone atom.
+
+    HD2 belongs to CD2 by name. In this structure the ring sits close enough to
+    the backbone carbonyl that HD2 is 0.66 A from O -- nearer than its own
+    carbon -- so deciding parentage by proximity hands it to the backbone,
+    where CA truncation deletes it and leaves an open-shell fragment.
+    """
+
+    residue = histidine()
+    cd2 = next(atom for atom in residue.atoms if atom.name == "CD2")
+    hd2 = next(atom for atom in residue.atoms if atom.name == "HD2")
+    backbone_o = next(atom for atom in residue.atoms if atom.name == "O")
+
+    assert distance(hd2, backbone_o) < distance(hd2, cd2)
+    assert parent_heavy_atom(hd2, residue) is cd2
+
+    amide = next(atom for atom in residue.atoms if atom.name == "H")
+    nitrogen = next(atom for atom in residue.atoms if atom.name == "N")
+    assert parent_heavy_atom(amide, residue) is nitrogen
+
+
+def test_truncated_histidine_fragment_is_closed_shell():
+    """HID and HIE must both be neutral closed-shell C5H8N2 side chains."""
+
+    residue = histidine()
+    for tautomer in ("HID", "HIE"):
+        model = build_tautomer_cluster_model([residue], residue, tautomer=tautomer)
+        counts: dict[str, int] = {}
+        for atom in model.atoms:
+            counts[atom.element.upper()] = counts.get(atom.element.upper(), 0) + 1
+        electrons = sum(
+            ATOMIC_NUMBER[element] * count for element, count in counts.items()
+        )
+        assert electrons % 2 == 0, f"{tautomer} fragment is open shell: {counts}"
