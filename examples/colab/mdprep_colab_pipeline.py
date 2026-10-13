@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import urllib.request
 import zipfile
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -18,7 +19,6 @@ from typing import Any
 
 import numpy as np
 import py3Dmol
-import requests
 import yaml
 from IPython.display import HTML, display
 
@@ -149,15 +149,26 @@ def show_structure(text: str, title: str, *, height: int = 600) -> None:
     display(HTML(view._make_html()))
 
 
+def http_get_text(url: str, *, timeout: int) -> str:
+    """Fetch a URL as text using only the standard library.
+
+    The `requests` package is not a dependency of mdprep, and two plain GETs do
+    not justify adding one. urllib raises HTTPError on a non-2xx status, which
+    is what raise_for_status() was doing here.
+    """
+
+    with urllib.request.urlopen(url, timeout=timeout) as response:
+        return response.read().decode("utf-8")
+
+
 def download_rcsb_pdb(pdb_id: str) -> str:
     code = pdb_id.strip().upper()
     if not re.fullmatch(r"[0-9A-Za-z]{4}", code):
         raise ValueError("PDB_ID must contain exactly four letters/numbers")
-    response = requests.get(f"https://files.rcsb.org/download/{code}.pdb", timeout=90)
-    response.raise_for_status()
-    if not any(atom_record(line) for line in response.text.splitlines()):
+    text = http_get_text(f"https://files.rcsb.org/download/{code}.pdb", timeout=90)
+    if not any(atom_record(line) for line in text.splitlines()):
         raise ValueError(f"RCSB returned no readable PDB atoms for {code}")
-    return response.text
+    return text
 
 
 def print_inventory(text: str) -> None:
@@ -592,12 +603,14 @@ def _rdkit_hydrogenate(
         raise ValueError(f"RDKit could not read {key.label}")
     pdb_heavy = Chem.RemoveHs(pdb, sanitize=False)
     if mode == "ccd":
-        response = requests.get(
-            f"https://files.rcsb.org/ligands/download/{key.resname}_ideal.sdf",
-            timeout=60,
+        template = Chem.MolFromMolBlock(
+            http_get_text(
+                f"https://files.rcsb.org/ligands/download/{key.resname}_ideal.sdf",
+                timeout=60,
+            ),
+            removeHs=False,
+            sanitize=True,
         )
-        response.raise_for_status()
-        template = Chem.MolFromMolBlock(response.text, removeHs=False, sanitize=True)
     else:
         template = Chem.MolFromSmiles(smiles)
     if template is None:
