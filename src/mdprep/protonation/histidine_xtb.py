@@ -84,6 +84,12 @@ def select_histidine_tautomer(
         histidine,
         cutoff_angstrom=config.cutoff_angstrom,
     )
+    # A distance cutoff does not respect a coordination sphere, so a metal
+    # drawn in by proximity arrives without the ligands that define its charge
+    # and spin.
+    cluster_residues, sphere_additions = complete_metal_spheres(
+        structure, cluster_residues, manifest
+    )
     charge_breakdown = cluster_charge_breakdown(cluster_residues, manifest, planned_states)
     cluster_charge = sum(int(item["charge"]) for item in charge_breakdown)
     unpaired = cluster_unpaired_electrons(cluster_residues, manifest)
@@ -256,6 +262,67 @@ def build_histidine_cluster(
                 cluster.append(residue)
                 break
     return cluster
+
+
+def complete_metal_spheres(
+    structure: PdbStructure,
+    cluster: list[ResidueRecord],
+    manifest: ManifestConfig,
+) -> tuple[list[ResidueRecord], list[str]]:
+    """Add the declared coordination sphere of any metal the cluster contains.
+
+    A distance cutoff measured from a histidine does not respect a metal's
+    coordination sphere. On BesD the cluster around His134 picked up the iron
+    but not the chloride bonded to it, leaving a fragment whose charge and
+    electron count were artefacts of where the cut happened to fall -- xTB
+    rejected it as an inconsistent number of unpaired electrons.
+
+    A metal is only meaningful together with what it is bonded to, so whenever
+    one is drawn in, the residues the manifest declares as its coordinators
+    come with it.
+    """
+
+    present = {id(residue) for residue in cluster}
+    extended = list(cluster)
+    added: list[str] = []
+
+    for site in manifest.metals:
+        ion_residues = []
+        for ion in site.ions:
+            try:
+                ion_residues.append(
+                    resolve_residue_selector(
+                        structure, ion.selector.model_dump(exclude={"atom_name"})
+                    )
+                )
+            except SelectorError:
+                continue
+        if not any(id(residue) in present for residue in ion_residues):
+            continue
+
+        wanted = list(ion_residues)
+        if site.mcpb is not None:
+            selectors = [bond.coordinator.model_dump() for bond in site.mcpb.bonds]
+            selectors += [item.model_dump() for item in site.mcpb.additional_residues]
+            for selector in selectors:
+                selector.pop("atom_name", None)
+                try:
+                    wanted.append(resolve_residue_selector(structure, selector))
+                except SelectorError:
+                    continue
+        for residue in wanted:
+            if id(residue) in present:
+                continue
+            present.add(id(residue))
+            extended.append(residue)
+            added.append(residue.id.display())
+
+    if not added:
+        return cluster, []
+    # Keep structure order so the cluster is reproducible.
+    order = {id(residue): index for index, residue in enumerate(structure.residues)}
+    extended.sort(key=lambda residue: order.get(id(residue), len(order)))
+    return extended, added
 
 
 def estimate_cluster_charge(

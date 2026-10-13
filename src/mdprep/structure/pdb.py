@@ -280,7 +280,9 @@ STANDARD_PROTEIN_RESNAMES = {
     "VAL",
 }
 
-PERIODIC_ELEMENTS = {
+# In atomic-number order, which is what makes ATOMIC_NUMBER derivable
+# rather than a second copy of the same data to keep in step.
+PERIODIC_ELEMENTS_IN_ORDER = (
     "H",
     "HE",
     "LI",
@@ -399,6 +401,13 @@ PERIODIC_ELEMENTS = {
     "LV",
     "TS",
     "OG",
+)
+
+PERIODIC_ELEMENTS = frozenset(PERIODIC_ELEMENTS_IN_ORDER)
+
+ATOMIC_NUMBER = {
+    symbol: number
+    for number, symbol in enumerate(PERIODIC_ELEMENTS_IN_ORDER, start=1)
 }
 
 

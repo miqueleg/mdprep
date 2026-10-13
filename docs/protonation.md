@@ -52,6 +52,28 @@ written to `01_protonation_assigned.pdb` or final Amber files. Set
 `protonation.histidine.xtb.add_missing_water_hydrogens: false` to preserve the
 strict requirement for pre-hydrogenated cluster waters.
 
+## Metal sites in a histidine cluster
+
+The xTB cluster is cut at a fixed distance from the histidine, which does not
+respect a metal's coordination sphere. On BesD the cluster around His134 picked
+up the iron but not the chloride bonded to it, leaving a fragment whose charge
+and electron count were artefacts of where the cut happened to fall; xTB
+rejected it as an inconsistent number of unpaired electrons.
+
+A metal is only meaningful together with what it is bonded to, so whenever one
+is drawn into a cluster, the residues declared as its coordinators in
+`metals[].mcpb.bonds` and `additional_residues` come with it.
+
+The cluster is also not closed shell when it contains a paramagnetic metal.
+The unpaired-electron count passed to xTB comes from the multiplicities the
+manifest declares, so high-spin Fe(II) contributes four. A metal that appears
+in a cluster without a declared multiplicity fails clearly: a spin state
+cannot be inferred from an element.
+
+Histidines that coordinate the metal are assigned from their coordination
+bonds and never reach xTB at all. It is the ones *near* a metal that this
+affects.
+
 ## xTB thread usage
 
 Left to its own defaults, xTB opens one OpenMP thread per hardware thread for

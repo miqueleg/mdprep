@@ -25,7 +25,7 @@ from mdprep.structure.pdb import read_pdb
 
 
 DATA = Path("tests/data")
-SIX_NIE = Path("/tmp/6NIE.pdb")
+SIX_NIE = Path("examples/tutorials/besd_6nie/6NIE.pdb")
 
 
 def test_protonation_variants_share_their_parent_heavy_atoms():

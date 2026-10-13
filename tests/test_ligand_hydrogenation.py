@@ -122,7 +122,7 @@ def test_hydrogens_are_recognised_by_element_and_by_name():
 # --------------------------------------------------------------------------
 
 
-SIX_NIE = Path("/tmp/6NIE.pdb")
+SIX_NIE = Path("examples/tutorials/besd_6nie/6NIE.pdb")
 
 
 @pytest.mark.skipif(not SIX_NIE.exists(), reason="6NIE is not available locally")

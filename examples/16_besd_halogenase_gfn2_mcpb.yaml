@@ -19,7 +19,7 @@
 # cheaper than DFT and is what makes this tractable as a teaching example.
 project:
   name: besd_6nie
-  input_structure: data/6NIE.pdb
+  input_structure: tutorials/besd_6nie/6NIE.pdb
   output_dir: prepared/besd
 
 structure:

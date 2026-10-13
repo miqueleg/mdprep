@@ -23,7 +23,7 @@ from mdprep.structure.inspect import inspect_pdb_structure
 EXAMPLE = Path("examples/16_besd_halogenase_gfn2_mcpb.yaml")
 # 6NIE itself is a 1.4 MB four-chain deposition and is not vendored; the tests
 # that need coordinates skip without it.
-STRUCTURE = Path("/tmp/6NIE.pdb")
+STRUCTURE = Path("examples/tutorials/besd_6nie/6NIE.pdb")
 
 needs_structure = pytest.mark.skipif(
     not STRUCTURE.exists(),
@@ -237,3 +237,82 @@ def test_the_toolchain_for_this_run_includes_xtb_propka_and_pyscf():
     assert "propka" in packages          # propka_xtb_his
     assert "xtb" in packages             # histidine tautomers and the Hessian
     assert "pyscf" in packages           # bonded MCPB large-model ESP
+
+
+# --------------------------------------------------------------------------
+# A distance cutoff does not respect a coordination sphere
+# --------------------------------------------------------------------------
+
+
+def histidine_cluster(resid: int):
+    """The xTB cluster around one chain-A histidine, before and after."""
+    from mdprep.config.loader import load_manifest
+    from mdprep.protonation.histidine_xtb import (
+        build_histidine_cluster,
+        complete_metal_spheres,
+    )
+    from mdprep.structure.classify import is_histidine
+    from mdprep.structure.pdb import read_pdb
+
+    manifest = load_manifest(EXAMPLE, resolve_paths=True)
+    structure = read_pdb(STRUCTURE)
+    histidine = next(
+        r
+        for r in structure.residues
+        if is_histidine(r) and r.id.chain_id == "A" and r.id.resid == resid
+    )
+    cutoff = manifest.protonation.histidine.xtb.cutoff_angstrom
+    base = build_histidine_cluster(structure, histidine, cutoff_angstrom=cutoff)
+    full, added = complete_metal_spheres(structure, base, manifest)
+    return base, full, added
+
+
+def test_the_cutoff_alone_cuts_through_the_iron_coordination_sphere():
+    """His134 is 5 A from the iron but further from the chloride bonded to it.
+
+    The resulting fragment has an iron without one of its ligands, so its
+    charge and electron count are artefacts of where the cut fell. This is the
+    state the fix exists to repair, so it is asserted rather than assumed.
+    """
+    base, _, _ = histidine_cluster(134)
+
+    names = {residue.id.resname for residue in base}
+    assert "FE2" in names
+    assert "CL" not in names
+
+
+def test_completing_the_sphere_brings_the_bonded_chloride_in():
+    _, full, added = histidine_cluster(134)
+
+    assert "A:CL303" in added
+    assert "CL" in {residue.id.resname for residue in full}
+
+
+def test_a_cluster_already_holding_the_whole_sphere_is_left_alone():
+    """His204 coordinates the iron and its cluster already has everything."""
+    base, full, added = histidine_cluster(204)
+
+    assert added == []
+    assert len(full) == len(base)
+
+
+def test_a_cluster_with_no_metal_is_untouched():
+    base, full, added = histidine_cluster(42)
+
+    assert "FE2" not in {residue.id.resname for residue in base}
+    assert added == []
+    assert full is base
+
+
+def test_completion_keeps_the_cluster_in_structure_order():
+    """A reproducible cluster is a reproducible calculation."""
+    from mdprep.structure.pdb import read_pdb
+
+    order = {
+        (r.id.chain_id, r.id.resid): i
+        for i, r in enumerate(read_pdb(STRUCTURE).residues)
+    }
+    _, full, _ = histidine_cluster(134)
+
+    positions = [order[(r.id.chain_id, r.id.resid)] for r in full]
+    assert positions == sorted(positions)
