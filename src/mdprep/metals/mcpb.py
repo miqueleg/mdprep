@@ -16,7 +16,7 @@ from mdprep.ambertools.mol2 import Mol2Error, read_mol2
 from mdprep.config.models import ManifestConfig
 from mdprep.external.discovery import which_executable
 from mdprep.external.runner import CommandResult, run_command
-from mdprep.metals.coordination import ResolvedMetalSite
+from mdprep.metals.coordination import ResolvedMetalIon, ResolvedMetalSite
 from mdprep.metals.nonbonded import (
     AmberIonParameter,
     NonbondedMetalError,
@@ -196,6 +196,9 @@ def run_mcpb_site(
         work_dir=work,
     )
     ion_mol2 = _write_mcpb_ion_mol2(site, numbering=numbering, work_dir=work)
+    ligand_mol2 = ligand_mol2 + _write_mcpb_coordinating_ion_mol2(
+        site, numbering=numbering, work_dir=work
+    )
     input_path = work / "mcpb.in"
     input_path.write_text(
         build_mcpb_input(
@@ -825,6 +828,100 @@ def _stage_ligand_parameters(
     return mol2_paths, frcmod_paths, gaff
 
 
+def _write_mcpb_coordinating_ion_mol2(
+    site: ResolvedMetalSite,
+    *,
+    numbering: McpbNumberingMap,
+    work_dir: Path,
+) -> list[Path]:
+    """One-atom mol2 files for the site's coordinating ions.
+
+    MCPB.py asks for a mol2 for every non-standard residue bonded to the
+    metal, including an ion Amber already parameterises -- it needs the atom
+    type and the charge, not new parameters. antechamber cannot supply one,
+    because its semi-empirical step refuses a single atom, so it is written
+    directly with the ion atom type tleap will use for the same residue.
+
+    The coordinates come from the site's own bond coordinators, so the mol2
+    describes the atom actually in the structure rather than a copy of the
+    selector.
+    """
+
+    assert site.config.mcpb is not None
+    coordinator_by_key = {
+        (
+            bond.coordinator_residue.id.chain_id,
+            bond.coordinator_residue.id.resid,
+            bond.coordinator_residue.id.icode,
+        ): bond.coordinator_residue
+        for bond in site.bonds
+    }
+    paths: list[Path] = []
+    seen_resnames: set[str] = set()
+    for ion_config in site.config.coordinating_ions:
+        selector = ion_config.selector
+        key = (selector.chain, selector.resid, selector.icode)
+        residue = coordinator_by_key.get(key)
+        if residue is None:
+            raise McpbWorkflowError(
+                f"Coordinating ion {selector.resname} {selector.resid} is not "
+                f"bonded to any ion of metal site {site.config.id}. Add it to "
+                "mcpb.bonds, or drop it from coordinating_ions if it is not "
+                "part of the site."
+            )
+        if len(residue.atoms) != 1:
+            raise McpbWorkflowError(
+                f"A coordinating ion must be a single atom; {residue.id.display()} "
+                f"has {len(residue.atoms)}."
+            )
+        resname = residue.id.resname
+        if resname in seen_resnames:
+            continue
+        seen_resnames.add(resname)
+
+        numbered_resid = numbering.mcpb_resid_by_original_key[key]
+        atom = residue.atoms[0]
+        numbered_atom = replace(
+            atom,
+            serial=numbering.mcpb_atom_id_by_original_identity[atom.atom_identity],
+            chain_id="A",
+            resid=numbered_resid,
+            icode=None,
+        )
+        numbered_residue = ResidueRecord(
+            id=ResidueId("A", resname, numbered_resid),
+            atoms=[numbered_atom],
+            record_names={numbered_atom.record_name},
+            original_index=numbered_resid - 1,
+        )
+        parameter = AmberIonParameter(
+            element=ion_config.element,
+            charge=ion_config.charge,
+            atom_type=ion_atom_type(ion_config.element, ion_config.charge),
+            mass=0.0,
+            rmin_over_2_angstrom=0.0,
+            epsilon_kcal_mol=0.0,
+            parameter_set="mcpb_input",
+            water_model="",
+            frcmod_name="",
+            frcmod_path=Path("."),
+        )
+        path = work_dir / f"{resname}.mol2"
+        write_single_ion_mol2(
+            ResolvedMetalIon(
+                site_id=site.config.id,
+                element=ion_config.element,
+                charge=ion_config.charge,
+                atom=numbered_atom,
+                residue=numbered_residue,
+            ),
+            parameter,
+            path,
+        )
+        paths.append(path)
+    return paths
+
+
 def _stage_qm_artifacts(config: object, *, group_name: str, work_dir: Path) -> None:
     artifacts = config.artifacts  # type: ignore[attr-defined]
     assert artifacts is not None
@@ -880,6 +977,15 @@ def _validate_nonstandard_site_residues(
         (ligand.selector.chain, ligand.selector.resid, ligand.selector.icode)
         for ligand in manifest.ligands
     }
+    # A coordinating ion is declared on the site, not under ligands, because
+    # it is neither: an ion entry is a metal and a halide is not, while
+    # antechamber refuses a single atom so it cannot be a GAFF cofactor.
+    # Amber parameterises it directly from its ion library, so it is already
+    # as parameterized as it needs to be.
+    ligand_keys.update(
+        (ion.selector.chain, ion.selector.resid, ion.selector.icode)
+        for ion in site.config.coordinating_ions
+    )
     site_residues = {
         (
             bond.coordinator_residue.id.chain_id,
