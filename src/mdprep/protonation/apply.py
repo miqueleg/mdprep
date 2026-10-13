@@ -296,6 +296,13 @@ def apply_protonation_stage(
                 xtb_temporary_hydrogenation = add_temporary_protein_hydrogens(
                     structure,
                     ph=manifest.protonation.ph,
+                    # The states PropKa and the manual overrides settled on.
+                    # Without these the hydrogens come from a pKa table that is
+                    # not the one this run used, and the protons stop matching
+                    # the charges every later stage declares.
+                    assigned_states=_assigned_states_by_residue_key(
+                        structure, final_by_residue
+                    ),
                     random_seed=xtb_config.temporary_hydrogen_random_seed,
                     work_dir=(
                         _protonation_work_dir(output_protonation_pdb_path)
@@ -640,6 +647,21 @@ def _initial_xtb_environment_states(
                 "imidazole hydrogens in the input; using HIE as a deterministic temporary environment state until "
                 "its own HID/HIE comparison runs."
             )
+    return states
+
+
+def _assigned_states_by_residue_key(
+    structure: PdbStructure,
+    final_by_residue: dict[int, str],
+) -> dict[tuple[str, int, str | None], str]:
+    """Re-key the decided states by chain/number/icode, which OpenMM can match."""
+
+    states: dict[tuple[str, int, str | None], str] = {}
+    for residue in structure.residues:
+        state = final_by_residue.get(id(residue))
+        if state is None:
+            continue
+        states[(residue.id.chain_id or "", residue.id.resid, residue.id.icode)] = state
     return states
 
 

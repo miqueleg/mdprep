@@ -294,7 +294,7 @@ def test_dehydrogenated_histidine_cluster_uses_temporary_pdbfixer_environment(
     )
     hydrogenated = read_pdb(temporary_path)
 
-    def fake_hydrogenation(structure, *, ph, random_seed, work_dir):
+    def fake_hydrogenation(structure, *, ph, random_seed, work_dir, **kwargs):
         assert random_seed == 20260722
         return TemporaryHydrogenationResult(
             backend="pdbfixer",
