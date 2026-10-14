@@ -139,6 +139,11 @@ def run_xtb_esp(
 
     import os
 
+    if not executable:
+        raise XtbEspError(
+            "No xTB executable was given for the GFN2 ESP; expected a name on "
+            "PATH or a path to a binary."
+        )
     binary = which_executable(executable)
     if binary is None:
         raise XtbEspError(f"xTB executable not found: {executable}")

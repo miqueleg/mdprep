@@ -23,7 +23,7 @@ from mdprep.md.roe_brooks import RoeBrooksError, run_roe_brooks
 from mdprep.structure.inspect import InspectionSummary
 from mdprep.structure.normalize import StructureNormalizationError
 from mdprep.structure.pdb import PdbParseError, VALID_ALTLOC_POLICIES
-from mdprep.workflows.doctor import ash_note, run_doctor
+from mdprep.workflows.doctor import ash_note, gxtb_note, run_doctor
 from mdprep.workflows.init import generate_starter_manifest
 from mdprep.workflows.wizard import format_question, run_wizard
 from mdprep.workflows.inspect import inspect_structure
@@ -559,11 +559,11 @@ def doctor_command(
         scope = str(manifest)
 
     report = run_doctor(data, scope=scope)
-    note = ash_note(data)
+    notes = [note for note in (gxtb_note(data), ash_note(data)) if note is not None]
 
     if json_output:
         payload = report.to_dict()
-        payload["ash_note"] = note
+        payload["notes"] = notes
         console.print_json(json.dumps(payload))
         raise typer.Exit(0 if report.ok else 1)
 
@@ -589,7 +589,7 @@ def doctor_command(
             "Or create the whole environment: "
             "[bold]conda env create -f environment.yml[/bold]"
         )
-    if note is not None:
+    for note in notes:
         console.print(f"[yellow]{escape(note)}[/yellow]")
     raise typer.Exit(0 if report.ok else 1)
 

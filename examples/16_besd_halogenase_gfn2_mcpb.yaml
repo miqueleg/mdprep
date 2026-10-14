@@ -104,19 +104,23 @@ metals:
       large_model_spin: 5
       pyscf:
         geometry_source: qmmm_refinement
-        # GFN2 describes transition-metal coordination poorly: it gives
-        # Fe-O5 of the bidentate aKG a negative force constant, which MCPB.py
-        # clamps to zero and mdprep then refuses. Switching this site to
-        # xtb.model: gxtb fixes it at a similar cost (8 s against 2 s) but
-        # needs a separate g-xTB binary, so the example stops with a clear
-        # error instead of depending on a download. See docs/metals.md.
+        # A g-xTB Hessian, which is the default for a metal site. GFN2
+        # describes transition-metal coordination poorly: on this iron it
+        # gives Fe-O5 of the bidentate aKG a negative force constant, which
+        # MCPB.py clamps to zero and mdprep then refuses. g-xTB gets all five
+        # bonds right for about four times GFN2's cost (8 s against 2 s).
+        #
+        # g-xTB is a separate build from the GFN-only xtb conda installs. Get
+        # it from https://github.com/grimme-lab/g-xtb/releases and either set
+        # MDPREP_GXTB_EXECUTABLE or give xtb.executable its path below.
+        # `mdprep doctor <this file>` says whether one was found.
         hessian_backend: xtb
-        # GFN2 for the large-model ESP as well as the Hessian. On this site
-        # that is ~60 s against tens of minutes for B3LYP/6-31G*. The charges
-        # it yields are fitted to a semi-empirical valence density, not an
-        # HF/6-31G* one; use esp_backend: pyscf when that matters.
+        xtb: {num_threads: 8}
+        # GFN2 is fine for the large-model ESP, where it is ~60 s against tens
+        # of minutes for B3LYP/6-31G*. Those charges are fitted to a
+        # semi-empirical valence density, not an HF/6-31G* one; use
+        # esp_backend: pyscf when that matters.
         esp_backend: xtb
-        xtb: {model: gfn2, executable: xtb, num_threads: 1}
         method: B3LYP
         basis: "6-31G*"
 

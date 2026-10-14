@@ -154,7 +154,7 @@ def run_gxtb_hessian(
             "numerical Hessians; set gxtb.num_threads: 1."
         )
 
-    executable = _resolve_executable(config.executable)
+    executable = _resolve_executable(config.executable, model=config.model)
     executable_sha256 = _sha256(executable)
     if (
         config.expected_executable_sha256 is not None
@@ -327,14 +327,51 @@ def parse_gxtb_hessian(path: str | Path, *, atom_count: int) -> np.ndarray:
     return matrix
 
 
-def _resolve_executable(configured: str) -> Path:
-    candidate = Path(configured).expanduser()
-    if candidate.is_file():
-        return candidate.resolve()
-    found = which_executable(configured)
-    if found is None:
+# Where to look for a g-xTB build when the manifest does not name one. The
+# conda xtb package is GFN-only, so an unqualified "xtb" on PATH is usually
+# the wrong binary and the run would fail later with a less obvious message.
+GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE = "MDPREP_GXTB_EXECUTABLE"
+
+
+def gxtb_executable_candidates(configured: str | None, model: str) -> list[str]:
+    """Where to look for the binary, in order, for this Hessian model."""
+
+    if configured is not None:
+        return [configured]
+    if model != "gxtb":
+        return ["xtb"]
+    from os import environ
+
+    candidates: list[str] = []
+    from_environment = environ.get(GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE)
+    if from_environment:
+        candidates.append(from_environment)
+    # A g-xTB build is often installed beside the GFN one rather than on PATH.
+    candidates.append("g-xtb")
+    candidates.append("xtb")
+    return candidates
+
+
+def _resolve_executable(configured: str | None, *, model: str = "gxtb") -> Path:
+    candidates = gxtb_executable_candidates(configured, model)
+    for candidate in candidates:
+        path = Path(candidate).expanduser()
+        if path.is_file():
+            return path.resolve()
+        found = which_executable(candidate)
+        if found is not None:
+            return Path(found).resolve()
+    if configured is not None:
         raise GxtbHessianError(f"g-xTB executable not found: {configured}")
-    return Path(found).resolve()
+    raise GxtbHessianError(
+        "No g-xTB executable found. g-xTB is a separate build from the xtb "
+        "that conda installs, which is GFN-only. Download it from "
+        "https://github.com/grimme-lab/g-xtb/releases, then either set "
+        f"{GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE} to it or give "
+        "mcpb.pyscf.xtb.executable its path. To use GFN2 instead, set "
+        "mcpb.pyscf.xtb.model: gfn2 -- but check the force constants, because "
+        "GFN2 describes transition-metal coordination poorly."
+    )
 
 
 def _remove_stale_gxtb_outputs(work_dir: Path) -> None:

@@ -93,3 +93,24 @@ def test_a_truncated_esp_is_refused(tmp_path: Path):
 
     with pytest.raises(XtbEspError, match="one finite .* row per"):
         parse_esp(path, grid)
+
+
+def test_the_esp_refuses_an_unset_executable():
+    """The xtb block's executable is for the Hessian, where it may be left
+    unset so a g-xTB build can be discovered. The ESP must not pass that None
+    through to shutil.which, which fails with an unreadable TypeError."""
+
+    import numpy as np
+
+    from mdprep.qm.xtb_esp import run_xtb_esp
+
+    with pytest.raises(XtbEspError, match="No xTB executable"):
+        run_xtb_esp(
+            elements=["O"],
+            coordinates_angstrom=np.zeros((1, 3)),
+            grid_coordinates_angstrom=np.ones((1, 3)),
+            charge=0,
+            spin=0,
+            work_dir="/tmp/mdprep-esp-no-executable",
+            executable=None,  # type: ignore[arg-type]
+        )

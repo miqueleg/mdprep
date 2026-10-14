@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import shutil
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -158,6 +159,87 @@ def run_doctor(manifest: Mapping[str, Any] | None = None, *, scope: str = "") ->
         findings=tuple(findings),
         scope=scope or ("this manifest" if manifest is not None else "every mdprep feature"),
     )
+
+
+def gxtb_note(manifest: Mapping[str, Any] | None) -> str | None:
+    """A bonded metal site defaults to a g-xTB Hessian, which needs its own
+    build. The xtb conda installs is GFN-only, so finding `xtb` on PATH is not
+    enough to say this will work.
+    """
+
+    if manifest is None:
+        return None
+    from mdprep.metals.gxtb_hessian import (
+        GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE,
+        gxtb_executable_candidates,
+    )
+
+    wants_gxtb = False
+    configured: str | None = None
+    for site in manifest.get("metals") or []:
+        if site.get("model") != "bonded_mcpb":
+            continue
+        pyscf = (site.get("mcpb") or {}).get("pyscf") or {}
+        backend = pyscf.get("hessian_backend", "xtb")
+        if backend == "gxtb":
+            settings = pyscf.get("gxtb") or {}
+            model = "gxtb"
+        elif backend == "xtb":
+            settings = pyscf.get("xtb") or {}
+            model = settings.get("model", "gxtb")
+        else:
+            continue
+        if model == "gxtb":
+            wants_gxtb = True
+            configured = configured or settings.get("executable")
+    if not wants_gxtb:
+        return None
+
+    found: list[str] = []
+    for candidate in gxtb_executable_candidates(configured, "gxtb"):
+        path = Path(candidate).expanduser()
+        resolved = str(path) if path.is_file() else shutil.which(candidate)
+        if resolved is None:
+            continue
+        found.append(resolved)
+        if supports_gxtb(resolved):
+            return None
+    remedy = (
+        "g-xTB is a separate build from the GFN-only xtb conda installs. Get "
+        "it from https://github.com/grimme-lab/g-xtb/releases and set "
+        f"{GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE} to it, or set "
+        "mcpb.pyscf.xtb.model: gfn2 -- though GFN2 describes transition-metal "
+        "coordination poorly and may give a force constant mdprep refuses."
+    )
+    if found:
+        return (
+            "A bonded metal site uses a g-xTB Hessian. "
+            f"{found[0]} exists but reports no --gxtb support. " + remedy
+        )
+    return f"A bonded metal site uses a g-xTB Hessian, and none was found. {remedy}"
+
+
+def supports_gxtb(executable: str) -> bool:
+    """Whether this binary actually offers --gxtb.
+
+    Being named xtb says nothing: the conda package is GFN-only and is what
+    an unqualified `xtb` on PATH almost always is, so the name alone would
+    make this check pass everywhere and help nobody.
+    """
+
+    import subprocess
+
+    try:
+        result = subprocess.run(
+            [executable, "--help"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return "--gxtb" in (result.stdout + result.stderr)
 
 
 def ash_note(manifest: Mapping[str, Any] | None) -> str | None:

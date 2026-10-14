@@ -399,8 +399,13 @@ class McpbBondConfig(StrictModel):
 class McpbXtbHessianConfig(StrictModel):
     """Pinned xTB settings for a fixed-geometry MCPB small-model Hessian."""
 
-    model: Literal["gfn2", "gxtb"] = "gfn2"
-    executable: str = Field(default="xtb", min_length=1)
+    # g-xTB rather than GFN2, because GFN2 is parameterised for main-group
+    # chemistry and describes transition-metal coordination badly: on the BesD
+    # iron site it gives one Fe-O bond a negative force constant. g-xTB gets
+    # all five right at the same order of cost. It needs its own build, which
+    # MDPREP_GXTB_EXECUTABLE can point at once; see docs/metals.md.
+    model: Literal["gfn2", "gxtb"] = "gxtb"
+    executable: str | None = Field(default=None, min_length=1)
     release_tag: str | None = Field(default=None, min_length=1)
     expected_executable_sha256: str | None = Field(
         default=None,
@@ -473,7 +478,10 @@ class McpbPySCFConfig(StrictModel):
         "user_optimized",
         "test_unoptimized",
     ] | None = None
-    hessian_backend: Literal["pyscf", "xtb", "gxtb", "mace_polar1"] = "pyscf"
+    # A tight-binding Hessian by default. The DFT alternative costs minutes to
+    # hours on a site this size for a quantity the Seminario fit then reduces
+    # to a handful of force constants.
+    hessian_backend: Literal["pyscf", "xtb", "gxtb", "mace_polar1"] = "xtb"
     # The large model exists to be fitted to an ESP, and that fit sets the
     # charges the finished system carries. "pyscf" does it at DFT cost;
     # "xtb" does it with the GFN2 density in seconds, which is the difference
@@ -593,9 +601,9 @@ class McpbPySCFConfig(StrictModel):
                     "refinement stage"
                 )
         if self.hessian_backend == "xtb" and self.xtb is None:
-            raise ValueError(
-                "mcpb.pyscf hessian_backend: xtb requires explicit xtb settings"
-            )
+            # Filled in rather than demanded: the backend is the default, so
+            # requiring a block to restate the defaults would be noise.
+            object.__setattr__(self, "xtb", McpbXtbHessianConfig())
         if self.hessian_backend != "xtb" and self.xtb is not None:
             raise ValueError(
                 "mcpb.pyscf.xtb settings may only be supplied when hessian_backend: xtb"

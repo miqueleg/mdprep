@@ -952,7 +952,13 @@ def _run_large_model_with_xtb(
             charge=charge,
             spin=multiplicity - 1,
             work_dir=work_dir,
-            executable=xtb_config.executable if xtb_config is not None else "xtb",
+            # The ESP runs GFN2, which the ordinary xtb provides. The xtb
+            # block's executable is there for the Hessian, where it may point
+            # at a g-xTB build; that build runs GFN2 too, so honour it when
+            # set and fall back to plain xtb when it is not.
+            executable=(
+                (xtb_config.executable if xtb_config is not None else None) or "xtb"
+            ),
             num_threads=xtb_config.num_threads if xtb_config is not None else 1,
             max_cycle=config.max_cycle,
             mm_charges=embedding.charge_array,

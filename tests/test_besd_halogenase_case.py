@@ -62,12 +62,21 @@ def test_the_model_charge_matches_the_declared_fragment():
     assert mcpb["small_model_spin"] == mcpb["large_model_spin"] == 5
 
 
-def test_the_hessian_and_the_refinement_both_use_gfn2():
+def test_the_metal_hessian_uses_gxtb_and_the_esp_uses_gfn2():
+    """GFN2 gives this iron's Fe-O5 bond a negative force constant, so the
+    Hessian takes the default g-xTB. The ESP has no such problem and stays on
+    GFN2, which is where the cost would otherwise be."""
+
+    from mdprep.config.models import McpbXtbHessianConfig
+
     example = load_example()
     pyscf = example["metals"][0]["mcpb"]["pyscf"]
 
     assert pyscf["hessian_backend"] == "xtb"
-    assert pyscf["xtb"]["model"] == "gfn2"
+    # The example leaves the model unset, so it must be the default.
+    assert "model" not in pyscf["xtb"]
+    assert McpbXtbHessianConfig().model == "gxtb"
+    assert pyscf["esp_backend"] == "xtb"
     assert pyscf["geometry_source"] == "qmmm_refinement"
     assert example["refinement"]["qm_method"] == "gfn2_xtb"
 

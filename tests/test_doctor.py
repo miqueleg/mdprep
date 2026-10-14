@@ -142,3 +142,65 @@ def test_the_default_refinement_backend_raises_no_ash_note():
     assert ash_note(_manifest(refinement={"enabled": True})) is None
     assert ash_note(_manifest(refinement={"enabled": False})) is None
     assert ash_note(None) is None
+
+
+def _metal_manifest(**pyscf) -> dict:
+    settings = {"geometry_source": "qmmm_refinement", "method": "B3LYP", "basis": "6-31G*"}
+    settings.update(pyscf)
+    return _manifest(
+        metals=[{"id": "site", "model": "bonded_mcpb", "mcpb": {"pyscf": settings}}]
+    )
+
+
+def test_a_metal_site_without_a_gxtb_build_is_reported(monkeypatch):
+    """A g-xTB Hessian is the default for a metal site, and the binary is a
+    separate download, so this is the failure users will hit most."""
+
+    import mdprep.workflows.doctor as doctor
+    from mdprep.metals.gxtb_hessian import GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE
+
+    monkeypatch.delenv(GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE, raising=False)
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+
+    note = doctor.gxtb_note(_metal_manifest())
+
+    assert note is not None
+    assert "github.com/grimme-lab/g-xtb" in note
+    assert "model: gfn2" in note
+
+
+def test_an_xtb_without_gxtb_support_is_not_mistaken_for_one(monkeypatch):
+    """conda's xtb is GFN-only. Accepting it on the strength of its name
+    would make this check pass everywhere and help nobody."""
+
+    import mdprep.workflows.doctor as doctor
+    from mdprep.metals.gxtb_hessian import GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE
+
+    monkeypatch.delenv(GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE, raising=False)
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/conda/bin/xtb")
+    monkeypatch.setattr(doctor, "supports_gxtb", lambda executable: False)
+
+    note = doctor.gxtb_note(_metal_manifest())
+
+    assert note is not None
+    assert "/conda/bin/xtb" in note
+    assert "no --gxtb support" in note
+
+
+def test_a_real_gxtb_build_raises_no_note(monkeypatch):
+    import mdprep.workflows.doctor as doctor
+
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/opt/g-xtb/bin/xtb")
+    monkeypatch.setattr(doctor, "supports_gxtb", lambda executable: True)
+
+    assert doctor.gxtb_note(_metal_manifest()) is None
+
+
+def test_a_site_that_asked_for_gfn2_or_dft_raises_no_gxtb_note(monkeypatch):
+    import mdprep.workflows.doctor as doctor
+
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: None)
+
+    assert doctor.gxtb_note(_metal_manifest(xtb={"model": "gfn2"})) is None
+    assert doctor.gxtb_note(_metal_manifest(hessian_backend="pyscf")) is None
+    assert doctor.gxtb_note(_manifest()) is None
