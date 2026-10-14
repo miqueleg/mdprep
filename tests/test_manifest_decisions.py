@@ -99,13 +99,32 @@ def test_ligand_net_charge_has_no_default_and_is_blocking():
 
 
 def test_metal_oxidation_state_has_no_default_and_is_blocking():
+    """A charge cannot be read off a structure, so it is always asked."""
+
+    plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
+
+    charge = plan.by_id("metal.z_zn_500_site.charge")
+
+    assert charge.default is None and charge.requires_user_input
+
+
+def test_a_coordinated_metal_is_proposed_as_a_bonded_site():
+    """A nonbonded model lets a coordination shell come apart in dynamics, so
+    an ion with donors in range is proposed as bonded. The question is still
+    asked -- this is a modelling choice, not something to settle silently."""
+
     plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
 
     model = plan.by_id("metal.z_zn_500_site.model")
-    charge = plan.by_id("metal.z_zn_500_site.charge")
 
-    assert model.default is None and model.requires_user_input
-    assert charge.default is None and charge.requires_user_input
+    assert model.default == "bonded_mcpb"
+    # The reason is shown, with the evidence it rests on.
+    assert "donor atom(s) were found" in model.why
+    # Accepting it is not a silent commitment: the three questions a bonded
+    # site then needs cannot be defaulted.
+    blocking = {decision.id for decision in plan.blocking()}
+    assert "metal.z_zn_500_site.confirm_donors" in blocking
+    assert "metal.z_zn_500_site.charge" in blocking
 
 
 def test_unknown_heterogen_removal_is_blocking():

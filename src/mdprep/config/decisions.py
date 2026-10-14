@@ -1103,24 +1103,39 @@ def _metal_decisions(
             section="metals",
             question=f"How should the metal site at {display} be modelled?",
             kind="choice",
-            default=None,
-            requires_user_input=True,
+            # An ion with a coordination shell is almost always there to do
+            # something, and a nonbonded model lets that shell fall apart
+            # during dynamics. One with no donors in range has nothing to hold
+            # together, so it gets the cheap model.
+            #
+            # Accepting this does not commit anyone silently: a bonded site
+            # then has to confirm its donors, its spin and its model charge,
+            # none of which can be defaulted, so a metal that should have been
+            # nonbonded is three questions away from being noticed.
+            default="bonded_mcpb" if donors else "nonbonded",
             why=(
                 "A nonbonded model keeps the ion free and suits a structural or "
                 "loosely bound metal. A bonded MCPB model holds the coordination "
                 "sphere together and is what a catalytic centre needs; it costs a "
-                "quantum chemistry calculation."
+                "quantum chemistry calculation. "
+                + (
+                    f"{len(donors)} donor atom(s) were found within bonding "
+                    "distance, which is why the bonded model is proposed here."
+                    if donors
+                    else "No donor atom was found within bonding distance, so "
+                    "there is no coordination sphere to hold together."
+                )
             ),
             choices=(
-                Choice(
-                    "nonbonded",
-                    "Nonbonded (Li/Merz)",
-                    "Cheap. Pick an Amber ion parameter set below.",
-                ),
                 Choice(
                     "bonded_mcpb",
                     "Bonded (MCPB.py)",
                     "Keeps the coordination sphere; needs a Hessian and an ESP fit.",
+                ),
+                Choice(
+                    "nonbonded",
+                    "Nonbonded (Li/Merz)",
+                    "Cheap. Pick an Amber ion parameter set below.",
                 ),
             ),
             evidence=evidence + donor_evidence,
