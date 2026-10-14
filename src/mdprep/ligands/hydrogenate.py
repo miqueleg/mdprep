@@ -104,12 +104,19 @@ def add_ligand_hydrogens(
     smiles: str,
     *,
     ligand_id: str,
+    net_charge: int | None = None,
 ) -> HydrogenationResult:
     """Place explicit hydrogens on a ligand according to ``smiles``.
 
     Heavy atoms keep their names, their order and their coordinates; hydrogens
     are appended after them. Anything that would disturb a heavy atom is an
     error rather than a silent correction.
+
+    ``net_charge`` is the charge the manifest declares. The SMILES decides the
+    protonation, so the two must agree: a SMILES one proton out from what was
+    declared still matches the same heavy atoms and would otherwise be
+    accepted, leaving the hydrogens and the charge describing different
+    molecules.
     """
 
     if is_already_protonated(residue):
@@ -148,6 +155,17 @@ def add_ligand_hydrogens(
         raise LigandHydrogenationError(
             f"Ligand {ligand_id}: ligands[].smiles is not a valid SMILES: {smiles!r}"
         )
+
+    if net_charge is not None:
+        smiles_charge = Chem.GetFormalCharge(template)
+        if smiles_charge != net_charge:
+            raise LigandHydrogenationError(
+                f"Ligand {ligand_id}: ligands[].smiles has a formal charge of "
+                f"{smiles_charge:+d} but net_charge declares {net_charge:+d}. "
+                "The SMILES sets the protonation, so one of them is describing "
+                "a different molecule; the hydrogens placed from this SMILES "
+                "would not match the charge the rest of the run uses."
+            )
 
     template_heavy = template.GetNumAtoms()
     if template_heavy != len(heavy_atoms):

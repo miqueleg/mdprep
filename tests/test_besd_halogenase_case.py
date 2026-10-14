@@ -162,6 +162,9 @@ BESD_ANSWERS = {
     "structure.repair.add_missing_heavy_atoms": True,
     "protonation.method": "propka_xtb_his",
     "ligand.a_lys_301.net_charge": 1,
+    # 6NIE resolves no hydrogens on the free lysine, and a net charge does not
+    # say where they go, so the protonation is stated.
+    "ligand.a_lys_301.smiles": "C(CCN)CC(C(=O)O)N",
     "ligand.a_akg_304.net_charge": -2,
     "ligand.a_cl_303.net_charge": -1,
     "metal.a_fe2_302_site.model": "bonded_mcpb",

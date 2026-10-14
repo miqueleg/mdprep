@@ -362,7 +362,12 @@ def _hydrogenate_configured_ligands(
         if id(residue) not in keep_residue_ids:
             continue
         try:
-            outcome = add_ligand_hydrogens(residue, ligand.smiles, ligand_id=ligand.id)
+            outcome = add_ligand_hydrogens(
+                residue,
+                ligand.smiles,
+                ligand_id=ligand.id,
+                net_charge=ligand.net_charge,
+            )
         except LigandHydrogenationError as exc:
             raise StructureNormalizationError(str(exc)) from exc
         results.append(outcome.to_dict())

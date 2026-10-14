@@ -883,7 +883,7 @@ def _ligand_decisions(
     evidence = (f"{display}, {len(residue.atoms)} atoms",)
     targets = (_target_for(residue),)
     include_id = f"ligand.{ligand_id}.include"
-    return [
+    decisions = [
         Decision(
             id=include_id,
             section="ligands",
@@ -911,6 +911,32 @@ def _ligand_decisions(
                 "produces a plausible-looking topology with the wrong electrostatics."
             ),
             evidence=evidence,
+            targets=targets,
+            focus="targets",
+            when=(Condition(include_id, ("true",)),),
+        ),
+        Decision(
+            id=f"ligand.{ligand_id}.smiles",
+            section="ligands",
+            question=f"SMILES for {display}, including its hydrogens",
+            kind="text",
+            # No default. A net charge does not determine a molecule: the keto
+            # and enol forms of alpha-ketoglutarate are both C5H4O5(2-), and
+            # differ in where two hydrogens sit and in two bond orders.
+            default=None,
+            requires_user_input=True,
+            why=(
+                "This structure resolved no hydrogens on this residue. The "
+                "formal charge does not settle the chemistry -- a carboxylate "
+                "and a carboxylic acid differ by one hydrogen, and two "
+                "tautomers can share a formula and a charge -- so mdprep takes "
+                "the bond orders and the protonation from this SMILES rather "
+                "than guessing them. It must describe the same heavy atoms, in "
+                "the same connectivity, as the residue in the file, and its "
+                "formal charge must match the net charge above."
+            ),
+            evidence=evidence
+            + ("No hydrogens are present on this residue in the input.",),
             targets=targets,
             focus="targets",
             when=(Condition(include_id, ("true",)),),
@@ -984,6 +1010,15 @@ def _ligand_decisions(
             focus="targets",
         ),
     ]
+    if _ligand_has_hydrogens(residue):
+        # Already protonated, so mdprep leaves it alone and there is
+        # nothing to ask. Adding hydrogens to a residue that has them is
+        # the failure the question exists to prevent.
+        decisions = [
+            decision
+            for decision in decisions
+            if decision.id != f"ligand.{ligand_id}.smiles"
+        ]
     return decisions
 
 
@@ -1506,6 +1541,9 @@ def _ligand_blocks(
                 "charge_method": resolved[f"ligand.{ligand_id}.charge_method"],
             }
         )
+        smiles = resolved.get(f"ligand.{ligand_id}.smiles")
+        if smiles:
+            blocks[-1]["smiles"] = smiles
 
     return blocks
 

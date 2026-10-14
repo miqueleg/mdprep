@@ -70,6 +70,30 @@ def residue_of(*atoms: AtomRecord) -> ResidueRecord:
 # --------------------------------------------------------------------------
 
 
+
+def _heavy_only_akg():
+    """The alpha-ketoglutarate of 6NIE with its deposited hydrogens removed."""
+
+    from dataclasses import replace
+
+    from mdprep.structure.pdb import read_pdb
+
+    structure = read_pdb("examples/tutorials/besd_6nie/6NIE.pdb")
+    residue = next(
+        item
+        for item in structure.residues
+        if item.id.resname == "AKG" and item.id.chain_id == "A"
+    )
+    return replace(
+        residue,
+        atoms=[
+            atom
+            for atom in residue.atoms
+            if (atom.element or "").strip().upper() != "H"
+        ],
+    )
+
+
 def test_a_protonated_ligand_is_left_exactly_as_it_was():
     before = residue_of(atom("C1", "C", 1), atom("H1", "H", 2))
 
@@ -260,3 +284,72 @@ def test_hydrogen_names_avoid_names_already_in_use():
     names = hydrogen_names_for(parent, 1, {"HB"})
 
     assert names == ["HBA"]
+
+
+def test_a_smiles_whose_charge_contradicts_the_manifest_is_refused():
+    """The SMILES sets the protonation and net_charge sets the electrostatics,
+    so the two describing different molecules is not something to warn about.
+
+    A SMILES one proton out still matches the same heavy atoms and the same
+    connectivity, so nothing else in the chain would notice.
+    """
+
+    residue = _heavy_only_akg()
+
+    with pytest.raises(LigandHydrogenationError, match="formal charge of -1"):
+        add_ligand_hydrogens(
+            residue,
+            "OC(=O)C(=O)CCC(=O)[O-]",  # the monoanion
+            ligand_id="akg",
+            net_charge=-2,
+        )
+
+
+def test_the_declared_charge_and_the_smiles_agreeing_is_accepted():
+    residue = _heavy_only_akg()
+
+    result = add_ligand_hydrogens(
+        residue,
+        "[O-]C(=O)C(=O)CCC(=O)[O-]",
+        ligand_id="akg",
+        net_charge=-2,
+    )
+
+    assert result.added_hydrogens == 4
+
+
+def test_a_tautomer_cannot_be_checked_and_is_taken_on_trust():
+    """The keto and enol forms of alpha-ketoglutarate are both C5H4O5(2-) over
+    the same heavy-atom connectivity, and differ only in where two hydrogens
+    sit and in two bond orders.
+
+    Nothing mdprep can compute distinguishes them, which is precisely why the
+    SMILES is asked for rather than inferred. This pins that the enol is
+    accepted and places its hydrogens differently, so the limit is recorded
+    rather than assumed away.
+    """
+
+    keto = add_ligand_hydrogens(
+        _heavy_only_akg(),
+        "[O-]C(=O)C(=O)CCC(=O)[O-]",
+        ligand_id="akg",
+        net_charge=-2,
+    )
+    enol = add_ligand_hydrogens(
+        _heavy_only_akg(),
+        "[O-]C(=O)C(O)=CCC(=O)[O-]",
+        ligand_id="akg",
+        net_charge=-2,
+    )
+
+    def hydrogen_parents(result):
+        names = [
+            atom.name.strip()
+            for atom in result.residue.atoms
+            if (atom.element or "").strip().upper() == "H"
+        ]
+        return sorted(names)
+
+    assert keto.added_hydrogens == enol.added_hydrogens == 4
+    # Same count, same charge, different atoms carrying them.
+    assert hydrogen_parents(keto) != hydrogen_parents(enol)
