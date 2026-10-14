@@ -267,6 +267,9 @@ function applicableDecisions() {
   const answers = {};
   const result = [];
   for (const decision of state.plan.decisions) {
+    // A browser has no filesystem path the user could usefully give, so
+    // these keep their default and never become a question here.
+    if (decision.needs_local_filesystem) continue;
     if (!isApplicable(decision, answers)) continue;
     result.push(decision);
     const given = state.answers[decision.id];
@@ -557,6 +560,9 @@ async function downloadBundle() {
   link.download = "mdprep-bundle.zip";
   link.click();
   URL.revokeObjectURL(url);
+  state.downloaded = true;
+  el("download-note").textContent =
+    "Downloaded. Extract the zip and run: mdprep prepare system.yaml";
 }
 
 function bundleReadme() {
@@ -566,11 +572,15 @@ function bundleReadme() {
     `structure: ${state.structureName}`,
     "manifest:  system.yaml",
     "",
-    "Upload this zip to Colab, extract it, and run:",
+    "Extract this zip and run, from the directory it extracted into:",
     "    mdprep prepare system.yaml",
     "",
     "The manifest references the structure by the name above, so keep them",
     "together in the same directory.",
+    "",
+    "Output goes to the directory named under project.output_dir, relative",
+    "to wherever you run the command. Change it there if you want it",
+    "somewhere else.",
   ].join("\n");
 }
 
@@ -651,6 +661,16 @@ bootPython().catch((error) => {
 });
 
 // Exposed for the browser smoke test in tests/browser/smoke.mjs.
+// Everything lives in this tab. Once a manifest exists there is something
+// to lose, so closing without downloading asks first.
+window.addEventListener("beforeunload", (event) => {
+  const built = !el("result-panel").classList.contains("hidden");
+  if (built && !state.downloaded) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
+
 window.mdprepState = state;
 window.renderColabCellForTest = renderColabCell;
 window.storedZipBytesForTest = storedZipBytes;

@@ -786,3 +786,32 @@ def test_the_model_charge_is_still_proposed_for_a_prediction_naming_everything_l
     # though it donates through two oxygens.
     assert value == -1
     assert len([term for term in terms if term.startswith("LIG21")]) == 1
+
+
+def test_the_output_directory_is_marked_as_needing_a_filesystem():
+    """A browser has no path the user could usefully name: the page hands
+    back a bundle, and whoever runs the manifest chooses where output lands.
+    The question stays in the plan for front ends that do have a filesystem,
+    and keeps a default so the manifest is complete either way."""
+
+    plan = plan_decisions(DATA / "protein_two_ligands.pdb")
+
+    decision = plan.by_id("project.output_dir")
+
+    assert decision.needs_local_filesystem
+    assert decision.default == "prepared/protein_two_ligands"
+    assert not decision.requires_user_input
+    # It is the only one: nothing else asks for a path.
+    assert [d.id for d in plan.decisions if d.needs_local_filesystem] == [
+        "project.output_dir"
+    ]
+
+
+def test_the_flag_reaches_a_front_end_through_the_plan():
+    """The page filters on this, so it has to survive serialisation."""
+
+    plan = plan_decisions(DATA / "protein_two_ligands.pdb")
+    serialised = {item["id"]: item for item in plan.to_dict()["decisions"]}
+
+    assert serialised["project.output_dir"]["needs_local_filesystem"] is True
+    assert serialised["project.name"]["needs_local_filesystem"] is False

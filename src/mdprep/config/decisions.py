@@ -135,6 +135,11 @@ class Decision:
     focus: FocusMode = "none"
     minimum: int | float | None = None
     maximum: int | float | None = None
+    # A question that only means something where the answer will be used.
+    # A browser has no filesystem the user can usefully name, so asking for
+    # an output directory there is a box to fill in for no reason: the page
+    # hands back a bundle and whoever runs it chooses where it lands.
+    needs_local_filesystem: bool = False
 
     @property
     def subject(self) -> "ResidueTarget":
@@ -164,6 +169,7 @@ class Decision:
             "focus": self.focus,
             "minimum": self.minimum,
             "maximum": self.maximum,
+            "needs_local_filesystem": self.needs_local_filesystem,
         }
 
 
@@ -487,8 +493,14 @@ def _project_decisions(path: Path) -> list[Decision]:
             section="project",
             question="Output directory",
             kind="text",
-            why="Where prepared structures, logs and Amber files are written.",
+            why=(
+                "Where prepared structures, logs and Amber files are written, "
+                "on the machine that runs the preparation. A front end with no "
+                "filesystem of its own leaves this at its default and lets "
+                "whoever runs the manifest decide."
+            ),
             default=f"prepared/{name}",
+            needs_local_filesystem=True,
         ),
     ]
 
