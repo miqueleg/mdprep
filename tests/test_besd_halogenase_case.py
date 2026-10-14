@@ -162,10 +162,7 @@ BESD_ANSWERS = {
     "structure.repair.add_missing_heavy_atoms": True,
     "protonation.method": "propka_xtb_his",
     "ligand.a_lys_301.net_charge": 1,
-    # 6NIE resolved no ligand hydrogens, so their protonation has to be stated.
-    "ligand.a_lys_301.smiles": "C(CCN)CC(C(=O)O)N",
     "ligand.a_akg_304.net_charge": -2,
-    "ligand.a_akg_304.smiles": "C(CC(=O)[O-])C(=O)C(=O)[O-]",
     "ligand.a_cl_303.net_charge": -1,
     "metal.a_fe2_302_site.model": "bonded_mcpb",
     "metal.a_fe2_302_site.charge": 2,

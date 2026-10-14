@@ -440,6 +440,14 @@ def plan_decisions(
         # Kept whichever protein chain is chosen, so they are never offered.
         "non_protein_chains": non_protein_chain_ids(summary),
         "ligands": [residue.id.display() for residue in ligands],
+        # A ligand whose hydrogens the structure never resolved cannot be
+        # parameterised until its protonation is stated. Recorded here so the
+        # builders can say so without asking for a SMILES they cannot check.
+        "ligands_without_hydrogens": [
+            ligand_id_for(residue)
+            for residue in ligands
+            if not _ligand_has_hydrogens(residue)
+        ],
         "metal_ions": [residue.id.display() for residue in summary.metal_ions],
         "coordinating_waters": [
             residue.id.display() for residue in coordinating_water_residues(summary)
@@ -908,30 +916,6 @@ def _ligand_decisions(
             when=(Condition(include_id, ("true",)),),
         ),
         Decision(
-            id=f"ligand.{ligand_id}.smiles",
-            section="ligands",
-            question=f"SMILES for {display}, including its hydrogens",
-            kind="text",
-            # No default: the protonation of a ligand is chemistry, and a PDB
-            # that resolved no hydrogens says nothing about it.
-            default=None,
-            requires_user_input=True,
-            why=(
-                "This structure resolved no hydrogens on this residue, and "
-                "mdprep will not guess them: a carboxylate and a carboxylic "
-                "acid look identical without them. The SMILES fixes the "
-                "tautomer and the protonation, and mdprep places the hydrogens "
-                "to match it. It must describe the same heavy atoms, in the "
-                "same connectivity, as the residue in the file."
-            ),
-            evidence=evidence + (
-                "No hydrogens are present on this residue in the input.",
-            ),
-            targets=targets,
-            focus="targets",
-            when=(Condition(include_id, ("true",)),),
-        ),
-        Decision(
             id=f"ligand.{ligand_id}.atom_types",
             section="ligands",
             question=f"Atom types for {display}",
@@ -1000,15 +984,6 @@ def _ligand_decisions(
             focus="targets",
         ),
     ]
-    if _ligand_has_hydrogens(residue):
-        # Already protonated, so mdprep leaves it alone and there is
-        # nothing to ask. Adding hydrogens to a residue that has them is
-        # exactly the failure the SMILES question exists to avoid.
-        decisions = [
-            decision
-            for decision in decisions
-            if decision.id != f"ligand.{ligand_id}.smiles"
-        ]
     return decisions
 
 
@@ -1531,9 +1506,7 @@ def _ligand_blocks(
                 "charge_method": resolved[f"ligand.{ligand_id}.charge_method"],
             }
         )
-        smiles = resolved.get(f"ligand.{ligand_id}.smiles")
-        if smiles:
-            blocks[-1]["smiles"] = smiles
+
     return blocks
 
 
@@ -1720,6 +1693,31 @@ def _refinement_block(
             "platform": "CPU",
         },
     }
+
+
+def ligands_needing_hydrogens(
+    plan: DecisionPlan, answers: Mapping[str, Any]
+) -> list[str]:
+    """Included ligands whose hydrogens the structure never resolved.
+
+    mdprep will not guess a ligand's protonation -- a carboxylate and a
+    carboxylic acid are the same heavy atoms -- so one of these needs a
+    `smiles:` added to its block, or hydrogens added to the input before the
+    run. The builder reports them rather than asking, because a SMILES typed
+    into a form is not something it can check against the residue it is for.
+    """
+
+    resolved = resolve_answers(plan, answers)
+    needing: list[str] = []
+    for decision in plan.decisions:
+        if decision.section != "ligands" or not decision.id.endswith(".include"):
+            continue
+        if not resolved.get(decision.id):
+            continue
+        ligand_id = decision.id.split(".")[1]
+        if ligand_id in plan.findings.get("ligands_without_hydrogens", ()):
+            needing.append(ligand_id)
+    return needing
 
 
 def unresolved_mcpb_sites(

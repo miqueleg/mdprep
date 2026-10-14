@@ -354,6 +354,13 @@ def _run_interactive_init(
             f"[yellow]Metal site {site!r} needs a bonded MCPB block that this wizard "
             "cannot generate.[/yellow] Add it by hand following docs/metals.md."
         )
+    for ligand in result.ligands_needing_hydrogens:
+        console.print(
+            f"[yellow]Ligand {ligand!r} has no hydrogens in this "
+            "structure.[/yellow] mdprep will not guess a ligand's protonation, "
+            "so add a smiles: to its block, or hydrogens to the input, before "
+            "running. See docs/ligands.md."
+        )
     console.print("Check it with: [bold]mdprep config-check "
                   f"{result.manifest_path}[/bold]")
 

@@ -68,7 +68,7 @@ async function bootPython() {
 import json
 from mdprep.config.decisions import plan_decisions, build_manifest, DecisionError
 from mdprep.workflows.wizard import render_manifest_yaml
-from mdprep.config.decisions import unresolved_mcpb_sites
+from mdprep.config.decisions import unresolved_mcpb_sites, ligands_needing_hydrogens
 from mdprep.workflows.runtime import conda_packages_for, micromamba_setup_commands
 
 _PLAN = {}
@@ -85,6 +85,7 @@ def mdprep_build(answers_json, mdprep_spec):
     answers = json.loads(answers_json)
     try:
         sites = list(unresolved_mcpb_sites(plan, answers))
+        hydrogenless = list(ligands_needing_hydrogens(plan, answers))
         text = render_manifest_yaml(plan, answers, mcpb_sites=tuple(sites))
         manifest = build_manifest(plan, answers)
     except DecisionError as exc:
@@ -93,6 +94,7 @@ def mdprep_build(answers_json, mdprep_spec):
         "ok": True,
         "yaml": text,
         "mcpb_sites": sites,
+        "ligands_needing_hydrogens": hydrogenless,
         # Only the packages this particular run will actually invoke.
         "packages": conda_packages_for(manifest),
         "setup": micromamba_setup_commands(manifest, mdprep_spec=mdprep_spec),
@@ -381,13 +383,25 @@ function buildManifest() {
   }
 
   el("manifest-yaml").textContent = result.yaml;
-  el("result-warnings").innerHTML = result.mcpb_sites.length
-    ? `<p class="warn">Metal site(s) ${result.mcpb_sites
-        .map(escapeHtml)
-        .join(", ")} were set to bonded MCPB. Those need external QM work and
-        are deliberately not in the manifest &mdash; add them by hand following
-        docs/metals.md.</p>`
-    : "";
+  const warnings = [];
+  if (result.mcpb_sites.length) {
+    warnings.push(`<p class="warn">Metal site(s) ${result.mcpb_sites
+      .map(escapeHtml)
+      .join(", ")} were set to bonded MCPB. Those need external QM work and
+      are deliberately not in the manifest &mdash; add them by hand following
+      docs/metals.md.</p>`);
+  }
+  if ((result.ligands_needing_hydrogens || []).length) {
+    // Not asked as a question: a SMILES typed into a form cannot be checked
+    // against the residue it is for, and a wrong one silently changes the
+    // chemistry. It is reported so it can be added and reviewed in the file.
+    warnings.push(`<p class="warn">This structure resolved no hydrogens on
+      ${result.ligands_needing_hydrogens.map(escapeHtml).join(", ")}. mdprep
+      will not guess a ligand's protonation, so add a <code>smiles:</code> to
+      each of those blocks &mdash; or hydrogens to the input &mdash; before
+      running. See docs/ligands.md.</p>`);
+  }
+  el("result-warnings").innerHTML = warnings.join("");
   window.mdprepLastResultForTest = result;
   renderColabCell(result);
   hide("question-panel");

@@ -20,6 +20,7 @@ from mdprep.config.decisions import (
     DecisionPlan,
     build_manifest,
     plan_decisions,
+    ligands_needing_hydrogens,
     unresolved_mcpb_sites,
 )
 from mdprep.config.models import ManifestConfig
@@ -35,6 +36,10 @@ class WizardResult:
     answers: dict[str, Any]
     questions_asked: int
     mcpb_sites_needing_manual_work: tuple[str, ...]
+    # Ligands whose hydrogens the structure never resolved. Reported rather
+    # than asked about: a SMILES cannot be checked against the residue it is
+    # for at the point the question would be asked.
+    ligands_needing_hydrogens: tuple[str, ...] = ()
 
 
 def format_question(decision: Decision) -> str:
@@ -173,6 +178,7 @@ def run_wizard(
         plan, prompt, preset=preset, max_attempts=max_attempts
     )
     mcpb_sites = tuple(unresolved_mcpb_sites(plan, answers))
+    hydrogenless = tuple(ligands_needing_hydrogens(plan, answers))
     text = render_manifest_yaml(plan, answers, mcpb_sites=mcpb_sites)
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(text, encoding="utf-8")
@@ -181,4 +187,5 @@ def run_wizard(
         answers=answers,
         questions_asked=asked,
         mcpb_sites_needing_manual_work=mcpb_sites,
+        ligands_needing_hydrogens=hydrogenless,
     )

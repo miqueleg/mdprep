@@ -38,8 +38,6 @@ def answer_blocking(plan: DecisionPlan, **overrides: object) -> dict[str, object
     for decision in plan.blocking():
         if decision.id.endswith(".net_charge"):
             answers[decision.id] = 0
-        elif decision.id.endswith(".smiles"):
-            answers[decision.id] = "C"
         elif decision.id.endswith(".model"):
             answers[decision.id] = "nonbonded"
         elif decision.id.endswith(".charge"):
@@ -595,3 +593,32 @@ def test_hetero_only_chains_are_kept_whichever_protein_chain_is_chosen():
 
     # No selection was made, so every chain is kept.
     assert manifest["structure"]["keep_chains"] == []
+
+
+def test_a_ligand_without_hydrogens_is_reported_rather_than_asked_about():
+    """mdprep will not guess a ligand's protonation, but a SMILES typed into a
+    form cannot be checked against the residue it is for either. The builder
+    names the ligands instead, so the gap is visible before the run."""
+
+    from mdprep.config.decisions import ligands_needing_hydrogens
+
+    plan = plan_decisions(str(DATA / "protein_two_ligands.pdb"))
+
+    # No question is asked for it.
+    assert [d.id for d in plan.decisions if d.id.endswith(".smiles")] == []
+    # It is reported instead, both on the plan and for a given set of answers.
+    assert set(plan.findings["ligands_without_hydrogens"]) == {
+        "b_sub_501",
+        "c_cof_601",
+    }
+    answers = answer_blocking(plan)
+    assert set(ligands_needing_hydrogens(plan, answers)) == {
+        "b_sub_501",
+        "c_cof_601",
+    }
+
+
+def test_a_ligand_that_already_has_hydrogens_is_not_reported():
+    plan = plan_decisions(str(DATA / "protein_histidine_ring_hydrogenated.pdb"))
+
+    assert plan.findings["ligands_without_hydrogens"] == []

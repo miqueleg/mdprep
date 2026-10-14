@@ -125,9 +125,7 @@ def test_it_works_on_a_manifest_the_builder_actually_produces():
             "structure.remove_unknown_heterogens": False,
             "structure.repair.add_missing_heavy_atoms": False,
             "ligand.b_sub_501.net_charge": 0,
-            "ligand.b_sub_501.smiles": "C",
             "ligand.c_cof_601.net_charge": 0,
-            "ligand.c_cof_601.smiles": "C",
         },
     )
 
