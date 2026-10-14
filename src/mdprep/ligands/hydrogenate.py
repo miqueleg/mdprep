@@ -99,6 +99,113 @@ def hydrogen_names_for(parent: AtomRecord, count: int, taken: set[str]) -> list[
     return names
 
 
+# Bond lengths for the orders a ligand SMILES can assign, with the spread a
+# refined structure is allowed. These are the small-molecule values the
+# monomer dictionaries restrain towards, so a 2 A protein structure sits close
+# to them even though its density does not resolve them independently.
+BOND_LENGTH_ANGSTROM: dict[tuple[str, str, int], float] = {
+    ("C", "C", 1): 1.52, ("C", "C", 2): 1.34, ("C", "C", 3): 1.20,
+    ("C", "N", 1): 1.47, ("C", "N", 2): 1.28, ("C", "N", 3): 1.16,
+    ("C", "O", 1): 1.36, ("C", "O", 2): 1.22,
+    ("C", "S", 1): 1.81, ("C", "S", 2): 1.68,
+    ("N", "N", 1): 1.45, ("N", "N", 2): 1.25,
+    ("N", "O", 1): 1.40, ("N", "O", 2): 1.21,
+}
+
+# A bond has to miss its own order by this much before it is questioned, and
+# be this much closer to a different one, before the geometry is taken to
+# contradict the SMILES rather than merely to be loosely refined.
+BOND_LENGTH_TOLERANCE_ANGSTROM = 0.10
+BOND_LENGTH_MARGIN_ANGSTROM = 0.06
+
+# Groups whose real geometry is symmetric while any SMILES has to write them
+# as alternating single and double bonds. Their formal orders say nothing
+# about their lengths, so they are not checked.
+DELOCALISED_SMARTS = (
+    "[CX3](=[OX1])[OX1-]",        # carboxylate
+    "[CX3](=[OX1])[OX2H1]",       # carboxylic acid, often refined symmetric
+    "[NX3+](=[OX1])[OX1-]",       # nitro
+    "[NX3][CX3](=[NX3+])[NX3]",   # guanidinium
+    "[PX4](=[OX1])([OX1-])",      # phosphate
+    "[SX4](=[OX1])(=[OX1])",      # sulfonyl
+)
+
+
+def geometry_contradicts_bond_orders(
+    molecule: object, residue: ResidueRecord
+) -> list[str]:
+    """Bonds whose length disagrees with the order the SMILES gave them.
+
+    The coordinates do carry the tautomer: a ketone C=O refines near 1.22 A
+    and an enol C-OH near 1.36, so a SMILES naming the wrong one can be caught
+    even though formula, charge and connectivity cannot tell them apart.
+
+    Aromatic and delocalised bonds are skipped, because their formal orders
+    are a notation rather than a claim about length.
+    """
+
+    from rdkit import Chem
+
+    conformer = molecule.GetConformer()
+    skip: set[int] = set()
+    for pattern in DELOCALISED_SMARTS:
+        query = Chem.MolFromSmarts(pattern)
+        if query is None:
+            continue
+        for match in molecule.GetSubstructMatches(query):
+            members = set(match)
+            for bond in molecule.GetBonds():
+                if bond.GetBeginAtomIdx() in members and bond.GetEndAtomIdx() in members:
+                    skip.add(bond.GetIdx())
+
+    complaints: list[str] = []
+    for bond in molecule.GetBonds():
+        if bond.GetIdx() in skip or bond.GetIsAromatic():
+            continue
+        order = int(bond.GetBondTypeAsDouble())
+        if order not in (1, 2, 3):
+            continue
+        begin, end = bond.GetBeginAtom(), bond.GetEndAtom()
+        pair = tuple(sorted((begin.GetSymbol(), end.GetSymbol())))
+        assigned = BOND_LENGTH_ANGSTROM.get((*pair, order))
+        if assigned is None:
+            continue
+        start = conformer.GetAtomPosition(begin.GetIdx())
+        finish = conformer.GetAtomPosition(end.GetIdx())
+        observed = (
+            (start.x - finish.x) ** 2
+            + (start.y - finish.y) ** 2
+            + (start.z - finish.z) ** 2
+        ) ** 0.5
+        if abs(observed - assigned) <= BOND_LENGTH_TOLERANCE_ANGSTROM:
+            continue
+        better = [
+            (abs(observed - length), other)
+            for (left, right, other), length in BOND_LENGTH_ANGSTROM.items()
+            if (left, right) == pair
+            and other != order
+            and abs(observed - length) + BOND_LENGTH_MARGIN_ANGSTROM
+            < abs(observed - assigned)
+        ]
+        if not better:
+            continue
+        _, suggested = min(better)
+        complaints.append(
+            f"{_atom_label(begin)}-{_atom_label(end)} is {observed:.3f} A, "
+            f"which fits bond order {suggested} ({BOND_LENGTH_ANGSTROM[(*pair, suggested)]:.2f} A) "
+            f"rather than the {order} the SMILES gives it "
+            f"({assigned:.2f} A)"
+        )
+    return complaints
+
+
+def _atom_label(atom: object) -> str:
+    info = atom.GetPDBResidueInfo()
+    if info is not None and info.GetName().strip():
+        return info.GetName().strip()
+    return f"{atom.GetSymbol()}{atom.GetIdx()}"
+
+
 def add_ligand_hydrogens(
     residue: ResidueRecord,
     smiles: str,
@@ -183,6 +290,17 @@ def add_ligand_hydrogens(
             f"residue's heavy-atom connectivity ({exc}). Check that it describes "
             "the same molecule, including its charge."
         ) from exc
+
+    contradictions = geometry_contradicts_bond_orders(molecule, residue)
+    if contradictions:
+        raise LigandHydrogenationError(
+            f"Ligand {ligand_id}: the bond orders this SMILES implies do not "
+            "match the geometry in the structure. The coordinates carry the "
+            "tautomer even though the formula and the charge do not, so this "
+            "is most likely the wrong tautomer or the wrong protonation site: "
+            + "; ".join(contradictions)
+            + "."
+        )
 
     molecule = Chem.AddHs(molecule, addCoords=True)
     try:

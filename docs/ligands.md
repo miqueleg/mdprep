@@ -34,10 +34,26 @@ Three things are checked, and one is not:
   out is accepted, because it still matches the same heavy atoms -- and the
   hydrogens then describe a different molecule from the charge the rest of
   the run uses.
-- **The tautomer is not checked and cannot be.** Two tautomers share a
-  formula, a charge and a connectivity, so the SMILES is the only thing that
-  says which one you meant. That is the judgement the question is asking you
-  to make.
+- The bond orders it implies must be consistent with the distances in the
+  structure. This is what catches a wrong tautomer. Formula, charge and
+  connectivity cannot tell the keto and enol forms apart, but the coordinates
+  can: in 6NIE the C2-O5 of alpha-ketoglutarate is 1.207 A, a ketone, where an
+  enol C-OH would refine near 1.36. Delocalised groups -- carboxylate, nitro,
+  guanidinium, phosphate, sulfonyl -- and aromatic rings are skipped, because
+  a SMILES has to write their symmetric geometry as alternating orders and the
+  formal numbers there say nothing about length.
+
+Note what the geometry check does and does not establish. At typical protein
+resolution the ligand's bond lengths come from the refinement restraints
+rather than from the density, so they record the tautomer whoever built the
+monomer dictionary chose. That is usually right, and it is certainly the
+model you are starting from, but it is not independent evidence.
+
+Deriving the bond orders from the coordinates alone is not a substitute for
+the SMILES. Heavy atoms carry no record of how many hydrogens were attached,
+so a perception algorithm fills the spare valence with bond order instead: on
+this same alpha-ketoglutarate, RDKit returns a C-C triple bond where the
+molecule has a CH2-CH2.
 
 A ligand that already carries hydrogens is left alone, and a SMILES is neither
 asked for nor applied to it.

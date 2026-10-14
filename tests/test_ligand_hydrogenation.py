@@ -34,6 +34,12 @@ def residue_named(path: Path, resname: str) -> ResidueRecord:
     return next(r for r in read_pdb(path).residues if r.id.resname == resname)
 
 
+# A plausible single-bond separation. The hydrogenation now checks the bond
+# orders a SMILES implies against the distances in the structure, so a fixture
+# spacing its atoms 1 A apart would be read as a triple bond.
+SINGLE_BOND_ANGSTROM = 1.52
+
+
 def atom(name: str, element: str, index: int) -> AtomRecord:
     return AtomRecord(
         serial=index,
@@ -43,7 +49,7 @@ def atom(name: str, element: str, index: int) -> AtomRecord:
         chain_id="A",
         resid=1,
         icode=None,
-        x=float(index),
+        x=float(index) * SINGLE_BOND_ANGSTROM,
         y=0.0,
         z=0.0,
         occupancy=1.0,
@@ -252,7 +258,12 @@ def test_an_invalid_smiles_is_rejected():
 
 def test_a_smiles_implying_no_hydrogens_is_rejected():
     """Silently doing nothing would leave the ligand unusable downstream."""
-    before = residue_of(atom("C1", "C", 1), atom("C2", "C", 2))
+    from dataclasses import replace
+
+    # Spaced as a triple bond, so the geometry agrees with the SMILES and this
+    # reaches the check it is about rather than the bond-order one.
+    first, second = atom("C1", "C", 1), atom("C2", "C", 2)
+    before = residue_of(first, replace(second, x=first.x + 1.20))
 
     with pytest.raises(LigandHydrogenationError, match="no hydrogens"):
         add_ligand_hydrogens(before, "[C-]#[C-]", ligand_id="lig")
@@ -318,15 +329,14 @@ def test_the_declared_charge_and_the_smiles_agreeing_is_accepted():
     assert result.added_hydrogens == 4
 
 
-def test_a_tautomer_cannot_be_checked_and_is_taken_on_trust():
-    """The keto and enol forms of alpha-ketoglutarate are both C5H4O5(2-) over
-    the same heavy-atom connectivity, and differ only in where two hydrogens
-    sit and in two bond orders.
+def test_a_wrong_tautomer_is_caught_by_the_structure_geometry():
+    """Formula, charge and connectivity cannot tell two tautomers apart, but
+    the coordinates can: a ketone C=O refines near 1.22 A and an enol C-OH
+    near 1.36.
 
-    Nothing mdprep can compute distinguishes them, which is precisely why the
-    SMILES is asked for rather than inferred. This pins that the enol is
-    accepted and places its hydrogens differently, so the limit is recorded
-    rather than assumed away.
+    On 6NIE's alpha-ketoglutarate, C2-O5 is 1.207 A and C2-C3 is 1.500 A --
+    the keto form. The enol SMILES shares its formula and its charge, so it
+    passes every other check, and is refused on the geometry.
     """
 
     keto = add_ligand_hydrogens(
@@ -335,21 +345,33 @@ def test_a_tautomer_cannot_be_checked_and_is_taken_on_trust():
         ligand_id="akg",
         net_charge=-2,
     )
-    enol = add_ligand_hydrogens(
-        _heavy_only_akg(),
-        "[O-]C(=O)C(O)=CCC(=O)[O-]",
-        ligand_id="akg",
-        net_charge=-2,
-    )
+    assert keto.added_hydrogens == 4
 
-    def hydrogen_parents(result):
-        names = [
-            atom.name.strip()
-            for atom in result.residue.atoms
-            if (atom.element or "").strip().upper() == "H"
-        ]
-        return sorted(names)
+    with pytest.raises(LigandHydrogenationError, match="do not match the geometry"):
+        add_ligand_hydrogens(
+            _heavy_only_akg(),
+            "[O-]C(=O)C(O)=CCC(=O)[O-]",
+            ligand_id="akg",
+            net_charge=-2,
+        )
 
-    assert keto.added_hydrogens == enol.added_hydrogens == 4
-    # Same count, same charge, different atoms carrying them.
-    assert hydrogen_parents(keto) != hydrogen_parents(enol)
+
+def test_a_carboxylate_is_not_mistaken_for_a_contradiction():
+    """A deprotonated carboxylate refines with two equal C-O bonds near
+    1.25 A, which any SMILES has to write as one single and one double. The
+    formal orders are notation there, not a claim about length."""
+
+    from mdprep.ligands.hydrogenate import geometry_contradicts_bond_orders
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from mdprep.ligands.hydrogenate import _pdb_block
+
+    residue = _heavy_only_akg()
+    block = _pdb_block(list(residue.atoms))
+    molecule = Chem.MolFromPDBBlock(block, removeHs=False, sanitize=False)
+    template = Chem.MolFromSmiles("[O-]C(=O)C(=O)CCC(=O)[O-]")
+    molecule = AllChem.AssignBondOrdersFromTemplate(template, molecule)
+
+    # Both carboxylates are present and neither is reported.
+    assert geometry_contradicts_bond_orders(molecule, residue) == []
