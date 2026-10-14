@@ -58,6 +58,12 @@ jobs:
         with:
           path: web
 
+  # Publishing is separate from building, and only the build says whether the
+  # site is sound. This job needs GitHub Pages to be enabled on the repository
+  # (Settings -> Pages -> Source: GitHub Actions); without it deploy-pages
+  # returns 404 and the workflow goes red on every push for a reason no commit
+  # can fix. So the state of Pages is checked first and the deployment skipped
+  # when it is not configured, with a notice saying how to turn it on.
   deploy:
     needs: build
     if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
@@ -69,5 +75,20 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - id: pages
+        name: Check whether Pages is enabled
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${GITHUB_REPOSITORY}/pages" >/dev/null 2>&1; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=GitHub Pages is not enabled::The site built and \
+          was uploaded as an artifact, but there is nowhere to publish it. Enable it at \
+          https://github.com/${GITHUB_REPOSITORY}/settings/pages with Source: GitHub Actions, \
+          and the next push to master will deploy."
+          fi
       - id: deployment
+        if: steps.pages.outputs.enabled == 'true'
         uses: actions/deploy-pages@v4
