@@ -78,6 +78,7 @@ from mdprep.config.decisions import (
     unresolved_mcpb_sites,
     ligands_needing_hydrogens,
     proposed_answers,
+    proposal_explanations,
 )
 from mdprep.workflows.runtime import conda_packages_for, micromamba_setup_commands
 
@@ -91,9 +92,17 @@ def mdprep_plan(text, name):
     return json.dumps(plan.to_dict())
 
 def mdprep_proposals(answers_json):
-    """Answers that follow from earlier ones, such as a capped model charge."""
+    """Answers that follow from earlier ones, such as a capped model charge.
+
+    The arithmetic comes back with each one so the page can show it; a number
+    nobody can check is not much better than no number.
+    """
     plan = _PLAN["plan"]
-    return json.dumps(proposed_answers(plan, json.loads(answers_json)))
+    answers = json.loads(answers_json)
+    values = proposed_answers(plan, answers)
+    why = proposal_explanations(plan, answers)
+    return json.dumps({key: {"value": value, "why": why.get(key, "")}
+                       for key, value in values.items()})
 
 
 def mdprep_build(answers_json, mdprep_spec):
@@ -286,10 +295,19 @@ function renderCurrentQuestion() {
     .join("");
   el("answer-error").textContent = "";
 
-  el("blocking-note").textContent = decision.requires_user_input
-    ? "This cannot be guessed from the structure, so there is no default."
-    : "";
-  el("blocking-note").classList.toggle("visible", decision.requires_user_input);
+  // Worked out before the note, because a question that has a proposal must
+  // not also be told it has no default.
+  const proposal =
+    state.answers[decision.id] === undefined ? proposalFor(decision) : null;
+  state.proposal = proposal;
+
+  const note = proposal
+    ? `Worked out from your earlier answers: ${proposal.why}. Change it if that is not this site.`
+    : decision.requires_user_input
+      ? "This cannot be guessed from the structure, so there is no default."
+      : "";
+  el("blocking-note").textContent = note;
+  el("blocking-note").classList.toggle("visible", note !== "");
 
   const total = decisions.length;
   el("progress-text").textContent = `Question ${state.index + 1} of ${total}`;
@@ -322,14 +340,13 @@ function proposalFor(decision) {
 function renderAnswerInput(decision) {
   const area = el("answer-area");
   const existing = state.answers[decision.id];
-  const proposed = existing === undefined ? proposalFor(decision) : null;
+  const proposed = state.proposal ? state.proposal.value : null;
   const value =
     existing !== undefined
       ? existing
       : proposed !== null
         ? proposed
         : decision.default;
-  state.proposed = proposed;
   area.innerHTML = "";
 
   if (decision.kind === "choice") {
@@ -368,8 +385,14 @@ function renderAnswerInput(decision) {
   if (decision.minimum !== null) input.min = decision.minimum;
   if (decision.maximum !== null) input.max = decision.maximum;
   input.id = "answer-input";
-  input.value = value === null ? "" : value;
-  if (decision.requires_user_input && existing === undefined) input.value = "";
+  input.value = value === null || value === undefined ? "" : value;
+  // A blocking question is shown empty so its default cannot be accepted by
+  // reflex -- but a proposal is not a default. It was computed from answers
+  // this user already gave, the arithmetic is on screen beside it, and
+  // blanking it would mean asking them to retype their own sum.
+  if (decision.requires_user_input && existing === undefined && proposed === null) {
+    input.value = "";
+  }
   area.appendChild(input);
   input.focus();
 }
@@ -386,7 +409,7 @@ function onNext() {
   if (!decision) return;
   const raw = readAnswer();
   if (raw === "") {
-    const fallback = state.proposed ?? decision.default;
+    const fallback = (state.proposal ? state.proposal.value : null) ?? decision.default;
     if (fallback === null || fallback === undefined) {
       el("answer-error").textContent =
         "This question has no default. Please give a value.";

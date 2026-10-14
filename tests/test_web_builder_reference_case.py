@@ -143,3 +143,41 @@ def test_the_ligand_without_hydrogens_carries_its_smiles(manifest):
     assert "smiles" not in ligands["a_akg_304"]
     assert ligands["a_lys_301"]["charge_method"] == "am1bcc"
     assert ligands["a_lys_301"]["atom_types"] == "gaff2"
+
+
+def test_a_proposed_answer_is_shown_filled_in_with_its_arithmetic(report):
+    """A blocking question is shown with an empty box so its default cannot
+    be accepted by reflex. A proposal is not a default -- it was computed
+    from answers this user gave -- so it is filled in, and the sum behind it
+    is on screen next to it.
+
+    The capped model charge is the case: mdprep asks for the metal's
+    oxidation state and each cofactor's net charge, then used to ask the user
+    to add them up.
+    """
+
+    steps = {step["id"]: step for step in report["asked"] if step.get("id")}
+    charge = next(
+        step
+        for key, step in steps.items()
+        if key.endswith(".model_charge")
+    )
+
+    assert charge["prefilled"], "the proposal should be filled in"
+    assert "Worked out from your earlier answers" in charge["note"]
+    assert "=" in charge["note"], "the arithmetic should be shown, not just the total"
+    assert "cannot be guessed" not in charge["note"]
+
+
+def test_a_question_with_nothing_to_propose_is_still_shown_empty(report):
+    """The iron's own oxidation state is not inferable from a deposition that
+    calls the residue FE2 -- it is, and that one is proposed -- but the
+    multiplicity is not, and must not be prefilled with anything."""
+
+    steps = {step["id"]: step for step in report["asked"] if step.get("id")}
+    multiplicity = next(
+        step for key, step in steps.items() if key.endswith(".multiplicity")
+    )
+
+    assert multiplicity["prefilled"] == ""
+    assert "cannot be guessed" in multiplicity["note"]

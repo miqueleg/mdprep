@@ -1923,14 +1923,31 @@ def proposed_answers(
     depend on other answers, which a plan computed once cannot know.
     """
 
-    proposals: dict[str, str] = {}
+    return {key: value for key, (value, _) in _proposals(plan, answers).items()}
+
+
+def proposal_explanations(
+    plan: DecisionPlan, answers: Mapping[str, Any]
+) -> dict[str, str]:
+    """The arithmetic behind each proposal, so it can be checked not trusted."""
+
+    return {key: why for key, (_, why) in _proposals(plan, answers).items()}
+
+
+def _proposals(
+    plan: DecisionPlan, answers: Mapping[str, Any]
+) -> dict[str, tuple[str, str]]:
+    proposals: dict[str, tuple[str, str]] = {}
     for decision in plan.decisions:
         if decision.section != "metals" or not decision.id.endswith(".model_charge"):
             continue
         site_id = decision.id.split(".")[1]
-        value, _ = proposed_model_charge(plan, answers, site_id)
+        value, terms = proposed_model_charge(plan, answers, site_id)
         if value is not None:
-            proposals[decision.id] = str(value)
+            proposals[decision.id] = (
+                str(value),
+                " ".join(terms) + f" = {value:+d}",
+            )
     return proposals
 
 
