@@ -1025,6 +1025,53 @@ def _ligand_decisions(
 # Formal charges of the donor groups that appear in a first-shell metal site at
 # neutral pH. Used only to show a user the arithmetic behind the capped-model
 # charge they must enter; it is never used as a default.
+# Oxidation states a residue name settles on its own. The PDB chemical
+# component dictionary and Amber's ion libraries both name an ion after its
+# state where there is more than one -- FE2 is Fe(II) and FE is Fe(III), CU1
+# is Cu(I) and CU is Cu(II) -- so the name is evidence when it is one of
+# these, and says nothing when a file calls the residue LIG or UNK.
+OXIDATION_STATE_BY_RESNAME = {
+    "ZN": 2, "MG": 2, "CA": 2, "MN": 2, "NI": 2, "CO": 2, "CD": 2, "HG": 2,
+    "NA": 1, "K": 1, "LI": 1, "RB": 1, "CS": 1,
+    "FE": 3, "FE2": 2, "FE3": 3,
+    "CU": 2, "CU1": 1, "CU2": 2, "CU3": 3,
+    "AL": 3, "CR": 3, "GA": 3, "IN": 3, "LA": 3, "PB": 2, "SR": 2, "BA": 2,
+}
+
+# Metals with one biological oxidation state worth assuming when the residue
+# name gives nothing -- a prediction naming every heterogen LIG, for instance.
+# Iron, copper, manganese and cobalt are deliberately absent: each has more
+# than one common state, they differ in spin as well as charge, and a wrong
+# guess yields a converged calculation with wrong parameters.
+OXIDATION_STATE_BY_ELEMENT = {
+    "ZN": 2, "MG": 2, "CA": 2, "NA": 1, "K": 1, "LI": 1,
+}
+
+
+def proposed_oxidation_state(resname: str, element: str | None) -> tuple[int | None, str]:
+    """An oxidation state the evidence settles, and why -- or no proposal."""
+
+    name = (resname or "").strip().upper()
+    if name in OXIDATION_STATE_BY_RESNAME:
+        return (
+            OXIDATION_STATE_BY_RESNAME[name],
+            f"the residue name {name} is that oxidation state in the PDB "
+            "chemical component dictionary",
+        )
+    symbol = (element or "").strip().upper()
+    if symbol in OXIDATION_STATE_BY_ELEMENT:
+        return (
+            OXIDATION_STATE_BY_ELEMENT[symbol],
+            f"{symbol.capitalize()} has one common biological oxidation state",
+        )
+    return (
+        None,
+        f"the residue name {name or 'given'} does not identify one, and "
+        f"{symbol.capitalize() or 'this element'} has more than one common "
+        "state, which differ in spin as well as charge",
+    )
+
+
 STANDARD_DONOR_FORMAL_CHARGE = {
     "HIS": 0, "HID": 0, "HIE": 0, "HIP": 1,
     "ASP": -1, "ASH": 0, "GLU": -1, "GLH": 0,
@@ -1148,11 +1195,27 @@ def _metal_decisions(
             section="metals",
             question=f"Formal oxidation state (charge) of {display}",
             kind="integer",
-            default=None,
-            requires_user_input=True,
+            default=(
+                str(_proposed_state)
+                if (_proposed_state := proposed_oxidation_state(
+                    residue.id.resname, element
+                )[0]) is not None
+                else None
+            ),
+            requires_user_input=_proposed_state is None,
             why=(
-                "Neither the PDB residue name nor the element identifies an "
-                "oxidation state. Zn is almost always +2; Fe and Cu are not."
+                "This sets the electron count, and with the spin state it sets "
+                "what the quantum calculation is solving. "
+                + (
+                    f"Proposed as {_proposed_state:+d} because "
+                    f"{proposed_oxidation_state(residue.id.resname, element)[1]}; "
+                    "change it if that is not this site."
+                    if _proposed_state is not None
+                    else "No value is proposed here because "
+                    f"{proposed_oxidation_state(residue.id.resname, element)[1]}. "
+                    "Guessing would give a converged calculation with the wrong "
+                    "parameters."
+                )
             ),
             minimum=1,
             maximum=4,
