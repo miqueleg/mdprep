@@ -8,6 +8,32 @@
 
 import puppeteer from "puppeteer-core";
 
+/*
+ * 3Dmol sizes its canvas from the container, and the sizing can land a frame
+ * or two after the panel appears, so reading it the moment the questions show
+ * up catches a 0x0 canvas about half the time. Poll until it has real
+ * dimensions; on timeout report what is there, so the canvas check fails on
+ * its own rather than taking the whole run down with it.
+ */
+async function canvasSize(page, timeout = 30000) {
+  const read = () => {
+    const canvas = document.querySelector("#viewer canvas");
+    return canvas ? { width: canvas.width, height: canvas.height } : null;
+  };
+  try {
+    await page.waitForFunction(
+      () => {
+        const canvas = document.querySelector("#viewer canvas");
+        return Boolean(canvas && canvas.width > 0 && canvas.height > 0);
+      },
+      { timeout, polling: 50 },
+    );
+  } catch {
+    // Fall through to whatever the page has.
+  }
+  return page.evaluate(read);
+}
+
 const [baseUrl, structurePath, chromePath] = process.argv.slice(2);
 const report = { steps: [], errors: [] };
 
@@ -52,10 +78,7 @@ try {
     blocking: window.mdprepState.plan.blocking_count,
     ligands: window.mdprepState.plan.findings.ligands,
   }));
-  report.canvas = await page.evaluate(() => {
-    const canvas = document.querySelector("#viewer canvas");
-    return canvas ? { width: canvas.width, height: canvas.height } : null;
-  });
+  report.canvas = await canvasSize(page);
 
   // Walk the questions, supplying a value only where the engine refuses to
   // default. Captions are recorded so the test can check what was framed.

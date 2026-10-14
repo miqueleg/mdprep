@@ -127,9 +127,13 @@ async function loadStructure(text, name, pdbId = null) {
   state.index = 0;
   setStatus(`Loaded ${name}.`);
   renderFindings();
-  initViewer();
+  // The panels come out of hiding first: 3Dmol sizes its canvas from the
+  // container, and a container that is still display:none measures zero, so
+  // creating the viewer before the panel is visible leaves a 0x0 canvas until
+  // a later resize happens to fix it.
   show("findings-panel");
   show("question-panel");
+  initViewer();
   hide("result-panel");
   renderCurrentQuestion();
 }
