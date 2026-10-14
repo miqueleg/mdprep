@@ -29,6 +29,15 @@ structure:
   remove_unknown_heterogens: false
   preserve_chain_ids: true
   remove_input_hydrogens: true
+  # 6NIE's REMARK 470 lists five chain-A residues with unresolved side chains
+  # (LEU8, LYS9, ARG230, LEU232, LYS251). Without this they reach tleap
+  # truncated, and the prepared system simulates a leucine with no CG. The
+  # repaired side chains have no experimental positions, so treat them as
+  # modelled rather than observed.
+  repair:
+    backend: pdbfixer
+    add_missing_heavy_atoms: true
+    unresolved_residues: leave_absent
 
 protein: {forcefield: ff14SB, water_model: TIP3P}
 
