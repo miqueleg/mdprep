@@ -215,6 +215,69 @@ Ligand-coordinate validation also follows the recorded MCPB residue rename
 still compared against the original selected ligand, so a rename cannot hide
 atom reordering or movement.
 
+## Deriving the charges with GFN2 instead of DFT
+
+The large model exists to be fitted to an ESP, and that fit sets the charges
+the finished system carries. `esp_backend` chooses what produces it:
+
+```yaml
+pyscf:
+  hessian_backend: xtb     # small-model Hessian
+  esp_backend: xtb         # large-model ESP; default is pyscf
+  xtb: {model: gfn2, executable: xtb, num_threads: 1}
+```
+
+On the BesD site -- a 74-atom open-shell Fe(II) large model with ~4,600
+embedding charges -- GFN2 takes about a minute against tens of minutes for
+B3LYP/6-31G*. The embedding, the Merz-Kollman grid and the Gaussian log
+MCPB.py reads are identical either way, so the two are directly comparable.
+
+What changes is the density underneath. GFN2 is a semi-empirical valence
+method, and charges fitted to its ESP are not RESP charges in the usual
+sense. Every report says so, and `esp_backend: pyscf` remains the default.
+
+### Charges the manifest has to declare
+
+MCPB.py has no ion parameters of its own: the Amber protein force fields
+carry none, so an ion's charge reaches it only from a mol2 that mdprep
+writes. The oxidation states in the manifest are what those files say, which
+is why they have to be right:
+
+```yaml
+metals:
+  - id: a_fe2_302_site
+    ions:
+      - selector: {chain: A, resname: FE2, resid: 302, atom_name: FE}
+        element: Fe
+        charge: 2          # becomes chargedict["FE"] for MCPB.py
+        multiplicity: 5
+    coordinating_ions:
+      - selector: {chain: A, resname: CL, resid: 303, atom_name: CL}
+        element: Cl
+        charge: -1         # becomes chargedict["CL"]
+    mcpb:
+      small_model_charge: -1   # Fe(2+) + AKG(2-) + Cl(1-) + 2 x His(0)
+      large_model_charge: -1
+```
+
+mdprep renames an ion's residue and atom to the bare element symbol inside
+the MCPB working directory, because MCPB.py reads the charge by atom name in
+one place and by residue name in another and pairs it with the element symbol
+to find van der Waals parameters, so all three have to agree. A coordinating
+halide also gets a two-character atom type carrying Amber's own Li/Merz
+parameters, because MCPB.py reads a frcmod atom type from a two-character
+field and cannot represent `Cl-` at all. Both renames are confined to that
+directory; the prepared system keeps the names the input used.
+
+### A zero force constant is reported, not shipped
+
+A Seminario force constant of zero means the Hessian has no restoring force
+along that bond, and mdprep stops rather than writing it out. On BesD with
+`hessian_backend: xtb`, Fe-O5 of the bidentate alpha-ketoglutarate comes out
+at zero while the other four bonds are 11.9-26.3 kcal/mol/A^2 at normal
+distances. That is GFN2's description of a weakly bound keto oxygen, not a
+broken geometry; use a DFT Hessian for that site if the bond matters.
+
 ## Fixed-geometry PySCF/MCPB workflow
 
 `workflow: pyscf` completes the Hessian and RESP stages without Gaussian or

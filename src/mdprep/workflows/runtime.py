@@ -42,6 +42,11 @@ def conda_packages_for(manifest: Mapping[str, Any]) -> list[str]:
     if method == "propka_xtb_his":
         # Only the xTB tautomer comparison shells out to the xtb binary.
         add("xtb")
+        histidine_xtb = (protonation.get("histidine") or {}).get("xtb") or {}
+        if histidine_xtb.get("embedding", "qmmm") == "qmmm":
+            # The embedded QM/MM tautomer comparison reads its MM point
+            # charges out of OpenMM's ff14SB and TIP3P files.
+            add("openmm")
 
     for ligand in manifest.get("ligands") or []:
         if ligand.get("charge_method") in QM_CHARGE_METHODS:
@@ -63,11 +68,13 @@ def conda_packages_for(manifest: Mapping[str, Any]) -> list[str]:
 
     refinement = manifest.get("refinement") or {}
     if refinement.get("enabled"):
-        # ASH drives the QM/MM refinement through OpenMM, and the GFN2 engine
-        # is the xtb binary.
+        # Both backends build the provisional system through OpenMM. Only the
+        # ASH backend runs a quantum engine, and ASH itself is a manual
+        # install that no package manager here can provide.
         add("openmm")
-        if refinement.get("qm_method") == "gfn2_xtb":
-            add("xtb")
+        if refinement.get("backend", "openmm") == "ash":
+            if refinement.get("qm_method") == "gfn2_xtb":
+                add("xtb")
 
     validation = manifest.get("validation") or {}
     if validation.get("run_openmm_energy_check", True):

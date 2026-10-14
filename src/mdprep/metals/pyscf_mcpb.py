@@ -29,6 +29,7 @@ from mdprep.charges.esp_grid import (
 from mdprep.config.models import McpbPySCFConfig
 from mdprep.metals.coordination import ResolvedMetalSite
 from mdprep.qm.point_charges import PointCharge
+from mdprep.qm.xtb_esp import XtbEspError, run_xtb_esp
 from mdprep.qm.pyscf_esp import BOHR_PER_ANGSTROM, evaluate_ligand_esp
 from mdprep.qm.pyscf_runner import (
     PySCFResult,
@@ -761,6 +762,35 @@ def _run_large_model(
         xyz_path=point_xyz,
         report_path=point_report,
     )
+    grid_config = config.grid
+    grid = generate_merz_kollman_grid(
+        elements=elements,
+        coordinates=coordinates,
+        vdw_scale_factors=grid_config.vdw_scale_factors,
+        point_density_per_square_angstrom=(
+            grid_config.point_density_per_square_angstrom
+        ),
+        exclude_inside_vdw_scale=grid_config.exclude_inside_vdw_scale,
+        max_points=grid_config.max_points,
+    )
+
+    if config.esp_backend == "xtb":
+        return _run_large_model_with_xtb(
+            input_pdb=input_pdb,
+            elements=elements,
+            coordinates=coordinates,
+            grid=grid,
+            embedding=embedding,
+            charge=charge,
+            multiplicity=multiplicity,
+            config=config,
+            output_mk_log=output_mk_log,
+            point_csv=point_csv,
+            point_xyz=point_xyz,
+            point_report=point_report,
+            work_dir=work_dir,
+        )
+
     checkpoint = work_dir / "large_embedded.chk"
     try:
         scf_result = run_pyscf_scf(
@@ -808,17 +838,6 @@ def _run_large_model(
             "MCPB large-model PySCF result did not record electrostatic embedding."
         )
 
-    grid_config = config.grid
-    grid = generate_merz_kollman_grid(
-        elements=elements,
-        coordinates=coordinates,
-        vdw_scale_factors=grid_config.vdw_scale_factors,
-        point_density_per_square_angstrom=(
-            grid_config.point_density_per_square_angstrom
-        ),
-        exclude_inside_vdw_scale=grid_config.exclude_inside_vdw_scale,
-        max_points=grid_config.max_points,
-    )
     try:
         esp_values = evaluate_ligand_esp(
             mol=scf_result.mol,
@@ -897,6 +916,118 @@ def _run_large_model(
         auxiliary_basis=scf_result.auxiliary_basis,
         spin_square=scf_result.spin_square,
         effective_multiplicity=scf_result.effective_multiplicity,
+    )
+
+
+def _run_large_model_with_xtb(
+    *,
+    input_pdb: Path,
+    elements: list[str],
+    coordinates: np.ndarray,
+    grid: object,
+    embedding: McpbEmbeddingSelection,
+    charge: int,
+    multiplicity: int,
+    config: McpbPySCFConfig,
+    output_mk_log: Path,
+    point_csv: Path,
+    point_xyz: Path,
+    point_report: Path,
+    work_dir: Path,
+) -> LargeModelResult:
+    """Fit the large model's ESP from the GFN2 density instead of a DFT one.
+
+    The embedding, the Merz-Kollman grid and the Gaussian log MCPB.py reads
+    are all the same; only the density underneath changes. That keeps the two
+    backends comparable, which is the point -- a GFN2 fit is worth having only
+    if it can be checked against the DFT one on the same grid.
+    """
+
+    xtb_config = config.xtb
+    try:
+        esp_result = run_xtb_esp(
+            elements=elements,
+            coordinates_angstrom=coordinates,
+            grid_coordinates_angstrom=grid.points,
+            charge=charge,
+            spin=multiplicity - 1,
+            work_dir=work_dir,
+            executable=xtb_config.executable if xtb_config is not None else "xtb",
+            num_threads=xtb_config.num_threads if xtb_config is not None else 1,
+            max_cycle=config.max_cycle,
+            mm_charges=embedding.charge_array,
+            mm_coordinates_angstrom=embedding.coordinate_array,
+        )
+    except XtbEspError as exc:
+        raise McpbPySCFError(f"GFN2 large-model ESP failed: {exc}") from exc
+
+    grid_path = work_dir / "large_model_esp_grid.xyz"
+    values_path = work_dir / "large_model_esp_values.txt"
+    write_grid_xyz(grid, grid_path)
+    values_path.write_text(
+        "".join(f"{float(value):.12e}\n" for value in esp_result.esp_hartree_per_e),
+        encoding="utf-8",
+    )
+    write_mcpb_gaussian_esp_adapter(
+        output_mk_log,
+        atomic_coordinates_angstrom=coordinates,
+        atomic_esp_values=esp_result.atomic_esp_hartree_per_e,
+        fit_coordinates_angstrom=grid.points,
+        fit_esp_values=esp_result.esp_hartree_per_e,
+    )
+    _validate_mk_adapter(
+        output_mk_log,
+        atom_count=len(elements),
+        fit_count=len(grid.points),
+    )
+    (work_dir / "gfn2_esp_report.json").write_text(
+        json.dumps(
+            {
+                **esp_result.metadata,
+                "atomic_charges": [float(value) for value in esp_result.atomic_charges],
+                "warnings": esp_result.warnings,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return LargeModelResult(
+        input_pdb_path=input_pdb,
+        checkpoint_path=work_dir / "gfn2_esp_report.json",
+        mk_log_path=output_mk_log,
+        grid_xyz_path=grid_path,
+        esp_values_path=values_path,
+        point_charge_csv_path=point_csv,
+        point_charge_xyz_path=point_xyz,
+        point_charge_report_path=point_report,
+        scf_stdout_path=work_dir / "xtb_stdout.txt",
+        scf_stderr_path=work_dir / "xtb_stderr.txt",
+        atom_count=len(elements),
+        energy_hartree=esp_result.energy_hartree,
+        grid_point_count=len(grid.points),
+        embedding=embedding,
+        # GFN2 has no DFT convergence machinery, so the fields describing it
+        # are absent rather than defaulted to something that looks configured.
+        scf_algorithm="gfn2",
+        initial_guess="gfn2",
+        initial_density_checkpoint_path=None,
+        initial_density_checkpoint_sha256=None,
+        initial_density_checkpoint_max_displacement_angstrom=None,
+        initial_density_checkpoint_rms_displacement_angstrom=None,
+        initial_density_checkpoint_projected=False,
+        adiis_precondition_cycles=None,
+        adiis_precondition_dft_grid_level=None,
+        precondition_cycles_completed=0,
+        level_shift_mode="none",
+        level_shift_hartree=0.0,
+        damping_factor=0.0,
+        diis_space=0,
+        density_fitting=False,
+        auxiliary_basis=None,
+        spin_square=None,
+        effective_multiplicity=None,
     )
 
 

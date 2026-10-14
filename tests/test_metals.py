@@ -628,3 +628,56 @@ def test_pre_mcpb_coordinate_audit_treats_hoh_to_wat_as_representation_rename(tm
     )
 
     assert _validate_preserved_input_coordinates(reference, observed) == 0.0
+
+
+def test_an_ion_atom_type_is_aliased_when_it_will_not_fit_mcpb():
+    """MCPB.py reads a frcmod atom type from a two-character field.
+
+    pymsmt.lib.readmass is `line[0:2]`, so a three-character Amber type cannot
+    be expressed at all: Cl- is read as Cl with a mass of "-  35.45", and
+    MCPB.py then raises KeyError on Cl- while writing the initial frcmod.
+    mdprep emits a two-character alias carrying the same Li/Merz parameters.
+    """
+
+    from mdprep.metals.mcpb import MCPB_MAX_ATOM_TYPE_LENGTH, mcpb_ion_atom_type
+    from mdprep.metals.nonbonded import ion_atom_type
+
+    # Chloride and bromide do not fit, and are aliased to the element symbol.
+    assert ion_atom_type("Cl", -1) == "Cl-"
+    assert mcpb_ion_atom_type("Cl", -1) == "CL"
+    assert mcpb_ion_atom_type("Br", -1) == "BR"
+    # Fluoride and iodide already fit, and keep Amber's own type.
+    assert mcpb_ion_atom_type("F", -1) == "F-"
+    assert mcpb_ion_atom_type("I", -1) == "I-"
+    for element, charge in (("Cl", -1), ("Br", -1), ("F", -1), ("I", -1)):
+        assert len(mcpb_ion_atom_type(element, charge)) <= MCPB_MAX_ATOM_TYPE_LENGTH
+
+
+def test_mcpb_renames_a_metal_ion_residue_and_atom_to_its_element():
+    """MCPB.py reads an ion's charge by atom name in one place and by residue
+    name in another, then pairs it with the element symbol for van der Waals
+    parameters, so all three have to agree. A deposition calls 6NIE's iron FE
+    in a residue called FE2; Amber calls the atom FE2 too."""
+
+    from mdprep.metals.mcpb import write_mcpb_numbered_pdb
+    from mdprep.structure.pdb import read_pdb
+
+    structure = read_pdb("tests/data/protein_histidine_zinc.pdb")
+    zinc = next(r for r in structure.residues if r.id.resname == "ZN")
+    key = (zinc.id.chain_id, zinc.id.resid, zinc.id.icode)
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "numbered.pdb"
+        mapping = write_mcpb_numbered_pdb(structure, path, ion_names={key: "FE"})
+        renamed = read_pdb(path)
+
+    target = next(r for r in renamed.residues if r.id.resname == "FE")
+    assert [atom.name for atom in target.atoms] == ["FE"]
+    # The original is kept, so what is handed back afterwards is unchanged.
+    original = mapping.original_by_mcpb_atom_id[
+        mapping.mcpb_atom_id_by_original_identity[zinc.atoms[0].atom_identity]
+    ]
+    assert original.resname == "ZN"
+    assert original.name == zinc.atoms[0].name

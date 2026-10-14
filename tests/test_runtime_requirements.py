@@ -172,11 +172,29 @@ def test_no_repair_means_no_pdbfixer():
 
 def test_a_gfn2_qmmm_refinement_requires_xtb_and_openmm():
     packages = conda_packages_for(
-        manifest(refinement={"enabled": True, "qm_method": "gfn2_xtb"})
+        manifest(
+            refinement={
+                "enabled": True,
+                "backend": "ash",
+                "qm_method": "gfn2_xtb",
+            }
+        )
     )
 
     assert "xtb" in packages
     assert "openmm" in packages
+
+
+def test_the_force_field_refinement_needs_no_quantum_engine():
+    """qm_method is only read by the ASH backend, which is no longer the
+    default, so it must not pull xtb into an environment that never runs it."""
+
+    packages = conda_packages_for(
+        manifest(refinement={"enabled": True, "qm_method": "gfn2_xtb"})
+    )
+
+    assert "openmm" in packages
+    assert "xtb" not in packages
 
 
 def test_a_disabled_refinement_adds_nothing():

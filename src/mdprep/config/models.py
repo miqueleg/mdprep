@@ -474,6 +474,12 @@ class McpbPySCFConfig(StrictModel):
         "test_unoptimized",
     ] | None = None
     hessian_backend: Literal["pyscf", "xtb", "gxtb", "mace_polar1"] = "pyscf"
+    # The large model exists to be fitted to an ESP, and that fit sets the
+    # charges the finished system carries. "pyscf" does it at DFT cost;
+    # "xtb" does it with the GFN2 density in seconds, which is the difference
+    # between a method a student can run and one they cannot. GFN2 charges are
+    # not RESP charges in the usual sense, and every report says so.
+    esp_backend: Literal["pyscf", "xtb"] = "pyscf"
     xtb: McpbXtbHessianConfig | None = None
     gxtb: McpbGxtbHessianConfig | None = None
     mace_polar1: McpbMacePolar1HessianConfig | None = None

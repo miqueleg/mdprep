@@ -1,22 +1,55 @@
 # Installation
 
-Recommended user install:
+One command, then check it:
 
 ```bash
-mamba env create -f environment.yml
+conda env create -f environment.yml   # or: mamba env create -f environment.yml
 conda activate mdprep
-pip install -e .
-mdprep selftest --quick
+mdprep doctor
 ```
+
+`environment.yml` installs everything the tutorials need, mdprep included.
+`mdprep doctor` then reports what is present and what is not, and prints the
+command to install anything missing. Given a manifest it reports only what
+that manifest will actually use, so nobody installs a quantum chemistry
+package for a job that never calls it:
+
+```bash
+mdprep doctor examples/16_besd_halogenase_gfn2_mcpb.yaml
+```
+
+To write and validate manifests without preparing anything, the much smaller
+`environment-minimal.yml` is enough.
+
+## What gets installed, and why
+
+| | Needed for |
+|---|---|
+| AmberTools | `tleap`, `antechamber`, `parmchk2`, `MCPB.py` |
+| PropKa | `protonation.method: propka` and `propka_xtb_his` |
+| xTB | histidine tautomers, GFN2 charges, GFN2 Hessians and ESP |
+| OpenMM | force-field refinement, the MM point charges behind the embedded histidine comparison, validation |
+| PDBFixer | `structure.repair`, temporary hydrogenation |
+| RDKit | placing ligand hydrogens from `ligands[].smiles` |
+| ParmEd | topology and charge validation |
+| PySCF | QMMESP and DFT MCPB RESP fitting |
+
+## ASH
+
+`refinement.backend: ash` is the one thing `environment.yml` cannot provide.
+ASH is a manual checkout from
+[RagnarB83/ash](https://github.com/RagnarB83/ash), put on `PYTHONPATH`; it
+also wants `geometric`, which `environment.yml` does install.
+
+**Do not `pip install ash`.** The `ash` distribution on PyPI is unrelated
+software, and installing it produces an environment that looks correct and is
+not. The default `refinement.backend: openmm` needs none of this, holds every
+heavy atom fixed, and relaxes the hydrogens in seconds.
 
 All distributed manifests use relative file paths or executable names.
 Activate the environment containing the requested backend (or put its
 executable on `PATH`) before running mdprep. Runtime reports record resolved
-executables, but no developer-machine path is embedded in the package.
-
-The environment includes the optional external tooling used by supported
-workflows: AmberTools (including MCPB.py), PropKa, xTB, OpenMM, ParmEd, and
-PySCF. Bonded MCPB completion additionally requires user-run Gaussian or
+executables, but no developer-machine path is embedded in the package. Bonded MCPB completion additionally requires user-run Gaussian or
 GAMESS calculations matching the selected MCPB input format when using
 `workflow: complete`. `workflow: pyscf` instead uses either a user-supplied,
 already optimized MCPB small-model PDB or the geometry inherited from a

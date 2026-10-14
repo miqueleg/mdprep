@@ -1,0 +1,17 @@
+# Enough to write, validate and inspect manifests, and to use the web builder.
+# Preparing a system needs the external programs in environment.yml.
+name: mdprep-minimal
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - typer
+  - rich
+  - pydantic
+  - pydantic-settings
+  - pyyaml
+  - numpy
+  - pytest
+  - pip:
+      - -e .
