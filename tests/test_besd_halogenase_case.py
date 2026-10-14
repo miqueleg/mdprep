@@ -162,7 +162,10 @@ BESD_ANSWERS = {
     "structure.repair.add_missing_heavy_atoms": True,
     "protonation.method": "propka_xtb_his",
     "ligand.a_lys_301.net_charge": 1,
+    # 6NIE resolved no ligand hydrogens, so their protonation has to be stated.
+    "ligand.a_lys_301.smiles": "C(CCN)CC(C(=O)O)N",
     "ligand.a_akg_304.net_charge": -2,
+    "ligand.a_akg_304.smiles": "C(CC(=O)[O-])C(=O)C(=O)[O-]",
     "ligand.a_cl_303.net_charge": -1,
     "metal.a_fe2_302_site.model": "bonded_mcpb",
     "metal.a_fe2_302_site.charge": 2,
@@ -199,13 +202,21 @@ def test_the_generated_site_reproduces_the_hand_written_bonds():
 
 
 @needs_structure
-def test_the_generated_manifest_uses_gfn2_throughout():
-    manifest = generated()
+def test_the_generated_manifest_uses_gxtb_for_the_metal_and_gfn2_elsewhere():
+    """The Hessian is the one place GFN2 is not good enough: on this iron it
+    gives a metal-ligand bond a negative force constant. The ESP and the
+    refinement have no such trouble and stay on GFN2, which is where the cost
+    would otherwise be."""
 
-    assert manifest["metals"][0]["mcpb"]["pyscf"]["hessian_backend"] == "xtb"
-    assert manifest["metals"][0]["mcpb"]["pyscf"]["xtb"]["model"] == "gfn2"
-    assert manifest["refinement"]["qm_method"] == "gfn2_xtb"
-    assert manifest["refinement"]["enabled"] is True
+    pyscf = generated()["metals"][0]["mcpb"]["pyscf"]
+
+    assert pyscf["hessian_backend"] == "xtb"
+    assert pyscf["xtb"]["model"] == "gxtb"
+    assert pyscf["esp_backend"] == "xtb"
+    # No executable: naming "xtb" would hand a g-xTB run the GFN-only binary.
+    assert "executable" not in pyscf["xtb"]
+    assert generated()["refinement"]["qm_method"] == "gfn2_xtb"
+    assert generated()["refinement"]["enabled"] is True
 
 
 @needs_structure

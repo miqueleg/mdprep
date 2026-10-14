@@ -275,15 +275,18 @@ def test_init_interactive_writes_a_valid_manifest(tmp_path):
             "",               # project.output_dir
             "no",             # structure.remove_unknown_heterogens
             "yes",            # structure.repair.add_missing_heavy_atoms
+            "",               # structure.repair.unresolved_residues
             "",               # protein.forcefield
             "",               # protein.water_model
             "",               # protonation.method
             "",               # ligand.b_sub_501.include
             "-1",             # ligand.b_sub_501.net_charge
+            "C",              # ligand.b_sub_501.smiles
             "",               # ligand.b_sub_501.atom_types
             "",               # ligand.b_sub_501.charge_method
             "",               # ligand.c_cof_601.include
             "0",              # ligand.c_cof_601.net_charge
+            "C",              # ligand.c_cof_601.smiles
             "",               # ligand.c_cof_601.atom_types
             "",               # ligand.c_cof_601.charge_method
             "",               # solvation.enabled

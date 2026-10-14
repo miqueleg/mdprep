@@ -682,7 +682,38 @@ def _repair_decisions(summary: InspectionSummary) -> list[Decision]:
             evidence=evidence,
             targets=tuple(_target_for(item.residue) for item in incomplete[:25]),
             focus="targets" if incomplete else "structure",
-        )
+        ),
+        Decision(
+            id="structure.repair.unresolved_residues",
+            section="structure",
+            question="What should happen to residues the structure does not resolve at all?",
+            kind="choice",
+            # Rebuilding a whole residue from nothing is a bigger claim than
+            # completing a side chain, so it gets its own question rather than
+            # riding on the one above.
+            default="leave_absent",
+            why=(
+                "A deposition often lists residues it never resolved -- "
+                "expression tags, disordered termini, a loop with no density. "
+                "Building them places a whole residue where no experiment saw "
+                "one. Leaving them out is usually right, and leaves a chain "
+                "break that nothing closes."
+            ),
+            choices=(
+                Choice(
+                    "leave_absent",
+                    "Leave them out",
+                    "Prepare what the structure actually resolved.",
+                ),
+                Choice(
+                    "fail",
+                    "Stop and let me look",
+                    "Refuse to continue until each one has been considered.",
+                ),
+            ),
+            evidence=evidence,
+            focus="structure",
+        ),
     ]
     return decisions
 
@@ -728,14 +759,22 @@ def _protonation_decisions(summary: InspectionSummary) -> list[Decision]:
             kind="choice",
             why=(
                 "mdprep never guesses a catalytic protonation state. Each method "
-                "differs in how much it decides for you and what it needs installed."
+                "differs in how much it decides for you and what it needs "
+                "installed. A neutral histidine is the case that matters: "
+                "tleap will not accept one left as HIS, so a structure with "
+                "histidines needs either an explicit state for every one of "
+                "them or a method that decides them."
             ),
-            default="manual_only",
+            # Manual only when there is nothing to decide. A structure with
+            # histidines would otherwise generate a manifest that stops at
+            # tleap for want of a state nobody was asked for.
+            default="propka_xtb_his" if summary.histidines else "manual_only",
             choices=(
                 Choice(
                     "manual_only",
                     "Manual only",
-                    "You name every non-default state yourself. No external tools needed.",
+                    "You name every non-default state yourself, including every "
+                    "neutral histidine. No external tools needed.",
                 ),
                 Choice(
                     "propka",
@@ -822,6 +861,12 @@ def _disulfide_decisions(summary: InspectionSummary) -> list[Decision]:
     ]
 
 
+def _ligand_has_hydrogens(residue: ResidueRecord) -> bool:
+    return any(
+        (atom.element or "").strip().upper() == "H" for atom in residue.atoms
+    )
+
+
 def _ligand_decisions(
     residue: ResidueRecord, *, coordinates_metal: bool = False
 ) -> list[Decision]:
@@ -858,6 +903,30 @@ def _ligand_decisions(
                 "produces a plausible-looking topology with the wrong electrostatics."
             ),
             evidence=evidence,
+            targets=targets,
+            focus="targets",
+            when=(Condition(include_id, ("true",)),),
+        ),
+        Decision(
+            id=f"ligand.{ligand_id}.smiles",
+            section="ligands",
+            question=f"SMILES for {display}, including its hydrogens",
+            kind="text",
+            # No default: the protonation of a ligand is chemistry, and a PDB
+            # that resolved no hydrogens says nothing about it.
+            default=None,
+            requires_user_input=True,
+            why=(
+                "This structure resolved no hydrogens on this residue, and "
+                "mdprep will not guess them: a carboxylate and a carboxylic "
+                "acid look identical without them. The SMILES fixes the "
+                "tautomer and the protonation, and mdprep places the hydrogens "
+                "to match it. It must describe the same heavy atoms, in the "
+                "same connectivity, as the residue in the file."
+            ),
+            evidence=evidence + (
+                "No hydrogens are present on this residue in the input.",
+            ),
             targets=targets,
             focus="targets",
             when=(Condition(include_id, ("true",)),),
@@ -931,6 +1000,16 @@ def _ligand_decisions(
             focus="targets",
         ),
     ]
+    if _ligand_has_hydrogens(residue):
+        # Already protonated, so mdprep leaves it alone and there is
+        # nothing to ask. Adding hydrogens to a residue that has them is
+        # exactly the failure the SMILES question exists to avoid.
+        decisions = [
+            decision
+            for decision in decisions
+            if decision.id != f"ligand.{ligand_id}.smiles"
+        ]
+    return decisions
 
 
 # Formal charges of the donor groups that appear in a first-shell metal site at
@@ -1152,15 +1231,34 @@ def _metal_decisions(
                 question=f"Which method should compute the Hessian for {display}?",
                 kind="choice",
                 why=(
-                    "The Seminario method turns a Hessian into bonded parameters. "
-                    "GFN2 is orders of magnitude cheaper than DFT and is what makes "
-                    "this tractable outside a cluster."
+                    "The Seminario method turns a Hessian into bonded "
+                    "parameters, and a tight-binding one costs seconds where "
+                    "DFT costs minutes to hours. GFN2 is parameterised for "
+                    "main-group chemistry and gets transition metals wrong: on "
+                    "an Fe(II) site it can give a metal-ligand bond a negative "
+                    "force constant, which mdprep refuses to write out."
                 ),
-                default="gfn2",
+                default="gxtb",
                 choices=(
-                    Choice("gfn2", "GFN2-xTB", "Semi-empirical; fast enough for a teaching run."),
-                    Choice("gxtb", "g-xTB", "Newer xTB parameterisation; needs the official binary."),
-                    Choice("pyscf", "DFT (PySCF)", "Most accurate and far more expensive."),
+                    Choice(
+                        "gxtb",
+                        "g-xTB",
+                        "Tight-binding, handles transition metals. Needs the "
+                        "official g-xTB build, which is separate from the xtb "
+                        "conda installs.",
+                    ),
+                    Choice(
+                        "gfn2",
+                        "GFN2-xTB",
+                        "Runs on the ordinary xtb with nothing to download, but "
+                        "may give a force constant mdprep rejects. Check them.",
+                    ),
+                    Choice(
+                        "pyscf",
+                        "DFT (PySCF)",
+                        "A reference rather than a default: minutes to hours "
+                        "for this one quantity.",
+                    ),
                 ),
                 evidence=evidence,
                 targets=targets,
@@ -1356,6 +1454,9 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
                     "repair": {
                         "backend": "pdbfixer",
                         "add_missing_heavy_atoms": True,
+                        "unresolved_residues": resolved.get(
+                            "structure.repair.unresolved_residues", "leave_absent"
+                        ),
                     }
                 }
                 if resolved.get("structure.repair.add_missing_heavy_atoms")
@@ -1430,6 +1531,9 @@ def _ligand_blocks(
                 "charge_method": resolved[f"ligand.{ligand_id}.charge_method"],
             }
         )
+        smiles = resolved.get(f"ligand.{ligand_id}.smiles")
+        if smiles:
+            blocks[-1]["smiles"] = smiles
     return blocks
 
 
@@ -1470,11 +1574,29 @@ def _metal_blocks(
         model_charge = resolved[f"metal.{site_id}.model_charge"]
         ion["multiplicity"] = multiplicity
         backend = resolved[f"metal.{site_id}.hessian_backend"]
+        # A donor that is a one-atom residue is an ion, not a cofactor: Amber
+        # parameterises a halide directly, and antechamber refuses a single
+        # atom, so it can be neither an ions: entry (those are metals) nor a
+        # GAFF ligand. It is declared on the site instead.
+        coordinating = [
+            {
+                "selector": donor.to_atom_selector(),
+                "element": _monatomic_ion_element(donor),
+                "charge": _monatomic_ion_charge(donor),
+            }
+            for donor in confirm.targets[1:]
+            if _is_monatomic_ion_target(donor)
+        ]
+        site_block: dict[str, Any] = {
+            "id": site_id,
+            "model": "bonded_mcpb",
+            "ions": [ion],
+        }
+        if coordinating:
+            site_block["coordinating_ions"] = coordinating
         blocks.append(
             {
-                "id": site_id,
-                "model": "bonded_mcpb",
-                "ions": [ion],
+                **site_block,
                 "mcpb": {
                     "workflow": "pyscf",
                     "provisional_nonbonded_parameter_set": "12_6",
@@ -1503,29 +1625,59 @@ def _metal_blocks(
     return blocks
 
 
+# Halides are the coordinating ions that actually turn up in a metal site.
+# Amber parameterises each directly, so the charge follows from the element.
+MONATOMIC_ION_CHARGES = {"F": -1, "CL": -1, "BR": -1, "I": -1}
+
+
+def _is_monatomic_ion_target(target: ResidueTarget) -> bool:
+    """Whether this donor is a one-atom ion rather than part of a molecule.
+
+    A lone ion is written with its residue and its atom both named after the
+    element, which a donor target does carry; the element field is only
+    populated for the metal itself.
+    """
+
+    resname = (target.resname or "").strip().upper()
+    if resname not in MONATOMIC_ION_CHARGES:
+        return False
+    return (target.atom_name or "").strip().upper() == resname
+
+
+def _monatomic_ion_element(target: ResidueTarget) -> str:
+    resname = (target.resname or "").strip().upper()
+    return resname[0] + resname[1:].lower()
+
+
+def _monatomic_ion_charge(target: ResidueTarget) -> int:
+    return MONATOMIC_ION_CHARGES[(target.resname or "").strip().upper()]
+
+
 def _mcpb_pyscf_block(hessian_backend: str) -> dict[str, Any]:
     """QM settings for one bonded site.
 
     The geometry comes from the QM/MM refinement stage rather than a
     pre-optimised PDB, so that nothing has to be prepared by hand first.
+
+    No executable is written. g-xTB is a separate build and the xtb conda
+    installs is GFN-only, so naming "xtb" here would hand a g-xTB run the
+    wrong binary; leaving it out lets mdprep look for a real one and say what
+    to install when there is none. method and basis are still required by the
+    schema, and are what a later esp_backend: pyscf would use.
     """
 
     block: dict[str, Any] = {
         "geometry_source": "qmmm_refinement",
-        "hessian_backend": "xtb" if hessian_backend == "gfn2" else hessian_backend,
+        "hessian_backend": "pyscf" if hessian_backend == "pyscf" else "xtb",
+        # GFN2 for the ESP regardless of the Hessian method: fitting the large
+        # model is where the DFT cost actually lands, and GFN2 has no trouble
+        # with it. Switch to pyscf when the charges need to be RESP proper.
+        "esp_backend": "pyscf" if hessian_backend == "pyscf" else "xtb",
         "method": "B3LYP",
         "basis": "6-31G*",
     }
     if hessian_backend in {"gfn2", "gxtb"}:
-        block["xtb"] = {
-            "model": hessian_backend,
-            "executable": "xtb",
-            "num_threads": 1,
-        }
-    if hessian_backend == "gxtb":
-        block["hessian_backend"] = "gxtb"
-        block["gxtb"] = {"executable": "xtb", "num_threads": 1}
-        block.pop("xtb", None)
+        block["xtb"] = {"model": hessian_backend, "num_threads": 8}
     return block
 
 
@@ -1543,7 +1695,11 @@ def _refinement_block(
     multiplicities = {site["ions"][0]["multiplicity"] for site in bonded}
     return {
         "enabled": True,
-        "backend": "ash",
+        # The force-field backend holds every heavy atom and relaxes the
+        # hydrogens in seconds. ASH is a manual checkout that no package
+        # manager provides, so generating a manifest that requires it would
+        # hand the user something they cannot run.
+        "backend": "openmm",
         "qm_method": "gfn2_xtb",
         "qm_components": {
             "ligands": [entry["id"] for entry in ligands],

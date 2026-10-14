@@ -38,6 +38,8 @@ def answer_blocking(plan: DecisionPlan, **overrides: object) -> dict[str, object
     for decision in plan.blocking():
         if decision.id.endswith(".net_charge"):
             answers[decision.id] = 0
+        elif decision.id.endswith(".smiles"):
+            answers[decision.id] = "C"
         elif decision.id.endswith(".model"):
             answers[decision.id] = "nonbonded"
         elif decision.id.endswith(".charge"):
@@ -274,7 +276,8 @@ def test_a_confirmed_coordination_shell_is_generated():
     assert site["model"] == "bonded_mcpb"
     assert site["mcpb"]["bonds"]
     assert site["mcpb"]["pyscf"]["hessian_backend"] == "xtb"
-    assert site["mcpb"]["pyscf"]["xtb"]["model"] == "gfn2"
+    assert site["mcpb"]["pyscf"]["xtb"]["model"] == "gxtb"
+    assert site["mcpb"]["pyscf"]["esp_backend"] == "xtb"
     ManifestConfig.model_validate(manifest)
 
 
