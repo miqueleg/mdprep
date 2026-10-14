@@ -1294,6 +1294,13 @@ def _mcpb_pyscf_settings(item: dict[str, Any]) -> dict[str, Any]:
         "hessian_backend": (
             "xtb" if item["hessian_backend"] == "gxtb" else "pyscf"
         ),
+        # GFN2 for the large-model ESP when a tight-binding binary is already
+        # provisioned: fitting the large model is where the DFT cost lands,
+        # and the g-xTB build runs GFN2 too. A pyscf Hessian means no xtb was
+        # downloaded, so the ESP stays on DFT.
+        "esp_backend": (
+            "xtb" if item["hessian_backend"] == "gxtb" else "pyscf"
+        ),
         "method": "B3LYP",
         "basis": "6-31G*",
         "max_cycle": 150,
@@ -1529,6 +1536,15 @@ def build_manifest(
             "remove_unknown_heterogens": False,
             "preserve_chain_ids": True,
             "remove_input_hydrogens": False,
+            # Without this, a residue the deposition did not fully resolve
+            # reaches tleap truncated and nothing fails: the prepared system
+            # just contains, say, a leucine with no CG. Residues that are
+            # absent entirely are left out rather than invented.
+            "repair": {
+                "backend": "pdbfixer",
+                "add_missing_heavy_atoms": True,
+                "unresolved_residues": "leave_absent",
+            },
         },
         "protein": {
             "forcefield": options["forcefield"],
