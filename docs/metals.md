@@ -272,11 +272,57 @@ directory; the prepared system keeps the names the input used.
 ### A zero force constant is reported, not shipped
 
 A Seminario force constant of zero means the Hessian has no restoring force
-along that bond, and mdprep stops rather than writing it out. On BesD with
-`hessian_backend: xtb`, Fe-O5 of the bidentate alpha-ketoglutarate comes out
-at zero while the other four bonds are 11.9-26.3 kcal/mol/A^2 at normal
-distances. That is GFN2's description of a weakly bound keto oxygen, not a
-broken geometry; use a DFT Hessian for that site if the bond matters.
+along that bond, and mdprep stops rather than writing it out.
+
+On BesD with `hessian_backend: xtb` and `xtb.model: gfn2`, Fe-O5 of the
+bidentate alpha-ketoglutarate does exactly that. Projecting the GFN2 Hessian
+onto the five Fe-ligand bonds shows why: that one comes out **negative**, and
+MCPB.py clamps it to zero.
+
+| Fe bond | r (A) | GFN2 | g-xTB |
+|---|---|---|---|
+| Fe-NE2 (His137) | 2.247 | 44.1 | 78.7 |
+| Fe-NE2 (His204) | 2.224 | 28.4 | 84.7 |
+| Fe-Cl | 2.392 | 46.6 | 112.4 |
+| Fe-O1 (aKG) | 2.161 | 51.1 | 99.3 |
+| Fe-O5 (aKG) | 2.179 | **-16.5** | 86.5 |
+
+(Raw Seminario projections in kcal/mol/A^2; MCPB.py reports half these, using
+the `E = k(r-r0)^2` convention.)
+
+GFN2 is parameterised for main-group chemistry and describes transition-metal
+coordination poorly, which is what the negative value is. The geometry is not
+at fault: every distance is normal.
+
+### Use g-xTB for a transition-metal Hessian
+
+`xtb.model: gxtb` fixes it at the same order of cost. On this site the
+Hessian took 8.1 s against GFN2's 2.2 s, and all five bonds come out positive
+and in a normal range. The whole BesD preparation -- structure through
+solvated Amber system -- then completes in about a minute.
+
+```yaml
+pyscf:
+  hessian_backend: xtb
+  xtb:
+    model: gxtb
+    executable: /path/to/g-xtb/bin/xtb   # a g-xTB-enabled build, not plain xtb
+    num_threads: 8
+  esp_backend: xtb                        # GFN2 is fine for the ESP
+```
+
+g-xTB needs a separate binary from the
+[official g-xTB releases](https://github.com/grimme-lab/g-xtb/releases);
+`xtb.model: gfn2` runs on the ordinary conda xtb. That is why the shipped BesD
+example uses GFN2 and stops at this bond rather than depending on a download:
+the error names the bond, and this is the fix.
+
+If you want a DFT reference instead, `hessian_backend: pyscf` with a pure
+functional and a small basis (for example `method: TPSS`, `basis: def2-SVP`)
+is far cheaper than the B3LYP/6-31G* default, because the cost of a hybrid is
+dominated by exact exchange. Expect minutes to hours for a 46-atom analytic
+Hessian rather than seconds, and check the result against the tight-binding
+one with `mdprep compare-mcpb`.
 
 ## Fixed-geometry PySCF/MCPB workflow
 

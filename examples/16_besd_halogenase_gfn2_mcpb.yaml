@@ -104,6 +104,12 @@ metals:
       large_model_spin: 5
       pyscf:
         geometry_source: qmmm_refinement
+        # GFN2 describes transition-metal coordination poorly: it gives
+        # Fe-O5 of the bidentate aKG a negative force constant, which MCPB.py
+        # clamps to zero and mdprep then refuses. Switching this site to
+        # xtb.model: gxtb fixes it at a similar cost (8 s against 2 s) but
+        # needs a separate g-xTB binary, so the example stops with a clear
+        # error instead of depending on a download. See docs/metals.md.
         hessian_backend: xtb
         # GFN2 for the large-model ESP as well as the Hessian. On this site
         # that is ~60 s against tens of minutes for B3LYP/6-31G*. The charges
