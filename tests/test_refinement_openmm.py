@@ -187,3 +187,4 @@ def test_the_ash_backend_is_still_available():
     )
 
     assert manifest.refinement.backend == "ash"
+

@@ -26,6 +26,13 @@ BROWSER_SAFE_PACKAGES = {
     "yaml",
 }
 
+# Python's site machinery imports these at interpreter startup if the
+# environment provides them, which several do: a venv built by pip, a coverage
+# hook, anything shipping a .pth file. They are not imported by the planning
+# path and the browser never downloads them, so counting them would make this
+# fail for reasons that have nothing to do with what it is checking.
+INTERPRETER_HOOKS = {"sitecustomize", "usercustomize"}
+
 PLANNING_IMPORTS = (
     "import mdprep.config.decisions\n"
     "import mdprep.workflows.wizard\n"
@@ -45,7 +52,9 @@ def third_party_imports(script: str) -> set[str]:
         # nothing about what the browser has to download.
         "real = {t for t in tops "
         "if getattr(sys.modules.get(t), '__file__', None) is not None}\n"
-        "print(' '.join(sorted(t for t in real if t not in stdlib and t != 'mdprep')))\n"
+        f"ignored = {sorted(INTERPRETER_HOOKS)!r}\n"
+        "print(' '.join(sorted(t for t in real "
+        "if t not in stdlib and t != 'mdprep' and t not in ignored)))\n"
     )
     result = subprocess.run(
         [sys.executable, "-c", probe],

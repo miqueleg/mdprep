@@ -22,7 +22,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 from mdprep.config.models import OpenmmRefinementConfig
 
@@ -125,12 +125,13 @@ def run_openmm_refinement(
     for index in heavy:
         system.setParticleMass(index, 0.0)
 
-    platform = _select_platform(mm, config)
-    simulation = Simulation(
-        topology,
-        system,
-        mm.VerletIntegrator(1.0 * unit.femtoseconds),
-        platform,
+    simulation, platform = _build_simulation(
+        mm,
+        unit,
+        Simulation,
+        topology=topology,
+        system=system,
+        config=config,
     )
     simulation.context.setPositions(inpcrd.positions)
     if periodic:
@@ -206,22 +207,73 @@ def run_openmm_refinement(
     return run
 
 
-def _select_platform(mm: Any, config: OpenmmRefinementConfig) -> Any:
+# Fastest first. A platform being registered is not the same as it working:
+# OpenMM ships the CUDA plugin wherever it was built with CUDA, so a machine
+# with no GPU -- a CI runner, a cluster login node -- still lists it, and only
+# fails when a context is created on it.
+AUTO_PLATFORM_ORDER = ("CUDA", "HIP", "Metal", "OpenCL", "CPU", "Reference")
+
+
+def platform_candidates(requested: str, available: Sequence[str]) -> list[str]:
+    """Platforms to try, in order, for a refinement."""
+
+    available_set = set(available)
+    if requested != "auto":
+        if requested not in available_set:
+            raise OpenmmRefinementError(
+                f"Requested OpenMM platform {requested!r} is unavailable; "
+                f"available platforms: {', '.join(available)}"
+            )
+        return [requested]
+    candidates = [name for name in AUTO_PLATFORM_ORDER if name in available_set]
+    if not candidates:
+        raise OpenmmRefinementError("OpenMM reports no usable computational platforms")
+    return candidates
+
+
+def _build_simulation(
+    mm: Any,
+    unit: Any,
+    Simulation: Any,
+    *,
+    topology: Any,
+    system: Any,
+    config: OpenmmRefinementConfig,
+) -> tuple[Any, Any]:
+    """Create the simulation on the first platform that actually works.
+
+    Selecting a platform by name and hoping is how a GPU-less machine with the
+    CUDA plugin installed gets an unhandled driver error instead of a run on
+    the CPU. Each candidate is tried, and an explicitly requested one still
+    fails loudly rather than silently falling back to something slower.
+    """
+
     available = [
         mm.Platform.getPlatform(index).getName()
         for index in range(mm.Platform.getNumPlatforms())
     ]
-    if config.platform != "auto":
-        if config.platform not in available:
-            raise OpenmmRefinementError(
-                f"Requested OpenMM platform {config.platform!r} is unavailable; "
-                f"available platforms: {', '.join(available)}"
+    failures: dict[str, str] = {}
+    for candidate in platform_candidates(config.platform, available):
+        platform = mm.Platform.getPlatformByName(candidate)
+        try:
+            simulation = Simulation(
+                topology,
+                system,
+                mm.VerletIntegrator(1.0 * unit.femtoseconds),
+                platform,
             )
-        return mm.Platform.getPlatformByName(config.platform)
-    for candidate in ("CUDA", "OpenCL", "CPU", "Reference"):
-        if candidate in available:
-            return mm.Platform.getPlatformByName(candidate)
-    raise OpenmmRefinementError("OpenMM reports no usable computational platforms")
+        except Exception as exc:  # OpenMM plugins raise several exception types
+            failures[candidate] = str(exc)
+            if config.platform != "auto":
+                raise OpenmmRefinementError(
+                    f"Requested OpenMM platform {candidate!r} failed: {exc}"
+                ) from exc
+            continue
+        return simulation, platform
+    raise OpenmmRefinementError(
+        "No OpenMM platform could initialize: "
+        + "; ".join(f"{key}: {value}" for key, value in failures.items())
+    )
 
 
 def _is_finite(value: float) -> bool:
