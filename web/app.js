@@ -33,6 +33,12 @@ const state = {
 };
 
 const el = (id) => document.getElementById(id);
+
+// Prediction writes mmCIF -- Boltz emits ModelCIF, the RCSB serves mmCIF --
+// so the builder takes either. mdprep chooses its reader by extension too,
+// which is why the name is carried through rather than the contents sniffed.
+const structureFormat = (name) =>
+  /\.(cif|mmcif)$/i.test(name || "") ? "cif" : "pdb";
 const show = (id) => el(id).classList.remove("hidden");
 const hide = (id) => el(id).classList.add("hidden");
 
@@ -168,7 +174,9 @@ function initViewer() {
   const container = el("viewer");
   container.innerHTML = "";
   state.viewer = $3Dmol.createViewer(container, { backgroundColor: "white" });
-  state.viewer.addModel(state.structureText, "pdb");
+  // 3Dmol parses the coordinates itself and needs to be told which format,
+  // so this follows the same extension the Python side dispatched on.
+  state.viewer.addModel(state.structureText, structureFormat(state.structureName));
   state.viewer.setStyle({}, { cartoon: { color: "spectrum" } });
   state.viewer.zoomTo();
   state.viewer.render();

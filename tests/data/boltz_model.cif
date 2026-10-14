@@ -1,0 +1,41 @@
+data_model
+_entry.id model
+_struct.pdbx_structure_determination_methodology computational
+_audit_conform.dict_name mmcif_ma.dic
+#
+loop_
+_chem_comp.id
+_chem_comp.type
+ALA 'L-peptide linking'
+AKG non-polymer
+FE2 non-polymer
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_seq_id
+_atom_site.auth_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.label_asym_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.label_entity_id
+_atom_site.auth_asym_id
+_atom_site.auth_comp_id
+_atom_site.B_iso_or_equiv
+_atom_site.pdbx_PDB_model_num
+ATOM 1 N N . ALA 1 1 ? A 0.000 0.000 0.000 1 1 A ALA 91.5 1
+ATOM 2 C CA . ALA 1 1 ? A 1.458 0.000 0.000 1 1 A ALA 91.5 1
+ATOM 3 C C . ALA 1 1 ? A 2.009 1.420 0.000 1 1 A ALA 91.5 1
+ATOM 4 O O . ALA 1 1 ? A 1.251 2.390 0.000 1 1 A ALA 91.5 1
+ATOM 5 C CB . ALA 1 1 ? A 1.988 -0.773 -1.199 1 1 A ALA 91.5 1
+HETATM 6 FE FE . FE2 . 1 ? B 5.000 5.000 5.000 1 2 B FE2 70.2 1
+HETATM 7 C C1 . AKG . 1 ? C 7.000 5.000 5.000 1 3 C AKG 65.0 1
+HETATM 8 O O1 . AKG . 1 ? C 6.200 5.800 5.400 1 3 C AKG 65.0 1
+#

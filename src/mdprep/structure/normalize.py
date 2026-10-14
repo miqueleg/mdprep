@@ -15,6 +15,7 @@ from mdprep.structure.classify import (
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord
 from mdprep.structure.pdb import read_pdb
+from mdprep.structure.reader import read_structure
 from mdprep.structure.repair import (
     StructureRepairError,
     StructureRepairResult,
@@ -124,7 +125,7 @@ def normalize_structure_stage(
         assert repair_result is not None
         structure = repair_result.structure
     else:
-        structure = read_pdb(
+        structure = read_structure(
             input_path,
             altloc_policy=manifest.structure.altloc_policy,
         )
