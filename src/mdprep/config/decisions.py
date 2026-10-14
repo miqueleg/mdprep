@@ -1243,7 +1243,11 @@ def _metal_decisions(
                     "This is the charge of the metal plus every residue in the "
                     "coordination sphere, and it sets the electron count of the "
                     "quantum calculation. A wrong value gives converged, wrong "
-                    "parameters."
+                    "parameters. mdprep proposes the sum of the charges already "
+                    "given -- the metal's oxidation state, each cofactor's net "
+                    "charge, a halide's ionic charge, a protein donor's formal "
+                    "charge -- and shows the arithmetic. Change it if the site "
+                    "is not what those terms describe."
                 ),
                 evidence=donor_evidence,
                 targets=targets,
@@ -1771,6 +1775,100 @@ def ligands_needing_hydrogens(
         if ligand_id in plan.findings.get("ligands_without_hydrogens", ()):
             needing.append(ligand_id)
     return needing
+
+
+def proposed_model_charge(
+    plan: DecisionPlan, answers: Mapping[str, Any], site_id: str
+) -> tuple[int | None, list[str]]:
+    """The capped model's charge, summed from answers already given.
+
+    The small and large models hold the metal and everything bonded to it, so
+    the charge is the sum of their formal charges. mdprep asks for every one
+    of those separately -- the metal's oxidation state, each ligand's net
+    charge -- so by the time this question arrives it has the terms and
+    should not make the user add them up again.
+
+    A protein donor contributes the formal charge of its residue name, a
+    coordinating halide its ionic charge, and a cofactor the net charge the
+    user declared for it. Returns ``None`` when a term is still unknown,
+    because half a sum is worse than no suggestion.
+
+    The terms are returned alongside so a front end can show the arithmetic
+    rather than a bare number nobody can check.
+    """
+
+    confirm = plan.by_id(f"metal.{site_id}.confirm_donors")
+    if confirm is None or not confirm.targets:
+        return None, []
+
+    raw_metal = answers.get(f"metal.{site_id}.charge")
+    if raw_metal is None or str(raw_metal) == "":
+        return None, []
+    try:
+        total = int(raw_metal)
+    except (TypeError, ValueError):
+        return None, []
+    terms = [f"{confirm.targets[0].resname} {total:+d}"]
+
+    # A ligand's own block carries the charge the user gave it, found by
+    # position rather than by name: a cofactor's residue name says nothing
+    # about its protonation.
+    ligand_charges: dict[tuple[str, int, str | None], Any] = {}
+    for decision in plan.decisions:
+        if decision.section != "ligands" or not decision.id.endswith(".net_charge"):
+            continue
+        subject = decision.subject
+        if subject is None:
+            continue
+        given = answers.get(decision.id)
+        if given is None or str(given) == "":
+            continue
+        ligand_charges[(subject.chain, subject.resid, subject.icode)] = given
+
+    complete = True
+    seen: set[tuple[str, int, str | None]] = set()
+    for donor in confirm.targets[1:]:
+        key = (donor.chain, donor.resid, donor.icode)
+        # A bidentate cofactor appears once per donating atom and must be
+        # counted once.
+        if key in seen:
+            continue
+        seen.add(key)
+        resname = (donor.resname or "").strip().upper()
+        charge = STANDARD_DONOR_FORMAL_CHARGE.get(resname)
+        if charge is None and key in ligand_charges:
+            try:
+                charge = int(ligand_charges[key])
+            except (TypeError, ValueError):
+                charge = None
+        if charge is None:
+            terms.append(f"{resname}{donor.resid} ?")
+            complete = False
+            continue
+        terms.append(f"{resname}{donor.resid} {charge:+d}")
+        total += charge
+    return (total if complete else None), terms
+
+
+def proposed_answers(
+    plan: DecisionPlan, answers: Mapping[str, Any]
+) -> dict[str, str]:
+    """Values mdprep can work out from what has been answered so far.
+
+    A front end shows these the way it shows a default: filled in, and
+    changeable. They are not defaults on the decision itself because they
+    depend on other answers, which a plan computed once cannot know.
+    """
+
+    proposals: dict[str, str] = {}
+    for decision in plan.decisions:
+        if decision.section != "metals" or not decision.id.endswith(".model_charge"):
+            continue
+        site_id = decision.id.split(".")[1]
+        value, _ = proposed_model_charge(plan, answers, site_id)
+        if value is not None:
+            proposals[decision.id] = str(value)
+    return proposals
 
 
 def unresolved_mcpb_sites(

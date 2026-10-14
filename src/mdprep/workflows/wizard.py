@@ -8,6 +8,8 @@ notebook can reuse the same plan without reimplementing any of it.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Mapping
@@ -21,6 +23,7 @@ from mdprep.config.decisions import (
     build_manifest,
     plan_decisions,
     ligands_needing_hydrogens,
+    proposed_answers,
     unresolved_mcpb_sites,
 )
 from mdprep.config.models import ManifestConfig
@@ -91,11 +94,19 @@ def collect_answers(
         if decision.id in preset and preset[decision.id] is not None:
             answers[decision.id] = _coerce(decision, preset[decision.id])
             continue
+        # Some answers follow from earlier ones -- a capped model's charge is
+        # the sum of parts already given -- so they are offered the way a
+        # default is, and can still be overridden.
+        proposal = proposed_answers(plan, answers).get(decision.id)
+        if proposal is not None:
+            decision = replace(decision, default=proposal)
         last_error: str | None = None
         for _ in range(max_attempts):
             raw = prompt(decision).strip()
             if not raw:
-                if decision.requires_user_input or decision.default is None:
+                if decision.default is None or (
+                    decision.requires_user_input and proposal is None
+                ):
                     # Refusing to default here is the point of the whole design.
                     last_error = "a value is required and has no default"
                     continue

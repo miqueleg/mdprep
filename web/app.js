@@ -74,7 +74,11 @@ async function bootPython() {
 import json
 from mdprep.config.decisions import plan_decisions, build_manifest, DecisionError
 from mdprep.workflows.wizard import render_manifest_yaml
-from mdprep.config.decisions import unresolved_mcpb_sites, ligands_needing_hydrogens
+from mdprep.config.decisions import (
+    unresolved_mcpb_sites,
+    ligands_needing_hydrogens,
+    proposed_answers,
+)
 from mdprep.workflows.runtime import conda_packages_for, micromamba_setup_commands
 
 _PLAN = {}
@@ -85,6 +89,12 @@ def mdprep_plan(text, name):
     plan = plan_decisions(name)
     _PLAN["plan"] = plan
     return json.dumps(plan.to_dict())
+
+def mdprep_proposals(answers_json):
+    """Answers that follow from earlier ones, such as a capped model charge."""
+    plan = _PLAN["plan"]
+    return json.dumps(proposed_answers(plan, json.loads(answers_json)))
+
 
 def mdprep_build(answers_json, mdprep_spec):
     plan = _PLAN["plan"]
@@ -291,10 +301,35 @@ function renderCurrentQuestion() {
   focusOn(decision);
 }
 
+// Some answers follow from earlier ones -- a capped QM model's charge is the
+// sum of the metal, the donors and the cofactors, every one of which has
+// already been asked for. Worked out in Python so the arithmetic lives in one
+// place, and offered the way a default is: filled in, and changeable.
+function proposalFor(decision) {
+  if (!state.pyodide || !state.plan) return null;
+  try {
+    const fn = state.pyodide.globals.get("mdprep_proposals");
+    const proposals = JSON.parse(fn(JSON.stringify(state.answers)));
+    fn.destroy();
+    return proposals[decision.id] ?? null;
+  } catch {
+    // A proposal is a convenience; failing to compute one must not stop the
+    // question being asked.
+    return null;
+  }
+}
+
 function renderAnswerInput(decision) {
   const area = el("answer-area");
   const existing = state.answers[decision.id];
-  const value = existing !== undefined ? existing : decision.default;
+  const proposed = existing === undefined ? proposalFor(decision) : null;
+  const value =
+    existing !== undefined
+      ? existing
+      : proposed !== null
+        ? proposed
+        : decision.default;
+  state.proposed = proposed;
   area.innerHTML = "";
 
   if (decision.kind === "choice") {
@@ -351,12 +386,13 @@ function onNext() {
   if (!decision) return;
   const raw = readAnswer();
   if (raw === "") {
-    if (decision.requires_user_input || decision.default === null) {
+    const fallback = state.proposed ?? decision.default;
+    if (fallback === null || fallback === undefined) {
       el("answer-error").textContent =
         "This question has no default. Please give a value.";
       return;
     }
-    state.answers[decision.id] = decision.default;
+    state.answers[decision.id] = fallback;
   } else {
     state.answers[decision.id] = raw;
   }

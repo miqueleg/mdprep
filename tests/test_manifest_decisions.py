@@ -648,3 +648,76 @@ def test_a_ligand_that_already_has_hydrogens_is_neither_asked_nor_reported():
 
     assert [d.id for d in plan.decisions if d.id.endswith(".smiles")] == []
     assert plan.findings["ligands_without_hydrogens"] == []
+
+
+def test_the_capped_model_charge_is_summed_from_answers_already_given():
+    """mdprep asks for the metal's oxidation state and each ligand's net
+    charge, so by the time it asks for the model charge it has the terms.
+    Making the user add them up again invites an arithmetic slip that gives
+    converged, wrong parameters."""
+
+    from mdprep.config.decisions import proposed_model_charge
+
+    plan = plan_decisions(BESD) if (BESD := Path("examples/tutorials/besd_6nie/6NIE.pdb")).is_file() else None
+    if plan is None:
+        pytest.skip("the vendored reference structure is missing")
+
+    value, terms = proposed_model_charge(
+        plan,
+        {
+            "metal.a_fe2_302_site.charge": 2,
+            "ligand.a_akg_304.net_charge": -2,
+        },
+        "a_fe2_302_site",
+    )
+
+    # Fe(2+) + aKG(2-) + Cl(1-) + two neutral histidines.
+    assert value == -1
+    assert " ".join(terms) == "FE2 +2 AKG304 -2 HIS204 +0 HIS137 +0 CL303 -1"
+
+
+def test_a_bidentate_cofactor_is_counted_once():
+    """alpha-ketoglutarate donates two oxygens and appears twice among the
+    donors; counting its charge twice would be off by its whole charge."""
+
+    from mdprep.config.decisions import proposed_model_charge
+
+    structure = Path("examples/tutorials/besd_6nie/6NIE.pdb")
+    if not structure.is_file():
+        pytest.skip("the vendored reference structure is missing")
+    plan = plan_decisions(structure)
+    confirm = plan.by_id("metal.a_fe2_302_site.confirm_donors")
+
+    donating_atoms = [t for t in confirm.targets[1:] if t.resname == "AKG"]
+    assert len(donating_atoms) == 2  # O1 and O5
+
+    _, terms = proposed_model_charge(
+        plan,
+        {"metal.a_fe2_302_site.charge": 2, "ligand.a_akg_304.net_charge": -2},
+        "a_fe2_302_site",
+    )
+    assert len([term for term in terms if term.startswith("AKG")]) == 1
+
+
+def test_no_charge_is_proposed_while_a_term_is_still_unknown():
+    """Half a sum is worse than no suggestion: it looks like an answer."""
+
+    from mdprep.config.decisions import proposed_answers, proposed_model_charge
+
+    structure = Path("examples/tutorials/besd_6nie/6NIE.pdb")
+    if not structure.is_file():
+        pytest.skip("the vendored reference structure is missing")
+    plan = plan_decisions(structure)
+
+    # The cofactor's charge has not been given yet.
+    value, terms = proposed_model_charge(
+        plan, {"metal.a_fe2_302_site.charge": 2}, "a_fe2_302_site"
+    )
+    assert value is None
+    assert any(term.endswith("?") for term in terms)
+    assert "metal.a_fe2_302_site.model_charge" not in proposed_answers(
+        plan, {"metal.a_fe2_302_site.charge": 2}
+    )
+
+    # And none at all before the metal's own oxidation state is known.
+    assert proposed_model_charge(plan, {}, "a_fe2_302_site") == (None, [])
