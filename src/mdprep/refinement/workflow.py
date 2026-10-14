@@ -14,6 +14,11 @@ from mdprep.ligands.workflow import (
     build_provisional_am1bcc_system,
 )
 from mdprep.protonation.apply import ProtonationResult
+from mdprep.refinement.openmm_minimizer import (
+    OpenmmRefinementError,
+    OpenmmRefinementRun,
+    run_openmm_refinement,
+)
 from mdprep.refinement.ash import (
     AshRefinementCache,
     AshRefinementError,
@@ -44,9 +49,11 @@ class RefinementResult:
     provisional_ligands: LigandStageResult
     provisional_system: QmmespProvisionalSystem
     selection: RefinementSelection
-    ash_run: AshRefinementRun
+    # Exactly one of these is set, depending on refinement.backend.
+    ash_run: AshRefinementRun | None
     coordinate_transfer: CoordinateTransferResult
     refined_hydrogenated_pdb_path: Path
+    openmm_run: "OpenmmRefinementRun | None" = None
     warnings: tuple[str, ...] = field(default_factory=tuple)
 
     @property
@@ -57,21 +64,32 @@ class RefinementResult:
         active_waters = sum(
             bool(item["water"]) for item in self.selection.active_residues
         )
-        return {
+        report: dict[str, object] = {
             "status": "complete",
-            "backend": "ash",
-            "qm_method": self.ash_run.qm_method,
-            "embedding": self.ash_run.embedding,
+            "backend": "ash" if self.ash_run is not None else "openmm",
+            # AM1-BCC here is provisional in both backends: it positions
+            # hydrogens. A QMMESP or MCPB fit configured in the manifest runs
+            # afterwards and its charges are what reach the final build.
             "provisional_ligand_charge_method": "am1bcc",
             "provisional_ligands": self.provisional_ligands.to_report_dict()["ligands"],
             "provisional_system": self.provisional_system.to_dict(),
             "selection": self.selection.to_dict(),
             "active_water_residue_count": active_waters,
-            "ash": self.ash_run.to_dict(),
             "coordinate_transfer": self.coordinate_transfer.to_dict(),
             "refined_hydrogenated_pdb_path": str(self.refined_hydrogenated_pdb_path),
             "warnings": list(self.warnings),
         }
+        if self.ash_run is not None:
+            report["qm_method"] = self.ash_run.qm_method
+            report["embedding"] = self.ash_run.embedding
+            report["ash"] = self.ash_run.to_dict()
+        else:
+            assert self.openmm_run is not None
+            # The force-field backend relaxes every hydrogen, so the active
+            # region describes what was selected, not what was allowed to move.
+            report["openmm"] = self.openmm_run.to_dict()
+            report["moved"] = "all hydrogens; every heavy atom held fixed"
+        return report
 
 
 def run_refinement_stage(
@@ -87,7 +105,6 @@ def run_refinement_stage(
 
     if not manifest.refinement.enabled:
         raise RefinementWorkflowError("Refinement stage requested but refinement.enabled is false")
-    assert manifest.refinement.ash is not None  # validated by ManifestConfig
     output = Path(output_dir)
     _remove_stale_refinement_failure(output)
     refinement_dir = output / "refinement"
@@ -108,22 +125,39 @@ def run_refinement_stage(
             topology_structure=topology_structure,
             manifest=manifest,
         )
-        ash_run = run_ash_refinement(
-            prmtop_path=provisional_system.prmtop_path,
-            inpcrd_path=provisional_system.inpcrd_path,
-            selection=selection,
-            config=manifest.refinement.ash,
-            work_dir=ash_dir,
-            qm_method=manifest.refinement.qm_method,
-            embedding=manifest.refinement.embedding,
-            mace_polar1=manifest.refinement.mace_polar1,
-            cached_run=cached_ash_run,
-        )
+        if manifest.refinement.backend == "openmm":
+            # The refinement only ever moves hydrogens, which a force field
+            # settles in seconds against the provisional system already built
+            # above. Charges and parameters still come from whatever QMMESP or
+            # MCPB calculation runs later.
+            openmm_run = run_openmm_refinement(
+                prmtop_path=provisional_system.prmtop_path,
+                inpcrd_path=provisional_system.inpcrd_path,
+                config=manifest.refinement.openmm,
+                work_dir=refinement_dir / "openmm",
+            )
+            ash_run = None
+            optimized = openmm_run.optimized_coordinates_angstrom
+        else:
+            assert manifest.refinement.ash is not None  # validated by ManifestConfig
+            openmm_run = None
+            ash_run = run_ash_refinement(
+                prmtop_path=provisional_system.prmtop_path,
+                inpcrd_path=provisional_system.inpcrd_path,
+                selection=selection,
+                config=manifest.refinement.ash,
+                work_dir=ash_dir,
+                qm_method=manifest.refinement.qm_method,
+                embedding=manifest.refinement.embedding,
+                mace_polar1=manifest.refinement.mace_polar1,
+                cached_run=cached_ash_run,
+            )
+            optimized = ash_run.optimized_coordinates_angstrom
         coordinate_transfer = transfer_optimized_coordinates(
             reference_structure=reference_structure,
             leap_input_structure=leap_input_structure,
             topology_structure=topology_structure,
-            coordinates_angstrom=ash_run.optimized_coordinates_angstrom,
+            coordinates_angstrom=optimized,
             output_path=refined_path,
         )
         write_pdb(coordinate_transfer.structure, refined_path)
@@ -132,6 +166,7 @@ def run_refinement_stage(
         PdbParseError,
         RefinementSelectionError,
         AshRefinementError,
+        OpenmmRefinementError,
         CoordinateTransferError,
         FileNotFoundError,
         OSError,
@@ -157,6 +192,7 @@ def run_refinement_stage(
         provisional_system=provisional_system,
         selection=selection,
         ash_run=ash_run,
+        openmm_run=openmm_run,
         coordinate_transfer=coordinate_transfer,
         refined_hydrogenated_pdb_path=refined_path,
         warnings=tuple(warnings),

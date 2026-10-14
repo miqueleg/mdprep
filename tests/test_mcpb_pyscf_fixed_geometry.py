@@ -33,10 +33,13 @@ def _write_model(path: Path, *, second_name: str = "H", shift: float = 0.0) -> P
 
 
 def _config(optimized_pdb: Path) -> McpbPySCFConfig:
+    # These exercise the PySCF small-model path, which is no longer the
+    # default Hessian backend, so it is named rather than assumed.
     return McpbPySCFConfig.model_validate(
         {
             "optimized_small_model_pdb": str(optimized_pdb),
             "small_model_geometry_status": "user_optimized",
+            "hessian_backend": "pyscf",
             "method": "HF",
             "basis": "STO-3G",
         }
@@ -314,6 +317,7 @@ def test_unoptimized_test_geometry_is_labeled_in_result(monkeypatch, tmp_path):
         {
             "optimized_small_model_pdb": str(test_path),
             "small_model_geometry_status": "test_unoptimized",
+            "hessian_backend": "pyscf",
             "method": "HF",
             "basis": "STO-3G",
         }
@@ -353,6 +357,7 @@ def test_small_model_accepts_completed_qmmm_refinement_geometry(monkeypatch, tmp
     config = McpbPySCFConfig.model_validate(
         {
             "geometry_source": "qmmm_refinement",
+            "hessian_backend": "pyscf",
             "method": "HF",
             "basis": "STO-3G",
         }

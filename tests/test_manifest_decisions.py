@@ -38,12 +38,24 @@ def answer_blocking(plan: DecisionPlan, **overrides: object) -> dict[str, object
     for decision in plan.blocking():
         if decision.id.endswith(".net_charge"):
             answers[decision.id] = 0
+        elif decision.id.endswith(".smiles"):
+            answers[decision.id] = "C"
         elif decision.id.endswith(".model"):
             answers[decision.id] = "nonbonded"
         elif decision.id.endswith(".charge"):
             answers[decision.id] = 2
         elif decision.id.endswith("remove_unknown_heterogens"):
             answers[decision.id] = False
+        elif decision.id.endswith("add_missing_heavy_atoms"):
+            answers[decision.id] = True
+        elif decision.id == "structure.chains":
+            answers[decision.id] = "all"
+        elif decision.id.endswith(".confirm_donors"):
+            answers[decision.id] = False
+        elif decision.id.endswith(".multiplicity"):
+            answers[decision.id] = 1
+        elif decision.id.endswith(".model_charge"):
+            answers[decision.id] = 0
         elif decision.id.endswith("production.steps"):
             answers[decision.id] = 500_000
     answers.update(overrides)
@@ -64,8 +76,8 @@ def test_detected_ligands_each_get_their_own_decisions():
     ligand_ids = {
         decision.id for decision in plan.decisions if decision.section == "ligands"
     }
-    assert "ligand.sub_501.net_charge" in ligand_ids
-    assert "ligand.cof_601.net_charge" in ligand_ids
+    assert "ligand.b_sub_501.net_charge" in ligand_ids
+    assert "ligand.c_cof_601.net_charge" in ligand_ids
     assert plan.findings["ligands"] == ["B:SUB501", "C:COF601"]
 
 
@@ -80,20 +92,39 @@ def test_ligand_net_charge_has_no_default_and_is_blocking():
     """A guessed ligand charge silently produces a wrong system."""
     plan = plan_decisions(DATA / "protein_two_ligands.pdb")
 
-    decision = plan.by_id("ligand.sub_501.net_charge")
+    decision = plan.by_id("ligand.b_sub_501.net_charge")
 
     assert decision.default is None
     assert decision.requires_user_input is True
 
 
 def test_metal_oxidation_state_has_no_default_and_is_blocking():
+    """A charge cannot be read off a structure, so it is always asked."""
+
     plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
 
-    model = plan.by_id("metal.zn_500_site.model")
-    charge = plan.by_id("metal.zn_500_site.charge")
+    charge = plan.by_id("metal.z_zn_500_site.charge")
 
-    assert model.default is None and model.requires_user_input
     assert charge.default is None and charge.requires_user_input
+
+
+def test_a_coordinated_metal_is_proposed_as_a_bonded_site():
+    """A nonbonded model lets a coordination shell come apart in dynamics, so
+    an ion with donors in range is proposed as bonded. The question is still
+    asked -- this is a modelling choice, not something to settle silently."""
+
+    plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
+
+    model = plan.by_id("metal.z_zn_500_site.model")
+
+    assert model.default == "bonded_mcpb"
+    # The reason is shown, with the evidence it rests on.
+    assert "donor atom(s) were found" in model.why
+    # Accepting it is not a silent commitment: the three questions a bonded
+    # site then needs cannot be defaulted.
+    blocking = {decision.id for decision in plan.blocking()}
+    assert "metal.z_zn_500_site.confirm_donors" in blocking
+    assert "metal.z_zn_500_site.charge" in blocking
 
 
 def test_unknown_heterogen_removal_is_blocking():
@@ -149,7 +180,7 @@ def test_ligand_selector_identifies_the_detected_residue():
     manifest = build_manifest(plan, answer_blocking(plan))
 
     selectors = {entry["id"]: entry["selector"] for entry in manifest["ligands"]}
-    assert selectors["sub_501"] == {
+    assert selectors["b_sub_501"] == {
         "chain": "B",
         "resname": "SUB",
         "resid": 501,
@@ -169,12 +200,12 @@ def test_blank_chain_ligand_selector_is_preserved():
 def test_declining_a_ligand_removes_its_dependent_questions():
     plan = plan_decisions(DATA / "protein_two_ligands.pdb")
     answers = answer_blocking(plan)
-    answers["ligand.sub_501.include"] = False
-    answers.pop("ligand.sub_501.net_charge")
+    answers["ligand.b_sub_501.include"] = False
+    answers.pop("ligand.b_sub_501.net_charge")
 
     manifest = build_manifest(plan, answers)
 
-    assert [entry["id"] for entry in manifest["ligands"]] == ["cof_601"]
+    assert [entry["id"] for entry in manifest["ligands"]] == ["c_cof_601"]
 
 
 def test_conditional_decisions_are_pruned_by_earlier_answers():
@@ -211,26 +242,62 @@ def test_xtb_thread_bound_is_written_for_the_xtb_histidine_method():
 def test_blocking_count_respects_answers_already_given():
     plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
 
-    everything = plan.blocking()
-    after_mcpb = plan.blocking({"metal.zn_500_site.model": "bonded_mcpb"})
+    nonbonded = plan.blocking({"metal.z_zn_500_site.model": "nonbonded"})
+    bonded = plan.blocking(
+        {
+            "metal.z_zn_500_site.model": "bonded_mcpb",
+            "metal.z_zn_500_site.confirm_donors": "true",
+        }
+    )
 
-    assert any(d.id == "metal.zn_500_site.charge" for d in everything)
-    # The nonbonded ion charge is not asked once MCPB is chosen.
-    assert not any(d.id == "metal.zn_500_site.charge" for d in after_mcpb)
+    bonded_ids = {d.id for d in bonded}
+    nonbonded_ids = {d.id for d in nonbonded}
+    # The oxidation state is needed either way.
+    assert "metal.z_zn_500_site.charge" in bonded_ids & nonbonded_ids
+    # The capped-model questions only arise for the bonded model.
+    assert "metal.z_zn_500_site.model_charge" in bonded_ids
+    assert "metal.z_zn_500_site.model_charge" not in nonbonded_ids
 
 
-def test_mcpb_sites_are_reported_rather_than_guessed():
-    """MCPB needs external QM artifacts, so the engine must not invent a block."""
+def test_a_rejected_coordination_shell_is_reported_not_invented():
+    """mdprep must never make up bonds the user declined to confirm."""
     plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
     answers = {
         "structure.remove_unknown_heterogens": False,
-        "metal.zn_500_site.model": "bonded_mcpb",
+        "structure.repair.add_missing_heavy_atoms": True,
+        "metal.z_zn_500_site.model": "bonded_mcpb",
+        "metal.z_zn_500_site.charge": 2,
+        "metal.z_zn_500_site.confirm_donors": False,
     }
 
     manifest = build_manifest(plan, answers)
 
     assert manifest["metals"] == []
-    assert unresolved_mcpb_sites(plan, answers) == ["zn_500_site"]
+    assert unresolved_mcpb_sites(plan, answers) == ["z_zn_500_site"]
+
+
+def test_a_confirmed_coordination_shell_is_generated():
+    plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
+    answers = {
+        "structure.remove_unknown_heterogens": False,
+        "structure.repair.add_missing_heavy_atoms": True,
+        "metal.z_zn_500_site.model": "bonded_mcpb",
+        "metal.z_zn_500_site.charge": 2,
+        "metal.z_zn_500_site.confirm_donors": True,
+        "metal.z_zn_500_site.multiplicity": 1,
+        "metal.z_zn_500_site.model_charge": 2,
+    }
+
+    manifest = build_manifest(plan, answers)
+
+    assert unresolved_mcpb_sites(plan, answers) == []
+    site = manifest["metals"][0]
+    assert site["model"] == "bonded_mcpb"
+    assert site["mcpb"]["bonds"]
+    assert site["mcpb"]["pyscf"]["hessian_backend"] == "xtb"
+    assert site["mcpb"]["pyscf"]["xtb"]["model"] == "gxtb"
+    assert site["mcpb"]["pyscf"]["esp_backend"] == "xtb"
+    ManifestConfig.model_validate(manifest)
 
 
 def test_md_block_is_omitted_until_enabled():
@@ -245,11 +312,21 @@ def test_enabling_md_requires_an_explicit_production_length():
     plan = plan_decisions(DATA / "protein_blank_chain.pdb")
 
     with pytest.raises(DecisionError, match="production.steps"):
-        build_manifest(plan, {"molecular_dynamics.enabled": True})
+        build_manifest(
+            plan,
+            {
+                "structure.repair.add_missing_heavy_atoms": True,
+                "molecular_dynamics.enabled": True,
+            },
+        )
 
     manifest = build_manifest(
         plan,
-        {"molecular_dynamics.enabled": True, "molecular_dynamics.production.steps": 1000},
+        {
+            "structure.repair.add_missing_heavy_atoms": True,
+            "molecular_dynamics.enabled": True,
+            "molecular_dynamics.production.steps": 1000,
+        },
     )
     assert manifest["molecular_dynamics"]["production"]["steps"] == 1000
     ManifestConfig.model_validate(manifest)
@@ -260,7 +337,11 @@ def test_reporting_intervals_never_exceed_a_short_production_run():
 
     manifest = build_manifest(
         plan,
-        {"molecular_dynamics.enabled": True, "molecular_dynamics.production.steps": 100},
+        {
+            "structure.repair.add_missing_heavy_atoms": True,
+            "molecular_dynamics.enabled": True,
+            "molecular_dynamics.production.steps": 100,
+        },
     )
 
     ManifestConfig.model_validate(manifest)
@@ -288,7 +369,7 @@ def test_choice_answers_are_validated_against_the_allowed_set():
 
 def test_integer_bounds_are_enforced():
     plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
-    decision = plan.by_id("metal.zn_500_site.charge")
+    decision = plan.by_id("metal.z_zn_500_site.charge")
 
     with pytest.raises(DecisionError, match="at most 4"):
         coerce_answer(decision, 9)
@@ -325,3 +406,245 @@ def test_sections_are_reported_in_presentation_order():
     assert sections[0] == "project"
     assert "ligands" in sections
     assert sections.index("project") < sections.index("solvation")
+
+
+# --------------------------------------------------------------------------
+# Viewer targets: what a 3D front end highlights for each question
+# --------------------------------------------------------------------------
+
+
+def test_every_decision_declares_a_focus_mode():
+    plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
+
+    assert all(
+        decision.focus in {"none", "targets", "structure"}
+        for decision in plan.decisions
+    )
+
+
+def test_targeted_decisions_actually_carry_something_to_show():
+    """focus=targets with nothing to highlight would leave the viewer blank."""
+    for structure in sorted(path.name for path in DATA.glob("*.pdb")):
+        plan = plan_decisions(DATA / structure)
+        for decision in plan.decisions:
+            if decision.focus == "targets":
+                assert decision.targets or decision.target_resnames, (
+                    f"{structure}: {decision.id} focuses on targets but has none"
+                )
+
+
+def test_project_questions_have_no_structural_focus():
+    plan = plan_decisions(DATA / "protein_blank_chain.pdb")
+
+    assert plan.by_id("project.name").focus == "none"
+    assert plan.by_id("project.output_dir").focus == "none"
+
+
+def test_ligand_questions_point_at_that_ligand():
+    plan = plan_decisions(DATA / "protein_two_ligands.pdb")
+
+    charge = plan.by_id("ligand.b_sub_501.net_charge")
+
+    assert charge.focus == "targets"
+    assert [(t.resname, t.resid) for t in charge.targets] == [("SUB", 501)]
+    assert charge.subject.resname == "SUB"
+
+
+def test_disulfide_question_points_at_both_partners():
+    plan = plan_decisions(DATA / "protein_disulfide.pdb")
+
+    decision = plan.by_id("disulfides.auto_detect")
+
+    assert len(decision.targets) == 2
+    assert {target.resname for target in decision.targets} <= {"CYS", "CYX"}
+
+
+def test_unknown_heterogen_question_points_at_each_residue_at_stake():
+    plan = plan_decisions(DATA / "protein_two_ligands.pdb")
+
+    decision = plan.by_id("structure.remove_unknown_heterogens")
+
+    assert {(t.resname, t.resid) for t in decision.targets} == {
+        ("SUB", 501),
+        ("COF", 601),
+    }
+
+
+def test_waters_are_selected_by_residue_name_not_enumerated():
+    """Enumerating thousands of waters would bloat the plan for no benefit."""
+    plan = plan_decisions(DATA / "protein_with_waters.pdb")
+
+    decision = plan.by_id("structure.keep_crystal_waters")
+
+    assert decision.target_resnames == ("HOH",)
+    assert decision.targets == ()
+
+
+def test_protonation_question_points_at_the_histidines():
+    plan = plan_decisions(DATA / "protein_histidine_ring.pdb")
+
+    decision = plan.by_id("protonation.method")
+
+    assert decision.focus == "targets"
+    assert all(target.resname.startswith("HI") for target in decision.targets)
+
+
+def test_protonation_focuses_on_the_whole_structure_without_histidines():
+    plan = plan_decisions(DATA / "protein_disulfide.pdb")
+    assert plan.findings["histidines"] == []
+
+    assert plan.by_id("protonation.method").focus == "structure"
+
+
+def test_metal_question_shows_the_ion_first_then_its_surroundings():
+    plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
+
+    decision = plan.by_id("metal.z_zn_500_site.model")
+
+    assert decision.subject.resname == "ZN"
+    assert decision.subject.element == "Zn"
+    # The contacting residue is context, so it follows the subject.
+    assert len(decision.targets) > 1
+    assert any(target.resname.startswith("HI") for target in decision.targets[1:])
+
+
+def test_contact_search_is_framing_not_a_coordination_claim():
+    """mdprep must not imply it has determined coordination."""
+    plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
+
+    evidence = " ".join(plan.by_id("metal.z_zn_500_site.model").evidence)
+
+    assert "within 3.0 A" in evidence
+    assert "coordinat" not in evidence.lower()
+
+
+def test_contact_residues_respects_the_cutoff():
+    from mdprep.config.decisions import contact_residues
+    from mdprep.structure.inspect import inspect_pdb_structure
+
+    summary = inspect_pdb_structure(DATA / "protein_histidine_zinc.pdb")
+    zinc = summary.metal_ions[0]
+
+    near = contact_residues(summary.structure.residues, zinc, cutoff_angstrom=3.0)
+    none_at_all = contact_residues(
+        summary.structure.residues, zinc, cutoff_angstrom=0.1
+    )
+
+    assert near
+    assert zinc.id not in {residue.id for residue in near}
+    assert none_at_all == []
+
+
+def test_viewer_fields_survive_the_json_round_trip():
+    import json
+
+    plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
+
+    payload = json.loads(json.dumps(plan.to_dict()))
+    metal = next(
+        d for d in payload["decisions"] if d["id"] == "metal.z_zn_500_site.model"
+    )
+
+    assert metal["focus"] == "targets"
+    assert metal["targets"][0]["resname"] == "ZN"
+    assert metal["targets"][0]["element"] == "Zn"
+    assert "target_resnames" in metal
+
+
+def test_ids_are_unique_across_repeated_chains():
+    """A crystal structure with several copies repeats every residue number.
+
+    Without the chain in the id, every copy of a ligand collides and the
+    manifest is rejected for duplicate ids before it can be used.
+    """
+    import tempfile
+    from pathlib import Path as _Path
+
+    source = (DATA / "protein_two_ligands.pdb").read_text(encoding="utf-8")
+    # Duplicate the ligands into a second chain at the same residue numbers.
+    extra = []
+    for line in source.splitlines():
+        if line.startswith(("ATOM", "HETATM")) and line[21] in {"B", "C"}:
+            extra.append(line[:21] + "X" + line[22:])
+    with tempfile.TemporaryDirectory() as tmp:
+        doubled = _Path(tmp) / "doubled.pdb"
+        doubled.write_text(source + "\n".join(extra) + "\nEND\n", encoding="utf-8")
+        plan = plan_decisions(doubled)
+
+        manifest = build_manifest(plan, answer_blocking(plan))
+
+    ligand_ids = [entry["id"] for entry in manifest["ligands"]]
+    assert len(ligand_ids) == len(set(ligand_ids))
+    assert "b_sub_501" in ligand_ids and "x_sub_501" in ligand_ids
+    ManifestConfig.model_validate(manifest)
+
+
+def test_blank_chain_ids_do_not_gain_an_empty_prefix():
+    plan = plan_decisions(DATA / "protein_atom_record_ligand_blank_chain.pdb")
+
+    manifest = build_manifest(plan, answer_blocking(plan))
+
+    assert not manifest["ligands"][0]["id"].startswith("_")
+
+
+# --------------------------------------------------------------------------
+# Chain selection
+# --------------------------------------------------------------------------
+
+
+def test_a_single_chain_structure_is_not_asked_about_chains():
+    plan = plan_decisions(DATA / "protein_two_ligands.pdb")
+
+    assert not any(d.id == "structure.chains" for d in plan.decisions)
+
+
+def test_a_chain_holding_only_a_metal_is_not_offered_for_selection():
+    """Chain Z is the zinc; discarding it would break the structure."""
+    plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
+
+    assert plan.findings["protein_chains"] == ["A"]
+    assert plan.findings["non_protein_chains"] == ["Z"]
+    assert not any(d.id == "structure.chains" for d in plan.decisions)
+
+
+def test_hetero_only_chains_are_kept_whichever_protein_chain_is_chosen():
+    plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
+
+    manifest = build_manifest(plan, answer_blocking(plan))
+
+    # No selection was made, so every chain is kept.
+    assert manifest["structure"]["keep_chains"] == []
+
+
+def test_a_ligand_without_hydrogens_is_asked_for_a_smiles_and_reported():
+    """A net charge does not determine a molecule, so the protonation has to
+    be stated. It is both asked for and reported, so a manifest written by
+    hand from the plan still shows the gap."""
+
+    from mdprep.config.decisions import ligands_needing_hydrogens
+
+    plan = plan_decisions(str(DATA / "protein_two_ligands.pdb"))
+
+    asked = {d.id for d in plan.decisions if d.id.endswith(".smiles")}
+    assert asked == {"ligand.b_sub_501.smiles", "ligand.c_cof_601.smiles"}
+    assert all(plan.by_id(item).requires_user_input for item in asked)
+
+    assert set(plan.findings["ligands_without_hydrogens"]) == {
+        "b_sub_501",
+        "c_cof_601",
+    }
+    answers = answer_blocking(plan)
+    assert set(ligands_needing_hydrogens(plan, answers)) == {
+        "b_sub_501",
+        "c_cof_601",
+    }
+
+
+def test_a_ligand_that_already_has_hydrogens_is_neither_asked_nor_reported():
+    """mdprep leaves an already-protonated ligand alone, so asking for its
+    SMILES would invite exactly the double-hydrogenation it avoids."""
+
+    plan = plan_decisions(str(DATA / "protein_histidine_ring_hydrogenated.pdb"))
+
+    assert [d.id for d in plan.decisions if d.id.endswith(".smiles")] == []
+    assert plan.findings["ligands_without_hydrogens"] == []

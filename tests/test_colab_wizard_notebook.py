@@ -348,3 +348,47 @@ def test_colab_runtime_pins_and_import_checks_ash() -> None:
     assert "9f6fefc83dfaa8a7d5ba7b382f4a6ea2052b6d97" in source
     assert "import ash, geometric, openmm" in source
     assert "ASH/OpenMM/geomeTRIC imports: PASS" in source
+
+
+def test_the_pipeline_imports_nothing_undeclared():
+    """CI installs only mdprep's declared dependencies.
+
+    `import requests` sat in this file with requests declared nowhere, so these
+    tests failed on every CI run from the 0.2.0 release onward while passing
+    locally wherever requests happened to be installed.
+    """
+    import ast as _ast
+    import tomllib
+
+    source = PIPELINE.read_text(encoding="utf-8")
+    imported: set[str] = set()
+    for node in _ast.walk(_ast.parse(source)):
+        if isinstance(node, _ast.Import):
+            imported.update(alias.name.split(".")[0] for alias in node.names)
+        elif isinstance(node, _ast.ImportFrom) and node.level == 0 and node.module:
+            imported.add(node.module.split(".")[0])
+
+    project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]
+    declared = {
+        requirement.split(">")[0].split("=")[0].split("[")[0].strip().replace("-", "_")
+        for group in [project["dependencies"], *project["optional-dependencies"].values()]
+        for requirement in group
+    }
+    # Provided by the Colab runtime itself rather than by mdprep.
+    colab_provided = {"py3Dmol", "IPython", "google", "rdkit"}
+    stdlib = set(sys.stdlib_module_names)
+    aliases = {"yaml": "pyyaml"}
+
+    undeclared = {
+        name
+        for name in imported
+        if name not in stdlib
+        and name not in colab_provided
+        and aliases.get(name, name) not in declared
+        and name != "mdprep"
+    }
+    assert not undeclared, (
+        f"{PIPELINE} imports {sorted(undeclared)}, which CI does not install. "
+        "Declare it in pyproject.toml, use the standard library instead, or "
+        "import it lazily inside the function that needs it."
+    )

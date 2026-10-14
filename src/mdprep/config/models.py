@@ -47,6 +47,12 @@ class StructureRepairConfig(StrictModel):
     sequence_source: str | None = None
     add_missing_heavy_atoms: bool = False
     missing_residues: list[ResidueSelector] = Field(default_factory=list)
+    # What to do about whole residues the deposition never resolved. "fail"
+    # requires every one to be approved in missing_residues before anything
+    # proceeds. "leave_absent" declines to build the ones not listed and records
+    # them, which is what an unresolved expression tag calls for: modelling a
+    # disordered His-tag is worse than omitting it.
+    unresolved_residues: Literal["fail", "leave_absent"] = "fail"
     random_seed: int = Field(default=20260722, ge=0)
     platform: Literal["Reference", "CPU"] = "Reference"
     peptide_bond_min_angstrom: float = Field(default=1.10, gt=0)
@@ -89,6 +95,10 @@ class StructureRepairConfig(StrictModel):
 
 
 class StructureConfig(StrictModel):
+    # Empty keeps every chain. Naming chains restricts the build to them, which
+    # a bonded MCPB site requires because MCPB inputs are single-chain, and
+    # which crystal structures containing several copies of a complex need.
+    keep_chains: list[str] = Field(default_factory=list)
     keep_crystal_waters: bool = True
     altloc_policy: Literal["highest_occupancy", "first", "fail"] = "highest_occupancy"
     remove_unknown_heterogens: bool = False
@@ -132,7 +142,19 @@ class HistidineXtbConfig(StrictModel):
     mode: Literal["sp", "opt"] = "opt"
     opt_level: Literal["loose", "normal", "tight"] = "loose"
     solvent: str | None = "water"
+    # "qmmm" puts only the histidine side chain in the QM region and the
+    # surroundings in as MM point charges. The side chain is neutral and closed
+    # shell whichever tautomer it is, so there is no cluster charge to compute
+    # and get wrong. "cluster" is the older whole-fragment treatment, kept for
+    # comparison and for systems whose neighbours have no force-field charges.
+    embedding: Literal["qmmm", "cluster"] = "qmmm"
     cutoff_angstrom: float = Field(default=5.0, gt=0)
+    # Point charges cost almost nothing, so this reaches well past the distance
+    # at which a tautomer preference stops changing.
+    embedding_cutoff_angstrom: float = Field(default=12.0, gt=0)
+    # MM charges nearer than this to a capping hydrogen are redistributed over
+    # the rest of their residue instead of polarising the link atom.
+    link_exclusion_angstrom: float = Field(default=1.8, ge=0)
     extra_args: list[str] = Field(default_factory=list)
     energy_close_call_kcal_mol: float = Field(default=0.5, ge=0)
     add_missing_protein_hydrogens: bool = True
@@ -255,6 +277,11 @@ class LigandConfig(StrictModel):
     selector: LigandResidueSelector
     net_charge: int
     multiplicity: int = Field(default=1, ge=1)
+    # The protonation the user intends, stated explicitly. A crystal structure
+    # carries no ligand hydrogens; supplying a SMILES lets mdprep place them
+    # without guessing a tautomer or a charge. A ligand that already has
+    # hydrogens is left alone whatever this says.
+    smiles: str | None = None
     expected_formula: str | None = Field(
         default=None,
         pattern=r"^(?:[A-Z][a-z]?[0-9]*)+$",
@@ -324,6 +351,30 @@ class MetalIonConfig(StrictModel):
     multiplicity: int | None = Field(default=None, ge=1)
 
 
+class CoordinatingIonConfig(StrictModel):
+    """A single-atom non-metal ion bound in a metal site.
+
+    A coordinating halide belongs nowhere else. It is not a metal, so it does
+    not go in ions[], where MCPB would treat it as a metal centre. And it
+    cannot be a GAFF ligand, because antechamber's semi-empirical step refuses
+    a single atom. Amber's Li/Merz sets parameterise F-, Cl-, Br- and I-
+    directly, which is what the force-field relaxation uses.
+
+    A polyatomic coordinating anion -- azide, for instance -- has no Amber ion
+    parameters and does not need them: antechamber handles it. Configure it
+    under ligands[] as a cofactor and name it as an mcpb coordinator, which is
+    what alpha-ketoglutarate already does.
+
+    Either way the ion is part of the metal site's QM region.
+    """
+
+    selector: AtomSelector
+    element: str = Field(pattern=r"^[A-Z][a-z]?$", min_length=1, max_length=2)
+    # Anions only: a coordinating cation is a metal and belongs in ions[].
+    charge: int = Field(le=-1, ge=-1)
+    parameter_set: Literal["12_6", "12_6_4", "hfe", "iod", "cm"] = "12_6"
+
+
 class NonbondedMetalConfig(StrictModel):
     """Li/Merz Amber ion model selection."""
 
@@ -348,8 +399,13 @@ class McpbBondConfig(StrictModel):
 class McpbXtbHessianConfig(StrictModel):
     """Pinned xTB settings for a fixed-geometry MCPB small-model Hessian."""
 
-    model: Literal["gfn2", "gxtb"] = "gfn2"
-    executable: str = Field(default="xtb", min_length=1)
+    # g-xTB rather than GFN2, because GFN2 is parameterised for main-group
+    # chemistry and describes transition-metal coordination badly: on the BesD
+    # iron site it gives one Fe-O bond a negative force constant. g-xTB gets
+    # all five right at the same order of cost. It needs its own build, which
+    # MDPREP_GXTB_EXECUTABLE can point at once; see docs/metals.md.
+    model: Literal["gfn2", "gxtb"] = "gxtb"
+    executable: str | None = Field(default=None, min_length=1)
     release_tag: str | None = Field(default=None, min_length=1)
     expected_executable_sha256: str | None = Field(
         default=None,
@@ -422,7 +478,16 @@ class McpbPySCFConfig(StrictModel):
         "user_optimized",
         "test_unoptimized",
     ] | None = None
-    hessian_backend: Literal["pyscf", "xtb", "gxtb", "mace_polar1"] = "pyscf"
+    # A tight-binding Hessian by default. The DFT alternative costs minutes to
+    # hours on a site this size for a quantity the Seminario fit then reduces
+    # to a handful of force constants.
+    hessian_backend: Literal["pyscf", "xtb", "gxtb", "mace_polar1"] = "xtb"
+    # The large model exists to be fitted to an ESP, and that fit sets the
+    # charges the finished system carries. "pyscf" does it at DFT cost;
+    # "xtb" does it with the GFN2 density in seconds, which is the difference
+    # between a method a student can run and one they cannot. GFN2 charges are
+    # not RESP charges in the usual sense, and every report says so.
+    esp_backend: Literal["pyscf", "xtb"] = "pyscf"
     xtb: McpbXtbHessianConfig | None = None
     gxtb: McpbGxtbHessianConfig | None = None
     mace_polar1: McpbMacePolar1HessianConfig | None = None
@@ -536,9 +601,9 @@ class McpbPySCFConfig(StrictModel):
                     "refinement stage"
                 )
         if self.hessian_backend == "xtb" and self.xtb is None:
-            raise ValueError(
-                "mcpb.pyscf hessian_backend: xtb requires explicit xtb settings"
-            )
+            # Filled in rather than demanded: the backend is the default, so
+            # requiring a block to restate the defaults would be noise.
+            object.__setattr__(self, "xtb", McpbXtbHessianConfig())
         if self.hessian_backend != "xtb" and self.xtb is not None:
             raise ValueError(
                 "mcpb.pyscf.xtb settings may only be supplied when hessian_backend: xtb"
@@ -675,6 +740,8 @@ class MetalSiteConfig(StrictModel):
     id: str = Field(min_length=1)
     model: Literal["nonbonded", "bonded_mcpb"]
     ions: list[MetalIonConfig] = Field(min_length=1)
+    # Non-metal ions bound in this site, such as a coordinating halide.
+    coordinating_ions: list[CoordinatingIonConfig] = Field(default_factory=list)
     nonbonded: NonbondedMetalConfig | None = None
     mcpb: McpbConfig | None = None
 
@@ -716,6 +783,20 @@ class RefinementQmComponentsConfig(StrictModel):
     )
 
 
+class OpenmmRefinementConfig(StrictModel):
+    """Force-field hydrogen refinement settings.
+
+    There is no active region here: a force field is cheap enough to relax
+    every hydrogen, and freezing those outside an arbitrary radius would put a
+    seam through the hydrogen-bond network for no saving.
+    """
+
+    platform: Literal["auto", "CUDA", "OpenCL", "CPU", "Reference"] = "auto"
+    tolerance_kj_mol_per_nm: float = Field(default=1.0, gt=0)
+    max_iterations: int = Field(default=0, ge=0)  # 0 means until converged
+    nonbonded_cutoff_nanometer: float = Field(default=1.0, gt=0)
+
+
 class AshRefinementConfig(StrictModel):
     """Executable and optimizer settings for the isolated ASH environment."""
 
@@ -745,7 +826,11 @@ class RefinementConfig(StrictModel):
     """Optional pre-parameterization active-site QM/MM refinement."""
 
     enabled: bool = False
-    backend: Literal["ash"] = "ash"
+    # The refinement only ever moves hydrogens. A force field answers that
+    # question in seconds where GFN2 QM/MM takes far longer, so it is the
+    # default; the charges and parameters that reach the final build still
+    # come from whatever QMMESP or MCPB calculation the manifest configures.
+    backend: Literal["openmm", "ash"] = "openmm"
     qm_method: Literal["gfn2_xtb", "gxtb", "mace_polar1"] = "gfn2_xtb"
     embedding: Literal["electrostatic", "mechanical"] = "electrostatic"
     qm_components: RefinementQmComponentsConfig = Field(
@@ -754,12 +839,17 @@ class RefinementConfig(StrictModel):
     active_region_cutoff_angstrom: Literal[4.0] = 4.0
     active_water_cutoff_angstrom: Literal[8.0] = 8.0
     include_contact_waters: Literal[True] = True
+    # The default backend only moves hydrogens, so these default to match it.
+    # Relaxing heavy atoms means backend: ash and setting both explicitly.
     movable_atoms: Literal[
         "all_active_region", "active_region_hydrogens"
-    ] = "all_active_region"
-    post_refinement_protonation: Literal["rerun", "reuse_initial"] = "rerun"
+    ] = "active_region_hydrogens"
+    post_refinement_protonation: Literal["rerun", "reuse_initial"] = "reuse_initial"
     total_qm_multiplicity: int | None = Field(default=None, ge=1)
     ash: AshRefinementConfig | None = None
+    openmm: OpenmmRefinementConfig = Field(
+        default_factory=lambda: OpenmmRefinementConfig()
+    )
     mace_polar1: MacePolar1RefinementConfig | None = None
 
     @model_validator(mode="after")
@@ -1036,8 +1126,17 @@ class ManifestConfig(StrictModel):
                 "refinement requires structure.keep_crystal_waters: true so active-site "
                 "waters are protonated and included"
             )
-        if refinement.ash is None:
-            raise ValueError("refinement.enabled: true requires refinement.ash settings")
+        if refinement.backend == "ash" and refinement.ash is None:
+            raise ValueError(
+                "refinement.backend: ash requires refinement.ash settings"
+            )
+        if refinement.backend == "openmm":
+            if refinement.movable_atoms != "active_region_hydrogens":
+                raise ValueError(
+                    "refinement.backend: openmm only moves hydrogens, so "
+                    "movable_atoms must be active_region_hydrogens. Select "
+                    "backend: ash to relax heavy atoms as well."
+                )
         selected_ligands = refinement.qm_components.ligands
         selected_metals = refinement.qm_components.metal_sites
         if not selected_ligands and not selected_metals:

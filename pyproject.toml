@@ -31,17 +31,31 @@ dependencies = [
   "pydantic-settings>=2",
   "pyyaml>=6",
   "numpy>=1.24",
-  "scipy>=1.10",
-  "pandas>=2",
 ]
 
 [project.optional-dependencies]
+# Preparing a system also needs AmberTools, xTB and PropKa, which are
+# programs rather than Python packages. conda is the only sane way to get
+# them, so environment.yml is the supported install; these extras exist for
+# a pip-only environment that already has the executables on PATH.
 md = [
   "openmm>=8.1",
+  "pdbfixer>=1.9",
 ]
 qm = [
   "pyscf>=2.6",
   "parmed>=4.2",
+]
+ligands = [
+  "rdkit>=2023.3",
+]
+# Everything the tutorials exercise, except the external programs.
+all = [
+  "openmm>=8.1",
+  "pdbfixer>=1.9",
+  "pyscf>=2.6",
+  "parmed>=4.2",
+  "rdkit>=2023.3",
 ]
 test = [
   "pytest>=8",

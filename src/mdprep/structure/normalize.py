@@ -52,6 +52,7 @@ class StructureNormalizationResult:
     configured_ligands_kept: list[NormalizedLigand] = field(default_factory=list)
     configured_metal_ions_kept: list[NormalizedMetalIon] = field(default_factory=list)
     unknown_heterogens_removed: list[dict[str, object]] = field(default_factory=list)
+    chains_removed: list[dict[str, object]] = field(default_factory=list)
     unknown_heterogens_causing_failure: list[dict[str, object]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     repair_result: StructureRepairResult | None = None
@@ -81,6 +82,7 @@ class StructureNormalizationResult:
                 for metal in self.configured_metal_ions_kept
             ],
             "unknown_heterogens_removed": self.unknown_heterogens_removed,
+            "chains_removed": self.chains_removed,
             "unknown_heterogens_causing_failure": self.unknown_heterogens_causing_failure,
             "histidines": _residue_dicts(self.input_summary.histidines),
             "titratable_residues": _residue_dicts(self.input_summary.titratable_residues),
@@ -131,15 +133,38 @@ def normalize_structure_stage(
     configured_metals = _resolve_configured_metals(structure, manifest)
     _validate_disulfide_selectors(structure, manifest)
     configured_ligand_keys = {id(residue) for _, residue in configured_ligands}
-    configured_metal_residue_keys = {id(residue) for _, _, residue in configured_metals}
-    overlap = configured_ligand_keys & configured_metal_residue_keys
+    configured_metal_ion_keys = {id(residue) for _, _, residue in configured_metals}
+    # Being both a ligand and a metal ion is a contradiction. Being both a
+    # ligand and a coordinator is not: alpha-ketoglutarate needs GAFF
+    # parameters and also bonds the iron, so the two sets are kept apart.
+    overlap = configured_ligand_keys & configured_metal_ion_keys
     if overlap:
         residues = [residue for residue in structure.residues if id(residue) in overlap]
         formatted = ", ".join(_format_residue_for_error(residue) for residue in residues)
         raise StructureNormalizationError(
             "A residue cannot be configured as both a ligand and a metal ion: " + formatted
         )
-    likely_heterogens = [residue for residue in structure.residues if is_likely_ligand_or_cofactor(residue)]
+    # A residue named as an MCPB coordinator or additional residue is part of
+    # the metal site and is parameterized with it, so it is not an unknown
+    # heterogen. A coordinating halide is the case that matters: it cannot be a
+    # metal ion, because an ion's charge is positive by definition, and it
+    # cannot be a GAFF ligand either, because antechamber's semi-empirical step
+    # refuses a single atom.
+    configured_metal_residue_keys = configured_metal_ion_keys | _mcpb_model_residue_keys(
+        structure, manifest
+    )
+    # Only the chains the build keeps. A deposition of four copies has four
+    # sets of cofactors, and demanding a declaration for the three about to be
+    # discarded would reject a manifest that is already complete. The repair
+    # stage filters chains before PDBFixer sees them, so this check used to
+    # look correct whenever repair was enabled, and wrong when it was not.
+    kept_chains = {chain.strip() for chain in manifest.structure.keep_chains}
+    likely_heterogens = [
+        residue
+        for residue in structure.residues
+        if is_likely_ligand_or_cofactor(residue)
+        and (not kept_chains or residue.id.chain_id in kept_chains)
+    ]
     unknown_heterogens = [
         residue
         for residue in likely_heterogens
@@ -160,8 +185,22 @@ def normalize_structure_stage(
     waters_kept: list[ResidueRecord] = []
     waters_removed: list[ResidueRecord] = []
     unknown_removed: list[ResidueRecord] = []
+    chains_removed: list[ResidueRecord] = []
+
+    selected_chains = {chain.strip() for chain in manifest.structure.keep_chains}
+    if selected_chains:
+        present = {residue.id.chain_id for residue in structure.residues}
+        missing = sorted(selected_chains - present)
+        if missing:
+            raise StructureNormalizationError(
+                f"structure.keep_chains names chains not present in the input: "
+                f"{missing}; the input has {sorted(present)}."
+            )
 
     for residue in structure.residues:
+        if selected_chains and residue.id.chain_id not in selected_chains:
+            chains_removed.append(residue)
+            continue
         if is_standard_protein_residue(residue):
             keep_residue_ids.add(id(residue))
         elif is_water_residue(residue):
@@ -183,6 +222,15 @@ def normalize_structure_stage(
     for residue in structure.residues:
         if id(residue) in keep_residue_ids:
             filtered_atoms.extend(residue.atoms)
+
+    # Ligand hydrogens belong to the structure, not just to the ligand's own
+    # file: the QM/MM refinement, the leap build and the ligand parameters all
+    # have to see the same molecule. Placing them here is what keeps them
+    # consistent; configured ligands are exempt from remove_input_hydrogens so
+    # they survive the protonation stage intact.
+    filtered_atoms, hydrogenations = _hydrogenate_configured_ligands(
+        structure, manifest, keep_residue_ids, filtered_atoms
+    )
 
     normalized_structure = PdbStructure(
         path=Path(output_path) if output_path is not None else structure.path,
@@ -237,6 +285,7 @@ def normalize_structure_stage(
             for site_id, (element, charge, atom), residue in configured_metals
         ],
         unknown_heterogens_removed=_residue_dicts(unknown_removed),
+        chains_removed=_residue_dicts(chains_removed),
         unknown_heterogens_causing_failure=unknown_heterogen_dicts
         if unknown_heterogens and not manifest.structure.remove_unknown_heterogens
         else [],
@@ -285,6 +334,92 @@ def _resolve_configured_ligands(
             ) from exc
         resolved.append((ligand.id, residue))
     return resolved
+
+
+def _hydrogenate_configured_ligands(
+    structure: PdbStructure,
+    manifest: ManifestConfig,
+    keep_residue_ids: set[int],
+    filtered_atoms: list[AtomRecord],
+) -> tuple[list[AtomRecord], list[dict[str, object]]]:
+    """Place ligand hydrogens declared by a SMILES, in structure order."""
+
+    from mdprep.ligands.hydrogenate import (
+        LigandHydrogenationError,
+        add_ligand_hydrogens,
+    )
+
+    results: list[dict[str, object]] = []
+    additions: dict[int, list[AtomRecord]] = {}
+    for ligand in manifest.ligands:
+        if ligand.smiles is None:
+            continue
+        try:
+            residue = resolve_residue_selector(structure, ligand.selector.model_dump())
+        except SelectorError:
+            # The ligand stage reports an unresolvable selector in full.
+            continue
+        if id(residue) not in keep_residue_ids:
+            continue
+        try:
+            outcome = add_ligand_hydrogens(
+                residue,
+                ligand.smiles,
+                ligand_id=ligand.id,
+                net_charge=ligand.net_charge,
+            )
+        except LigandHydrogenationError as exc:
+            raise StructureNormalizationError(str(exc)) from exc
+        results.append(outcome.to_dict())
+        if outcome.skipped:
+            continue
+        existing = {id(atom) for atom in residue.atoms}
+        additions[id(residue.atoms[-1])] = [
+            atom for atom in outcome.residue.atoms if id(atom) not in existing
+        ]
+
+    if not additions:
+        return filtered_atoms, results
+
+    # Insert each ligand's hydrogens directly after its last existing atom so
+    # that residues stay contiguous in the output.
+    rebuilt: list[AtomRecord] = []
+    for atom in filtered_atoms:
+        rebuilt.append(atom)
+        rebuilt.extend(additions.get(id(atom), ()))
+    return rebuilt, results
+
+
+def _mcpb_model_residue_keys(
+    structure: PdbStructure,
+    manifest: ManifestConfig,
+) -> set[int]:
+    """Residues drawn into a bonded MCPB model besides the metal itself."""
+
+    keys: set[int] = set()
+    for site in manifest.metals:
+        # A coordinating ion is part of the site under either metal model.
+        for coordinating in site.coordinating_ions:
+            selector = coordinating.selector.model_dump()
+            selector.pop("atom_name", None)
+            try:
+                keys.add(id(resolve_residue_selector(structure, selector)))
+            except SelectorError:
+                continue
+        if site.model != "bonded_mcpb" or site.mcpb is None:
+            continue
+        selectors = [bond.coordinator.model_dump() for bond in site.mcpb.bonds]
+        selectors += [item.model_dump() for item in site.mcpb.additional_residues]
+        for selector in selectors:
+            selector.pop("atom_name", None)
+            try:
+                residue = resolve_residue_selector(structure, selector)
+            except SelectorError:
+                # An unresolvable selector is reported by the metal stage,
+                # which can say far more about it than this can.
+                continue
+            keys.add(id(residue))
+    return keys
 
 
 def _resolve_configured_metals(

@@ -151,11 +151,30 @@ def prepare_nonbonded_site(
     )
 
 
+def ion_atom_type(element: str, charge: int) -> str:
+    """Amber's atom-type spelling for a monatomic ion.
+
+    The magnitude is written only when it is greater than one, and the sign
+    follows it: Na+, Zn2+, Fe3+, Cl-. Building it as element+charge+"+"
+    produces "Na1+", which matches nothing in the Li/Merz files, and cannot
+    express an anion at all.
+    """
+
+    if charge == 0:
+        raise NonbondedMetalError("An ion cannot have zero charge.")
+    sign = "+" if charge > 0 else "-"
+    magnitude = abs(charge)
+    return f"{element}{sign}" if magnitude == 1 else f"{element}{magnitude}{sign}"
+
+
 def ion_frcmod_name(*, charge: int, water_model: str, parameter_set: str) -> str:
     """Return the exact AmberTools Li/Merz frcmod filename."""
 
-    if charge not in {1, 2, 3, 4}:
-        raise NonbondedMetalError("Amber Li/Merz ion models support charges +1 through +4.")
+    if charge not in {1, 2, 3, 4, -1}:
+        raise NonbondedMetalError(
+            "Amber Li/Merz ion models cover charges +1 through +4 and -1 "
+            f"(the halides); {charge:+d} is not among them."
+        )
     water = water_model.lower()
     if water not in {"tip3p", "opc"}:
         raise NonbondedMetalError(
@@ -165,7 +184,9 @@ def ion_frcmod_name(*, charge: int, water_model: str, parameter_set: str) -> str
     suffix = {"12_6": "126", "12_6_4": "1264", "hfe": "hfe", "iod": "iod"}[family]
     if water == "opc":
         return f"frcmod.ionslm_{suffix}_opc"
-    if charge == 1:
+    if abs(charge) == 1:
+        # Monovalent ions of either sign live in the same file; it carries
+        # Li+/Na+/K+ alongside F-/Cl-/Br-/I-.
         if family in {"12_6", "hfe"}:
             return "frcmod.ions1lm_126_tip3p"
         if family == "iod":
@@ -190,7 +211,7 @@ def load_amber_ion_parameter(
     path = Path(amberhome) / "dat" / "leap" / "parm" / name
     if not path.is_file():
         raise NonbondedMetalError(f"Amber ion parameter file is missing: {path}")
-    atom_type = f"{element}{charge}+"
+    atom_type = ion_atom_type(element, charge)
     mass, radius, epsilon = _parse_frcmod_ion(path, atom_type)
     return AmberIonParameter(
         element=element,

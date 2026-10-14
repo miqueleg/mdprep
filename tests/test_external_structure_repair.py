@@ -3,6 +3,7 @@ from pathlib import Path
 import pytest
 
 from mdprep.config.models import ManifestConfig
+from mdprep.protonation.histidine_geometry import is_hydrogen_like, parent_heavy_atom
 from mdprep.protonation.temporary_hydrogenation import add_temporary_protein_hydrogens
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.repair import repair_structure
@@ -111,3 +112,90 @@ def test_pdbfixer_repairs_7e07_declared_gap_and_heavy_atoms(tmp_path):
         atom.serial in result.structure.ter_after_serials
         for atom in terminal.atoms[:-1]
     )
+
+
+FREE_LYSINE_PDB = "tests/data/protein_with_hydrogenated_free_lysine.pdb"
+
+
+def _hydrogen_naming_schemes(residue) -> dict[str, set[str]]:
+    """The naming schemes each heavy atom's hydrogens are spelled in.
+
+    Amber and OpenMM number the hydrogens on one parent -- CB carries HB2 and
+    HB3 -- while mdprep's SMILES hydrogenation letters them, giving HB and HBA.
+    Either is fine on its own. Both at one heavy atom means that atom was
+    hydrogenated twice, once by each.
+    """
+
+    schemes: dict[str, set[str]] = {}
+    for atom in residue.atoms:
+        if not is_hydrogen_like(atom):
+            continue
+        parent = parent_heavy_atom(atom, residue)
+        if parent is None:
+            continue
+        # HB2 and HB3 are CB's hydrogens numbered; HB and HBA are the same
+        # two lettered.  What is left after the parent's own suffix says which.
+        suffix = atom.name.strip()[1:].upper()
+        parent_suffix = parent.name.strip()[1:].upper()
+        if not suffix.startswith(parent_suffix):
+            continue
+        tail = suffix[len(parent_suffix):]
+        if tail.isdigit():
+            scheme = "numbered"
+        elif tail.isalpha():
+            scheme = "lettered"
+        else:
+            scheme = "plain"
+        schemes.setdefault(parent.name.strip(), set()).add(scheme)
+    return schemes
+
+
+def test_temporary_hydrogenation_leaves_an_already_hydrogenated_residue_alone(tmp_path):
+    pytest.importorskip("openmm")
+    pytest.importorskip("pdbfixer")
+    structure = read_pdb(FREE_LYSINE_PDB)
+    lysine = next(
+        residue for residue in structure.residues if residue.id.resid == 301
+    )
+    before = [atom.name for atom in lysine.atoms]
+
+    result = add_temporary_protein_hydrogens(
+        structure,
+        ph=7.0,
+        work_dir=tmp_path / "temporary_hydrogenation",
+    )
+
+    assert result.preserved_residues == ("A:LYS301",)
+    rebuilt = next(
+        residue for residue in result.structure.residues if residue.id.resid == 301
+    )
+    # The substrate's hydrogens came from the manifest SMILES; a second set in
+    # OpenMM's own names would make the cluster a lysine with 27 hydrogens.
+    assert [atom.name for atom in rebuilt.atoms] == before
+    # The protein around it is still hydrogenated, which is what the step is for.
+    histidine = next(
+        residue for residue in result.structure.residues if residue.id.resid == 2
+    )
+    assert "HB2" in {atom.name for atom in histidine.atoms}
+
+
+def test_temporary_hydrogenation_gives_no_residue_two_hydrogen_naming_schemes(tmp_path):
+    pytest.importorskip("openmm")
+    pytest.importorskip("pdbfixer")
+    structure = read_pdb(FREE_LYSINE_PDB)
+
+    result = add_temporary_protein_hydrogens(
+        structure,
+        ph=7.0,
+        work_dir=tmp_path / "temporary_hydrogenation",
+    )
+
+    doubled = {
+        residue.id.display(): {
+            position: sorted(schemes)
+            for position, schemes in _hydrogen_naming_schemes(residue).items()
+            if {"numbered", "lettered"} <= schemes
+        }
+        for residue in result.structure.residues
+    }
+    assert not any(doubled.values()), doubled

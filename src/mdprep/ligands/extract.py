@@ -102,6 +102,9 @@ def extract_ligand(
             record_names=residue.record_names,
             original_index=residue.original_index,
         )
+    # Hydrogens declared by ligands[].smiles were placed during structure
+    # normalization, so that the structure, the ligand files and the QM/MM
+    # refinement all see the same molecule.
     warnings.extend(_validate_ligand_formula(ligand, residue))
 
     ligand_dir = Path(output_dir) / "ligands" / ligand.id / "input"

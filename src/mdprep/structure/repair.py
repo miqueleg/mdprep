@@ -16,6 +16,15 @@ from mdprep.structure.pdb import read_pdb
 from mdprep.structure.writer import write_pdb
 
 
+# PDBFixer round-trips coordinates through OpenMM in nanometres, and a PDB
+# stores three decimal places in angstrom, so an atom it did not touch still
+# comes back displaced by a few thousandths of an angstrom. The tolerance has
+# to clear that floor while staying far below any real movement: a bond is
+# 1.5 A, and the smallest displacement that means anything is two orders of
+# magnitude larger than this.
+EXISTING_ATOM_TOLERANCE_ANGSTROM = 0.01
+
+
 class StructureRepairError(ValueError):
     """Raised when requested coordinate repair is unavailable or ambiguous."""
 
@@ -37,6 +46,8 @@ class StructureRepairResult:
     platform: str
     warnings: tuple[str, ...]
 
+    missing_residues_left_absent: tuple[dict[str, object], ...] = ()
+
     def to_dict(self) -> dict[str, object]:
         return {
             "backend": self.backend,
@@ -50,6 +61,7 @@ class StructureRepairResult:
             "raw_output_path": str(self.raw_output_path),
             "output_path": str(self.output_path),
             "missing_residues_detected": list(self.missing_residues_detected),
+            "missing_residues_left_absent": list(self.missing_residues_left_absent),
             "missing_heavy_atoms_detected": list(
                 self.missing_heavy_atoms_detected
             ),
@@ -94,18 +106,58 @@ def repair_structure(
             f"Structure repair sequence source not found: {sequence_path}"
         )
 
+    # Repair runs on the chains the build will keep, with alternate locations
+    # already resolved. Otherwise PDBFixer rules on residues about to be thrown
+    # away, and picks conformers the manifest did not choose.
+    selected_chains = [chain.strip() for chain in manifest.structure.keep_chains]
+    repair_input = Path(output_path).with_name(
+        Path(output_path).stem + ".repair_input.pdb"
+    )
+    repair_input.parent.mkdir(parents=True, exist_ok=True)
+    _write_repair_input(
+        input_path,
+        repair_input,
+        chains=selected_chains,
+        altloc_policy=manifest.structure.altloc_policy,
+    )
+
     try:
         platform = Platform.getPlatformByName(config.platform)
-        fixer = PDBFixer(filename=str(input_path), platform=platform)
+        fixer = PDBFixer(filename=str(repair_input), platform=platform)
         if sequence_path is not None:
             sequence_fixer = PDBFixer(filename=str(sequence_path), platform=platform)
             fixer.sequences = sequence_fixer.sequences
         fixer.findMissingResidues()
         detected_residues = _detected_missing_residues(fixer)
-        _validate_expected_missing_residues(
+        left_absent = _validate_expected_missing_residues(
             detected_residues,
             expected=config.missing_residues,
+            policy=config.unresolved_residues,
         )
+        if left_absent:
+            # PDBFixer builds whatever remains in missingResidues, so the ones
+            # being declined have to be removed before addMissingAtoms runs.
+            approved = {
+                (item.chain, item.resname, item.resid, item.icode)
+                for item in config.missing_residues
+            }
+            # Keep only the entries every one of whose residues was approved.
+            approved_keys = {
+                item["_key"]
+                for item in detected_residues
+                if (
+                    str(item["chain"]),
+                    str(item["resname"]),
+                    int(item["resid"]),
+                    item["icode"],
+                )
+                in approved
+            }
+            fixer.missingResidues = {
+                key: value
+                for key, value in fixer.missingResidues.items()
+                if key in approved_keys
+            }
         fixer.findMissingAtoms()
         detected_atoms = _detected_missing_atoms(fixer)
         if detected_atoms and not config.add_missing_heavy_atoms:
@@ -132,7 +184,7 @@ def repair_structure(
         PDBFile.writeFile(fixer.topology, fixer.positions, handle, keepIds=True)
 
     original = read_pdb(
-        input_path,
+        repair_input,
         altloc_policy=manifest.structure.altloc_policy,
     )
     repaired_raw = read_pdb(raw_output)
@@ -163,7 +215,11 @@ def repair_structure(
         raw_output_path=raw_output,
         output_path=output,
         structure=repaired,
-        missing_residues_detected=tuple(detected_residues),
+        missing_residues_detected=tuple(
+            {key: value for key, value in item.items() if key != "_key"}
+            for item in detected_residues
+        ),
+        missing_residues_left_absent=tuple(left_absent),
         missing_heavy_atoms_detected=tuple(detected_atoms),
         added_atom_count=len(repaired.atoms) - len(original.atoms),
         peptide_bond_checks=tuple(checks),
@@ -171,6 +227,55 @@ def repair_structure(
         platform=config.platform,
         warnings=warnings,
     )
+
+
+def _write_repair_input(
+    source: Path,
+    destination: Path,
+    *,
+    chains: list[str],
+    altloc_policy: str,
+) -> None:
+    """Prepare the file PDBFixer reads: chosen chains, chosen conformers.
+
+    PDBFixer applies its own alternate-location rule, which is not mdprep's.
+    On 6NIE that silently repaired a different conformer of Arg177 than the one
+    the manifest's policy selected -- the two differ by several angstrom at the
+    guanidinium. Resolving altlocs here leaves PDBFixer nothing to disagree
+    about.
+
+    Filtering is done on the original lines rather than by rewriting the
+    structure, so SEQRES and the rest of the header survive; PDBFixer needs
+    them to know which residues were never resolved.
+    """
+
+    structure = read_pdb(source, altloc_policy=altloc_policy)  # type: ignore[arg-type]
+    selected_serials = {
+        atom.serial for atom in structure.atoms if atom.serial is not None
+    }
+    selected_chains = set(chains)
+    kept: list[str] = []
+    for line in source.read_text(encoding="utf-8").splitlines():
+        if line.startswith(("ATOM", "HETATM")):
+            if selected_chains and len(line) > 21 and line[21] not in selected_chains:
+                continue
+            serial = _parse_serial_for_filter(line)
+            if serial is not None and serial not in selected_serials:
+                continue
+            # The chosen conformer loses its altloc marker, so nothing
+            # downstream has a choice left to make.
+            line = line[:16] + " " + line[17:]
+        elif line.startswith(("ANISOU", "TER")):
+            if selected_chains and len(line) > 21 and line[21] not in selected_chains:
+                continue
+        kept.append(line)
+    destination.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+
+def _parse_serial_for_filter(line: str) -> int | None:
+    from mdprep.structure.pdb import _parse_serial
+
+    return _parse_serial(line)
 
 
 def _detected_missing_residues(fixer: object) -> list[dict[str, object]]:
@@ -205,6 +310,7 @@ def _detected_missing_residues(fixer: object) -> list[dict[str, object]]:
         for offset, name in enumerate(names):
             result.append(
                 {
+                    "_key": key,
                     "chain": chain.id,
                     "resname": str(name),
                     "resid": inferred[offset],
@@ -254,7 +360,12 @@ def _validate_expected_missing_residues(
     detected: list[dict[str, object]],
     *,
     expected: list[ResidueSelector],
-) -> None:
+    policy: str = "fail",
+) -> list[dict[str, object]]:
+    """Reconcile what PDBFixer found with what the manifest approved.
+
+    Returns the residues that will be left absent, which the caller reports.
+    """
     detected_keys = {
         (
             str(item["chain"]),
@@ -267,15 +378,29 @@ def _validate_expected_missing_residues(
     expected_keys = {
         (item.chain, item.resname, item.resid, item.icode) for item in expected
     }
-    if detected_keys != expected_keys:
-        missing_from_manifest = sorted(detected_keys - expected_keys)
-        requested_but_absent = sorted(expected_keys - detected_keys)
+    requested_but_absent = sorted(expected_keys - detected_keys)
+    if requested_but_absent:
+        # Asking to build something PDBFixer cannot see is always an error,
+        # whatever the policy: the manifest and the structure disagree.
+        raise StructureRepairError(
+            "structure.repair.missing_residues names residues PDBFixer did not "
+            f"detect as missing: {requested_but_absent}."
+        )
+    unapproved = sorted(detected_keys - expected_keys)
+    if not unapproved:
+        return []
+    if policy == "fail":
         raise StructureRepairError(
             "PDBFixer missing-residue detection does not exactly match "
             "structure.repair.missing_residues. "
-            f"Unapproved detections: {missing_from_manifest or 'none'}; "
-            f"requested but not detected: {requested_but_absent or 'none'}."
+            f"Unapproved detections: {unapproved}. Approve each one to build it, "
+            "or set structure.repair.unresolved_residues: leave_absent to "
+            "deliberately leave them out."
         )
+    return [
+        {"chain": chain, "resname": resname, "resid": resid, "icode": icode}
+        for chain, resname, resid, icode in unapproved
+    ]
 
 
 def _detected_missing_atoms(fixer: object) -> list[dict[str, object]]:
@@ -344,9 +469,10 @@ def _restore_existing_atom_metadata(
                 (original_atom.x, original_atom.y, original_atom.z),
                 (repaired_atom.x, repaired_atom.y, repaired_atom.z),
             )
-            if displacement > 0.002:
+            if displacement > EXISTING_ATOM_TOLERANCE_ANGSTROM:
                 raise StructureRepairError(
-                    "PDBFixer moved an existing atom by more than 0.002 A: "
+                    "PDBFixer moved an existing atom by more than "
+                    f"{EXISTING_ATOM_TOLERANCE_ANGSTROM} A: "
                     f"{original_atom.atom_identity} moved {displacement:.6f} A."
                 )
             restored_atom = replace(

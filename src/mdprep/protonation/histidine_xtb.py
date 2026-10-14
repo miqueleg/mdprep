@@ -8,14 +8,23 @@ import json
 from pathlib import Path
 import shutil
 
-from mdprep.config.models import ManifestConfig
+from mdprep.config.models import HistidineXtbConfig, ManifestConfig
 from mdprep.protonation.histidine_geometry import (
     HistidineGeometryError,
+    XyzAtom,
     build_tautomer_cluster_model,
     heavy_atom_distance,
     is_hydrogen_like,
     write_xcontrol_fix_file,
     write_xyz,
+)
+from mdprep.protonation.histidine_qmmm import (
+    HistidineQmmmError,
+    QmmmTautomerModel,
+    build_qmmm_tautomer_model,
+    embedding_was_applied,
+    write_embedding_xcontrol,
+    write_point_charge_file,
 )
 from mdprep.protonation.xtb_parser import XtbEnergyComparison, compare_hid_hie_energies, parse_xtb_energy_file
 from mdprep.protonation.xtb_runner import XtbExecutionError, run_xtb
@@ -78,14 +87,36 @@ def select_histidine_tautomer(
 ) -> HistidineXtbSelection:
     config = manifest.protonation.histidine.xtb
     hist_dir = Path(work_dir) / _histidine_dir_name(histidine)
-    hist_dir.mkdir(parents=True, exist_ok=True)
+    # The summary files below are written only once the run succeeds, so a
+    # failed run would otherwise leave the previous run's cluster_model.json
+    # sitting next to this run's geometries -- a charge and an atom count that
+    # describe a different cluster entirely.
+    if hist_dir.exists():
+        shutil.rmtree(hist_dir)
+    hist_dir.mkdir(parents=True)
+    if config.embedding == "qmmm":
+        return _select_tautomer_by_embedded_qmmm(
+            structure,
+            histidine,
+            manifest,
+            config=config,
+            hist_dir=hist_dir,
+            planned_states=planned_states,
+        )
     cluster_residues = build_histidine_cluster(
         structure,
         histidine,
         cutoff_angstrom=config.cutoff_angstrom,
     )
+    # A distance cutoff does not respect a coordination sphere, so a metal
+    # drawn in by proximity arrives without the ligands that define its charge
+    # and spin.
+    cluster_residues, sphere_additions = complete_metal_spheres(
+        structure, cluster_residues, manifest
+    )
     charge_breakdown = cluster_charge_breakdown(cluster_residues, manifest, planned_states)
     cluster_charge = sum(int(item["charge"]) for item in charge_breakdown)
+    unpaired = cluster_unpaired_electrons(cluster_residues, manifest)
     hid_xyz = hist_dir / "HID.xyz"
     hie_xyz = hist_dir / "HIE.xyz"
     try:
@@ -138,6 +169,7 @@ def select_histidine_tautomer(
             xyz_path=hid_run_xyz,
             work_dir=hid_run_dir,
             cluster_charge=cluster_charge,
+            unpaired_electrons=unpaired,
             stdout_path=hid_stdout,
             stderr_path=hid_stderr,
             input_path=hid_run_input if config.mode == "opt" and hid_model.fixed_atom_indices else None,
@@ -147,6 +179,7 @@ def select_histidine_tautomer(
             xyz_path=hie_run_xyz,
             work_dir=hie_run_dir,
             cluster_charge=cluster_charge,
+            unpaired_electrons=unpaired,
             stdout_path=hie_stdout,
             stderr_path=hie_stderr,
             input_path=hie_run_input if config.mode == "opt" and hie_model.fixed_atom_indices else None,
@@ -213,6 +246,289 @@ def select_histidine_tautomer(
     return selection
 
 
+def _select_tautomer_by_embedded_qmmm(
+    structure: PdbStructure,
+    histidine: ResidueRecord,
+    manifest: ManifestConfig,
+    *,
+    config: HistidineXtbConfig,
+    hist_dir: Path,
+    planned_states: dict[int, str],
+) -> HistidineXtbSelection:
+    """Decide HID against HIE with the side chain in QM and the rest embedded.
+
+    Both tautomers are the same neutral, closed-shell capped imidazole in the
+    same fixed field of MM charges; only the ring proton moves. That makes the
+    charge and spin arguments to xTB constants rather than something to derive
+    from the surroundings, which is where the cluster treatment goes wrong.
+    """
+
+    ion_charges = _declared_ion_charges(structure, manifest)
+    cofactor_charges = _gfn2_cofactor_charges(
+        structure,
+        manifest,
+        config=config,
+        cache_dir=hist_dir.parent / "embedding_cofactor_charges",
+    )
+    models: dict[str, QmmmTautomerModel] = {}
+    energies: dict[str, float] = {}
+    run_dirs: dict[str, Path] = {}
+    executable = config.executable
+    for tautomer in ("HID", "HIE"):
+        try:
+            model = build_qmmm_tautomer_model(
+                structure,
+                histidine,
+                tautomer=tautomer,
+                residue_states=planned_states,
+                cutoff_angstrom=config.embedding_cutoff_angstrom,
+                link_exclusion_angstrom=config.link_exclusion_angstrom,
+                ion_charges=ion_charges,
+                cofactor_atom_charges=cofactor_charges,
+                add_missing_water_hydrogens=config.add_missing_water_hydrogens,
+                water_oh_distance_angstrom=config.water_oh_distance_angstrom,
+                water_hoh_angle_degrees=config.water_hoh_angle_degrees,
+            )
+        except (HistidineQmmmError, HistidineGeometryError) as exc:
+            raise HistidineXtbError(str(exc)) from exc
+        models[tautomer] = model
+
+        run_dir = hist_dir / tautomer
+        run_dir.mkdir(parents=True)
+        xyz_path = run_dir / f"{tautomer}.xyz"
+        write_xyz(model.qm_atoms, xyz_path, comment=f"{tautomer} QM region")
+        embedded = bool(model.point_charges)
+        if embedded:
+            write_point_charge_file(model.point_charges, run_dir / "pcharge")
+        input_path = run_dir / f"{tautomer}_xtb.inp"
+        write_embedding_xcontrol(
+            input_path,
+            fixed_atom_indices=(
+                model.fixed_atom_indices if config.mode == "opt" else None
+            ),
+            embedding=embedded,
+        )
+        stdout_path = run_dir / f"{tautomer}_xtb_stdout.txt"
+        stderr_path = run_dir / f"{tautomer}_xtb_stderr.txt"
+        try:
+            run = run_xtb(
+                config=config,
+                xyz_path=xyz_path,
+                work_dir=run_dir,
+                cluster_charge=model.qm_charge,
+                unpaired_electrons=model.qm_unpaired_electrons,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                input_path=input_path,
+            )
+            energies[tautomer] = parse_xtb_energy_file(stdout_path)
+        except (XtbExecutionError, ValueError) as exc:
+            raise HistidineXtbError(str(exc)) from exc
+        executable = run.command_result.command[0]
+        if embedded and not embedding_was_applied(run.command_result.stdout):
+            raise HistidineXtbError(
+                f"xTB did not report reading the point charges for the "
+                f"{tautomer} form of {histidine.id.display()}. Both tautomers "
+                "would then have been evaluated in vacuum, and the answer "
+                f"would look no different. See {stdout_path}."
+            )
+        run_dirs[tautomer] = run_dir
+
+    comparison = compare_hid_hie_energies(
+        hid_energy_hartree=energies["HID"],
+        hie_energy_hartree=energies["HIE"],
+        close_call_kcal_mol=config.energy_close_call_kcal_mol,
+    )
+    warnings = comparison.warnings + _unique_strings(
+        chain(models["HID"].warnings, models["HIE"].warnings)
+    )
+    if not models["HID"].point_charges:
+        warnings.append(
+            f"No MM point charges surround {histidine.id.display()}, so its "
+            "tautomer was decided in vacuum. Expected only for an isolated "
+            "histidine."
+        )
+    (hist_dir / "qmmm_model.json").write_text(
+        json.dumps(
+            {
+                "embedding": "qmmm",
+                "model": (
+                    "histidine side chain in QM, surroundings as fixed ff14SB "
+                    "and TIP3P point charges"
+                ),
+                "HID": models["HID"].to_dict(),
+                "HIE": models["HIE"].to_dict(),
+                "tautomer_work_directories": {
+                    name: str(path) for name, path in run_dirs.items()
+                },
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    selection = HistidineXtbSelection(
+        residue=histidine,
+        hid_energy_hartree=comparison.hid_energy_hartree,
+        hie_energy_hartree=comparison.hie_energy_hartree,
+        delta_kcal_mol=comparison.delta_kcal_mol,
+        selected_state=comparison.selected_state,
+        close_call=comparison.close_call,
+        warnings=warnings,
+        mode=config.mode,
+        model=config.model,
+        executable=executable,
+        cluster_charge=models["HID"].qm_charge,
+        output_dir=hist_dir,
+        temporary_water_hydrogens_added=0,
+        waters_modified_for_xtb_only=[],
+        final_pdb_modified_by_temporary_water_hydrogens=False,
+    )
+    (hist_dir / "energies.json").write_text(
+        json.dumps(selection.to_dict(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return selection
+
+
+def _gfn2_cofactor_charges(
+    structure: PdbStructure,
+    manifest: ManifestConfig,
+    *,
+    config: HistidineXtbConfig,
+    cache_dir: Path,
+) -> dict[int, list[float]]:
+    """GFN2 atomic charges for the cofactors the force field has no template for.
+
+    A declared ligand such as alpha-ketoglutarate has no ff14SB residue, so it
+    would otherwise be left out of the embedding entirely -- a 2- charge beside
+    the histidine being decided, simply absent. Its net charge is declared in
+    the manifest and a GFN2 single point on a dozen atoms costs a fraction of a
+    second, which buys per-atom charges instead of a hole.
+
+    Results are cached on disk because the same cofactor surrounds several
+    histidines, and because they are then there to be inspected.
+    """
+
+    charges: dict[int, list[float]] = {}
+    for ligand in manifest.ligands:
+        try:
+            residue = resolve_residue_selector(structure, ligand.selector.model_dump())
+        except SelectorError:
+            continue
+        computed = _gfn2_residue_charges(
+            residue,
+            net_charge=ligand.net_charge,
+            multiplicity=ligand.multiplicity,
+            config=config,
+            cache_dir=cache_dir,
+        )
+        if computed is not None:
+            charges[id(residue)] = computed
+    return charges
+
+
+def _gfn2_residue_charges(
+    residue: ResidueRecord,
+    *,
+    net_charge: int,
+    multiplicity: int,
+    config: HistidineXtbConfig,
+    cache_dir: Path,
+) -> list[float] | None:
+    label = _histidine_dir_name(residue)
+    cache_path = cache_dir / f"{label}.json"
+    if cache_path.exists():
+        cached = json.loads(cache_path.read_text(encoding="utf-8"))
+        if cached.get("atom_count") == len(residue.atoms):
+            return [float(value) for value in cached["atom_charges"]]
+
+    work = cache_dir / label
+    if work.exists():
+        shutil.rmtree(work)
+    work.mkdir(parents=True)
+    xyz_path = work / f"{label}.xyz"
+    write_xyz(
+        [
+            XyzAtom(
+                element=(atom.element or atom.name).strip(),
+                x=atom.x,
+                y=atom.y,
+                z=atom.z,
+                name=atom.name.strip(),
+            )
+            for atom in residue.atoms
+        ],
+        xyz_path,
+        comment=f"{residue.id.display()} for GFN2 embedding charges",
+    )
+    # A single point: these charges describe the environment, and relaxing the
+    # cofactor would move it away from the geometry everything else sits in.
+    single_point = config.model_copy(update={"mode": "sp"})
+    try:
+        run_xtb(
+            config=single_point,
+            xyz_path=xyz_path,
+            work_dir=work,
+            cluster_charge=net_charge,
+            unpaired_electrons=max(0, multiplicity - 1),
+            stdout_path=work / "xtb_stdout.txt",
+            stderr_path=work / "xtb_stderr.txt",
+        )
+    except XtbExecutionError:
+        return None
+
+    charges_file = work / "charges"
+    if not charges_file.exists():
+        return None
+    values = [
+        float(line) for line in charges_file.read_text(encoding="utf-8").split()
+    ]
+    if len(values) != len(residue.atoms):
+        return None
+    cache_path.write_text(
+        json.dumps(
+            {
+                "residue": residue.id.display(),
+                "method": "gfn2",
+                "net_charge": net_charge,
+                "atom_count": len(residue.atoms),
+                "atom_names": [atom.name.strip() for atom in residue.atoms],
+                "atom_charges": values,
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return values
+
+
+def _declared_ion_charges(
+    structure: PdbStructure,
+    manifest: ManifestConfig,
+) -> dict[int, float]:
+    """Charges the manifest declares for metal ions and coordinating ions.
+
+    The force field's default oxidation state is a guess about the system; the
+    manifest is the user stating it.
+    """
+
+    charges: dict[int, float] = {}
+    for site in manifest.metals:
+        declared = list(site.ions) + list(getattr(site, "coordinating_ions", []))
+        for ion in declared:
+            try:
+                residue = resolve_residue_selector(
+                    structure, ion.selector.model_dump(exclude={"atom_name"})
+                )
+            except SelectorError:
+                continue
+            charges[id(residue)] = float(ion.charge)
+    return charges
+
+
 def _prepare_isolated_xtb_work_dir(
     histidine_dir: Path,
     *,
@@ -255,6 +571,74 @@ def build_histidine_cluster(
     return cluster
 
 
+def complete_metal_spheres(
+    structure: PdbStructure,
+    cluster: list[ResidueRecord],
+    manifest: ManifestConfig,
+) -> tuple[list[ResidueRecord], list[str]]:
+    """Add the declared coordination sphere of any metal the cluster contains.
+
+    A distance cutoff measured from a histidine does not respect a metal's
+    coordination sphere. On BesD the cluster around His134 picked up the iron
+    but not the chloride bonded to it, leaving a fragment whose charge and
+    electron count were artefacts of where the cut happened to fall -- xTB
+    rejected it as an inconsistent number of unpaired electrons.
+
+    A metal is only meaningful together with what it is bonded to, so whenever
+    one is drawn in, the residues the manifest declares as its coordinators
+    come with it.
+    """
+
+    present = {id(residue) for residue in cluster}
+    extended = list(cluster)
+    added: list[str] = []
+
+    for site in manifest.metals:
+        ion_residues = []
+        for ion in site.ions:
+            try:
+                ion_residues.append(
+                    resolve_residue_selector(
+                        structure, ion.selector.model_dump(exclude={"atom_name"})
+                    )
+                )
+            except SelectorError:
+                continue
+        if not any(id(residue) in present for residue in ion_residues):
+            continue
+
+        wanted = list(ion_residues)
+        for coordinating in site.coordinating_ions:
+            selector = coordinating.selector.model_dump()
+            selector.pop("atom_name", None)
+            try:
+                wanted.append(resolve_residue_selector(structure, selector))
+            except SelectorError:
+                continue
+        if site.mcpb is not None:
+            selectors = [bond.coordinator.model_dump() for bond in site.mcpb.bonds]
+            selectors += [item.model_dump() for item in site.mcpb.additional_residues]
+            for selector in selectors:
+                selector.pop("atom_name", None)
+                try:
+                    wanted.append(resolve_residue_selector(structure, selector))
+                except SelectorError:
+                    continue
+        for residue in wanted:
+            if id(residue) in present:
+                continue
+            present.add(id(residue))
+            extended.append(residue)
+            added.append(residue.id.display())
+
+    if not added:
+        return cluster, []
+    # Keep structure order so the cluster is reproducible.
+    order = {id(residue): index for index, residue in enumerate(structure.residues)}
+    extended.sort(key=lambda residue: order.get(id(residue), len(order)))
+    return extended, added
+
+
 def estimate_cluster_charge(
     cluster_residues: list[ResidueRecord],
     manifest: ManifestConfig,
@@ -269,8 +653,19 @@ def cluster_charge_breakdown(
     planned_states: dict[int, str],
 ) -> list[dict[str, object]]:
     ligand_charges = _ligand_charge_by_residue(cluster_residues, manifest)
+    metal_charges = _metal_charge_by_residue(cluster_residues, manifest)
     terms: list[dict[str, object]] = []
     for residue in cluster_residues:
+        if id(residue) in metal_charges:
+            terms.append(
+                {
+                    "residue": residue.id.display(),
+                    "state": residue.id.resname,
+                    "charge": metal_charges[id(residue)],
+                    "source": "configured_metal_ion",
+                }
+            )
+            continue
         if id(residue) in ligand_charges:
             terms.append(
                 {
@@ -294,7 +689,9 @@ def cluster_charge_breakdown(
             continue
         if is_likely_ligand_or_cofactor(residue):
             raise HistidineXtbError(
-                f"Unknown heterogen {residue.id.display()} encountered in xTB cluster; configure it under ligands."
+                f"Unknown heterogen {residue.id.display()} encountered in xTB "
+                "cluster; configure it under ligands, or under metals if it is "
+                "a metal ion."
             )
         residue_charge = {
             "ASP": -1,
@@ -340,6 +737,75 @@ def _ligand_charge_by_residue(
         except SelectorError:
             continue
         result[id(residue)] = ligand.net_charge
+    return result
+
+
+def cluster_unpaired_electrons(
+    cluster_residues: list[ResidueRecord],
+    manifest: ManifestConfig,
+) -> int:
+    """Unpaired electrons contributed by configured metals in a cluster.
+
+    High-spin Fe(II) carries four. Treating such a cluster as closed shell
+    does not converge, and would be the wrong electronic state if it did.
+    """
+
+    structure = PdbStructure(
+        path=Path("cluster"),
+        atoms=[atom for residue in cluster_residues for atom in residue.atoms],
+        residues=cluster_residues,
+        model_count=1,
+    )
+    total = 0
+    for site in manifest.metals:
+        # Only the metal carries unpaired electrons; a closed-shell halide
+        # bound beside it does not.
+        for ion in site.ions:
+            try:
+                resolve_residue_selector(
+                    structure, ion.selector.model_dump(exclude={"atom_name"})
+                )
+            except SelectorError:
+                continue
+            if ion.multiplicity is None:
+                raise HistidineXtbError(
+                    f"Metal {ion.element} in site {site.id!r} appears in an xTB "
+                    "histidine cluster but declares no multiplicity. Set "
+                    "metals[].ions[].multiplicity: a spin state cannot be "
+                    "inferred from an element."
+                )
+            total += ion.multiplicity - 1
+    return total
+
+
+def _metal_charge_by_residue(
+    residues: list[ResidueRecord],
+    manifest: ManifestConfig,
+) -> dict[int, int]:
+    """Formal charges of configured metal ions appearing in a cluster.
+
+    A metal is not an unknown heterogen: its oxidation state is declared in the
+    manifest, which is the only place it could legitimately come from.
+    """
+
+    result: dict[int, int] = {}
+    structure = PdbStructure(
+        path=Path("cluster"),
+        atoms=[atom for residue in residues for atom in residue.atoms],
+        residues=residues,
+        model_count=1,
+    )
+    for site in manifest.metals:
+        # Metal centres and the non-metal ions bound with them both carry a
+        # declared formal charge, which is the only place it could come from.
+        for ion in list(site.ions) + list(site.coordinating_ions):
+            try:
+                residue = resolve_residue_selector(
+                    structure, ion.selector.model_dump(exclude={"atom_name"})
+                )
+            except SelectorError:
+                continue
+            result[id(residue)] = ion.charge
     return result
 
 

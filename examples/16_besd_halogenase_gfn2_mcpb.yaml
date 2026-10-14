@@ -1,0 +1,154 @@
+# BesD, an alpha-ketoglutarate-dependent halogenase (PDB 6NIE).
+#
+# The reference case for the student-facing workflow: Fe(II) in a 2-His facial
+# triad with chloride in the carboxylate position, alpha-ketoglutarate as the
+# coordinating cofactor, and a lysine substrate.
+#
+# Every chemistry-sensitive value below was entered deliberately and none of it
+# is inferred by mdprep:
+#   * keep_chains: [A]       6NIE is four copies; MCPB inputs are single-chain.
+#   * Fe charge 2, spin 5    high-spin d6 Fe(II).
+#   * small/large model -1   Fe(2+) + AKG(2-) + Cl(1-) + 2 x His(0).
+#   * five explicit bonds    measured at 2.16-2.39 A in the deposited structure.
+#
+# alpha-ketoglutarate coordinates the iron, so it takes its charges from the
+# MCPB large-model fit rather than an independent AM1-BCC calculation. The
+# lysine substrate does not coordinate and uses AM1-BCC.
+#
+# The Hessian and the QM/MM refinement geometry both use GFN2, which is far
+# cheaper than DFT and is what makes this tractable as a teaching example.
+project:
+  name: besd_6nie
+  input_structure: tutorials/besd_6nie/6NIE.pdb
+  output_dir: prepared/besd
+
+structure:
+  keep_chains: [A]
+  keep_crystal_waters: true
+  altloc_policy: highest_occupancy
+  remove_unknown_heterogens: false
+  preserve_chain_ids: true
+  remove_input_hydrogens: true
+  # 6NIE's REMARK 470 lists five chain-A residues with unresolved side chains
+  # (LEU8, LYS9, ARG230, LEU232, LYS251). Without this they reach tleap
+  # truncated, and the prepared system simulates a leucine with no CG. The
+  # repaired side chains have no experimental positions, so treat them as
+  # modelled rather than observed.
+  repair:
+    backend: pdbfixer
+    add_missing_heavy_atoms: true
+    unresolved_residues: leave_absent
+
+protein: {forcefield: ff14SB, water_model: TIP3P}
+
+protonation:
+  ph: 7.0
+  method: propka_xtb_his
+  overrides: []
+  histidine:
+    neutral_tautomer_method: xtb
+    xtb: {model: gfn2, mode: opt, num_threads: 1}
+
+disulfides: {auto_detect: true, detection_cutoff_angstrom: 2.2, force: [], forbid: []}
+
+ligands:
+  - id: a_lys_301
+    selector: {chain: A, resname: LYS, resid: 301, icode: null}
+    # Neutral free lysine as deposited; 6NIE has no ligand hydrogens, so the
+    # protonation has to be stated rather than inferred.
+    net_charge: 0
+    smiles: "C(CCN)CC(C(=O)O)N"
+    multiplicity: 1
+    atom_types: gaff2
+    charge_method: am1bcc
+  - id: a_akg_304
+    selector: {chain: A, resname: AKG, resid: 304, icode: null}
+    # The dianion, which is how it coordinates the iron.
+    net_charge: -2
+    smiles: "C(CC(=O)[O-])C(=O)C(=O)[O-]"
+    multiplicity: 1
+    atom_types: gaff2
+    charge_method: mcpb_resp_pyscf
+metals:
+  - id: a_fe2_302_site
+    model: bonded_mcpb
+    ions:
+      - selector: &fe {chain: A, resname: FE2, resid: 302, icode: null, atom_name: FE}
+        element: Fe
+        charge: 2
+        multiplicity: 5
+    # The chloride occupies the position a carboxylate takes in a hydroxylase.
+    # It is an ion, not a cofactor: Amber parameterises Cl- directly, and
+    # antechamber could not treat a single atom anyway.
+    coordinating_ions:
+      - selector: {chain: A, resname: CL, resid: 303, icode: null, atom_name: CL}
+        element: Cl
+        charge: -1
+    mcpb:
+      workflow: pyscf
+      provisional_nonbonded_parameter_set: "12_6"
+      cutoff_angstrom: 2.6
+      bonds:
+        - {ion: *fe, coordinator: {chain: A, resname: AKG, resid: 304, icode: null, atom_name: O1}}
+        - {ion: *fe, coordinator: {chain: A, resname: AKG, resid: 304, icode: null, atom_name: O5}}
+        - {ion: *fe, coordinator: {chain: A, resname: HIS, resid: 204, icode: null, atom_name: NE2}}
+        - {ion: *fe, coordinator: {chain: A, resname: HIS, resid: 137, icode: null, atom_name: NE2}}
+        - {ion: *fe, coordinator: {chain: A, resname: CL, resid: 303, icode: null, atom_name: CL}}
+      additional_residues: []
+      force_constant_method: seminario
+      charge_restraint: backbone_heavy
+      software_version: gau
+      small_model_charge: -1
+      small_model_spin: 5
+      large_model_charge: -1
+      large_model_spin: 5
+      pyscf:
+        geometry_source: qmmm_refinement
+        # A g-xTB Hessian, which is the default for a metal site. GFN2
+        # describes transition-metal coordination poorly: on this iron it
+        # gives Fe-O5 of the bidentate aKG a negative force constant, which
+        # MCPB.py clamps to zero and mdprep then refuses. g-xTB gets all five
+        # bonds right for about four times GFN2's cost (8 s against 2 s).
+        #
+        # g-xTB is a separate build from the GFN-only xtb conda installs. Get
+        # it from https://github.com/grimme-lab/g-xtb/releases and either set
+        # MDPREP_GXTB_EXECUTABLE or give xtb.executable its path below.
+        # `mdprep doctor <this file>` says whether one was found.
+        hessian_backend: xtb
+        xtb: {num_threads: 8}
+        # GFN2 is fine for the large-model ESP, where it is ~60 s against tens
+        # of minutes for B3LYP/6-31G*. Those charges are fitted to a
+        # semi-empirical valence density, not an HF/6-31G* one; use
+        # esp_backend: pyscf when that matters.
+        esp_backend: xtb
+        method: B3LYP
+        basis: "6-31G*"
+
+refinement:
+  enabled: true
+  # The force-field backend holds every heavy atom and relaxes the hydrogens
+  # in seconds. ASH is a manual install that no package manager provides, so
+  # requiring it here would stop this example running out of the box; set
+  # backend: ash if you have it and want a GFN2 QM/MM geometry instead.
+  backend: openmm
+  qm_method: gfn2_xtb
+  qm_components:
+    ligands: [a_lys_301, a_akg_304]
+    metal_sites: [a_fe2_302_site]
+    metal_coordinating_residues: {}
+  active_region_cutoff_angstrom: 4.0
+  active_water_cutoff_angstrom: 8.0
+  include_contact_waters: true
+  movable_atoms: active_region_hydrogens
+  post_refinement_protonation: reuse_initial
+  total_qm_multiplicity: 5
+  ash:
+    python_executable: python
+    xtb_executable: xtb
+    allow_unusual_link_boundaries: true
+    num_cores: 4
+    platform: CPU
+
+solvation: {enabled: true, box: truncated_octahedron, buffer_angstrom: 10.0, neutralize: true, salt_concentration_molar: 0.15, positive_ion: "Na+", negative_ion: "Cl-"}
+validation: {run_openmm_energy_check: true, fail_on_warnings: false, fail_on_missing_parameters: true, fail_on_noninteger_ligand_charge: true}
+molecular_dynamics: {enabled: false}

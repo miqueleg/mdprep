@@ -215,6 +215,124 @@ Ligand-coordinate validation also follows the recorded MCPB residue rename
 still compared against the original selected ligand, so a rename cannot hide
 atom reordering or movement.
 
+## Deriving the charges with GFN2 instead of DFT
+
+The large model exists to be fitted to an ESP, and that fit sets the charges
+the finished system carries. `esp_backend` chooses what produces it:
+
+```yaml
+pyscf:
+  hessian_backend: xtb     # small-model Hessian
+  esp_backend: xtb         # large-model ESP; default is pyscf
+  xtb: {model: gfn2, executable: xtb, num_threads: 1}
+```
+
+On the BesD site -- a 74-atom open-shell Fe(II) large model with ~4,600
+embedding charges -- GFN2 takes about a minute against tens of minutes for
+B3LYP/6-31G*. The embedding, the Merz-Kollman grid and the Gaussian log
+MCPB.py reads are identical either way, so the two are directly comparable.
+
+What changes is the density underneath. GFN2 is a semi-empirical valence
+method, and charges fitted to its ESP are not RESP charges in the usual
+sense. Every report says so, and `esp_backend: pyscf` remains the default.
+
+### Charges the manifest has to declare
+
+MCPB.py has no ion parameters of its own: the Amber protein force fields
+carry none, so an ion's charge reaches it only from a mol2 that mdprep
+writes. The oxidation states in the manifest are what those files say, which
+is why they have to be right:
+
+```yaml
+metals:
+  - id: a_fe2_302_site
+    ions:
+      - selector: {chain: A, resname: FE2, resid: 302, atom_name: FE}
+        element: Fe
+        charge: 2          # becomes chargedict["FE"] for MCPB.py
+        multiplicity: 5
+    coordinating_ions:
+      - selector: {chain: A, resname: CL, resid: 303, atom_name: CL}
+        element: Cl
+        charge: -1         # becomes chargedict["CL"]
+    mcpb:
+      small_model_charge: -1   # Fe(2+) + AKG(2-) + Cl(1-) + 2 x His(0)
+      large_model_charge: -1
+```
+
+mdprep renames an ion's residue and atom to the bare element symbol inside
+the MCPB working directory, because MCPB.py reads the charge by atom name in
+one place and by residue name in another and pairs it with the element symbol
+to find van der Waals parameters, so all three have to agree. A coordinating
+halide also gets a two-character atom type carrying Amber's own Li/Merz
+parameters, because MCPB.py reads a frcmod atom type from a two-character
+field and cannot represent `Cl-` at all. Both renames are confined to that
+directory; the prepared system keeps the names the input used.
+
+### A zero force constant is reported, not shipped
+
+A Seminario force constant of zero means the Hessian has no restoring force
+along that bond, and mdprep stops rather than writing it out.
+
+On BesD with `hessian_backend: xtb` and `xtb.model: gfn2`, Fe-O5 of the
+bidentate alpha-ketoglutarate does exactly that. Projecting the GFN2 Hessian
+onto the five Fe-ligand bonds shows why: that one comes out **negative**, and
+MCPB.py clamps it to zero.
+
+| Fe bond | r (A) | GFN2 | g-xTB |
+|---|---|---|---|
+| Fe-NE2 (His137) | 2.247 | 44.1 | 78.7 |
+| Fe-NE2 (His204) | 2.224 | 28.4 | 84.7 |
+| Fe-Cl | 2.392 | 46.6 | 112.4 |
+| Fe-O1 (aKG) | 2.161 | 51.1 | 99.3 |
+| Fe-O5 (aKG) | 2.179 | **-16.5** | 86.5 |
+
+(Raw Seminario projections in kcal/mol/A^2; MCPB.py reports half these, using
+the `E = k(r-r0)^2` convention.)
+
+GFN2 is parameterised for main-group chemistry and describes transition-metal
+coordination poorly, which is what the negative value is. The geometry is not
+at fault: every distance is normal.
+
+### g-xTB is the default, and why
+
+A bonded metal site takes `hessian_backend: xtb` with `xtb.model: gxtb`
+unless told otherwise. On this site that Hessian took 8.1 s against GFN2's
+2.2 s, and the whole BesD preparation -- structure through solvated Amber
+system -- completes in about a minute. The defaults need no block at all:
+
+```yaml
+mcpb:
+  pyscf:
+    geometry_source: qmmm_refinement
+    esp_backend: xtb      # GFN2 is fine here; the Hessian is where it is not
+```
+
+g-xTB is a separate build from the GFN-only xtb conda installs. Download it
+from the [official g-xTB releases](https://github.com/grimme-lab/g-xtb/releases)
+and point mdprep at it once:
+
+```bash
+export MDPREP_GXTB_EXECUTABLE=/path/to/g-xtb/bin/xtb
+```
+
+or give `mcpb.pyscf.xtb.executable` the path. mdprep looks for
+`MDPREP_GXTB_EXECUTABLE`, then `g-xtb`, then `xtb`, and `mdprep doctor
+<manifest>` says whether a usable one was found -- it runs the candidate's
+`--help` rather than trusting its name, because the conda `xtb` is called
+`xtb` too and would otherwise look like a pass.
+
+`xtb.model: gfn2` runs on the ordinary conda xtb and needs no download. It is
+the right choice only once you have checked the force constants for the site
+in hand; on a transition metal it may well give one that mdprep refuses.
+
+If you want a DFT reference instead, `hessian_backend: pyscf` with a pure
+functional and a small basis (for example `method: TPSS`, `basis: def2-SVP`)
+is far cheaper than the B3LYP/6-31G* default, because the cost of a hybrid is
+dominated by exact exchange. Expect minutes to hours for a 46-atom analytic
+Hessian rather than seconds, and check the result against the tight-binding
+one with `mdprep compare-mcpb`.
+
 ## Fixed-geometry PySCF/MCPB workflow
 
 `workflow: pyscf` completes the Hessian and RESP stages without Gaussian or
@@ -529,3 +647,42 @@ silently choosing one charge model.
   output appropriate to the selected method; the `pyscf` workflow requires
   PySCF and either a completed selected-site QM/MM refinement or a user-supplied
   optimized small-model PDB.
+
+## Ions bound in a metal site
+
+A halide, azide or hydroxide bound to the metal is part of the site, and where
+it is declared depends on whether a force field already knows it.
+
+**Monatomic ions** -- F-, Cl-, Br-, I- -- go in `metals[].coordinating_ions`:
+
+```yaml
+metals:
+  - id: catalytic_fe
+    ions:
+      - selector: {chain: A, resname: FE2, resid: 302, icode: null, atom_name: FE}
+        element: Fe
+        charge: 2
+        multiplicity: 5
+    coordinating_ions:
+      - selector: {chain: A, resname: CL, resid: 303, icode: null, atom_name: CL}
+        element: Cl
+        charge: -1
+```
+
+They belong nowhere else. `ions[]` would have MCPB treat the halide as a metal
+centre, and `ligands[]` would send it to antechamber, whose semi-empirical step
+refuses a single atom. Amber's Li/Merz sets parameterise all four halides
+directly, in the same file as the monovalent cations, so the force-field
+relaxation has what it needs.
+
+**Polyatomic ions** -- azide, for instance -- need none of this. antechamber
+handles them, so configure one under `ligands[]` as a cofactor and name it as
+an `mcpb.bonds` coordinator. That is what alpha-ketoglutarate already does in
+[the BesD example](../examples/16_besd_halogenase_gfn2_mcpb.yaml).
+
+Either way the ion is part of the metal site's QM region, contributes its
+declared formal charge to any xTB cluster it falls into, and is kept by
+structure normalization rather than treated as an unknown heterogen.
+
+Only the metal contributes unpaired electrons; a closed-shell halide beside it
+does not.

@@ -15,6 +15,49 @@ For all methods, mdprep validates atom count, atom names, element order,
 coordinates, residue identity, and total charge. Multiple ligands are processed
 independently, even if they share a residue name.
 
+## Why a SMILES, and what it can and cannot be checked against
+
+A crystal structure usually resolves no ligand hydrogens, and a formal charge
+does not supply them. The keto and enol forms of alpha-ketoglutarate are both
+C5H4O5(2-) over the same heavy atoms and the same connectivity; they differ in
+where two hydrogens sit and in two bond orders. Its monoanion is C5H5O5(-)
+whichever carboxylate keeps the proton. Nothing in a PDB file distinguishes
+these, so mdprep does not try: `ligands[].smiles` states the protonation and
+the bond orders, and the hydrogens are placed to match it.
+
+Three things are checked, and one is not:
+
+- The SMILES must describe the same number of heavy atoms as the residue.
+- It must match the residue's heavy-atom connectivity, which is what lets the
+  bond orders be transferred onto the coordinates.
+- Its formal charge must equal `net_charge`. Without this a SMILES one proton
+  out is accepted, because it still matches the same heavy atoms -- and the
+  hydrogens then describe a different molecule from the charge the rest of
+  the run uses.
+- The bond orders it implies must be consistent with the distances in the
+  structure. This is what catches a wrong tautomer. Formula, charge and
+  connectivity cannot tell the keto and enol forms apart, but the coordinates
+  can: in 6NIE the C2-O5 of alpha-ketoglutarate is 1.207 A, a ketone, where an
+  enol C-OH would refine near 1.36. Delocalised groups -- carboxylate, nitro,
+  guanidinium, phosphate, sulfonyl -- and aromatic rings are skipped, because
+  a SMILES has to write their symmetric geometry as alternating orders and the
+  formal numbers there say nothing about length.
+
+Note what the geometry check does and does not establish. At typical protein
+resolution the ligand's bond lengths come from the refinement restraints
+rather than from the density, so they record the tautomer whoever built the
+monomer dictionary chose. That is usually right, and it is certainly the
+model you are starting from, but it is not independent evidence.
+
+Deriving the bond orders from the coordinates alone is not a substitute for
+the SMILES. Heavy atoms carry no record of how many hydrogens were attached,
+so a perception algorithm fills the spare valence with bond order instead: on
+this same alpha-ketoglutarate, RDKit returns a C-C triple bond where the
+molecule has a CH2-CH2.
+
+A ligand that already carries hydrogens is left alone, and a SMILES is neither
+asked for nor applied to it.
+
 ## AM1-BCC
 
 Runs AmberTools `antechamber` and `parmchk2`.

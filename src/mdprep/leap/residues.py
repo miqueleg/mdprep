@@ -4,13 +4,23 @@ from __future__ import annotations
 
 import re
 from collections import OrderedDict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
-from mdprep.ambertools.mol2 import Mol2Error, read_mol2
+from mdprep.ambertools.mol2 import (
+    Mol2Error,
+    read_mol2,
+    write_mol2_under_residue_name,
+)
 from mdprep.config.models import ManifestConfig
 from mdprep.protonation.apply import ProtonationRecord, ProtonationResult
+from mdprep.structure.classify import (
+    BULK_ION_ELEMENTS,
+    COORDINATING_METAL_ELEMENTS,
+    STANDARD_PROTEIN_RESIDUES,
+    WATER_RESIDUES,
+)
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.selectors import SelectorError, resolve_residue_selector
@@ -31,6 +41,7 @@ class LeapInputResult:
     water_renames: list[dict[str, object]]
     ligand_coordinate_anchors: list[dict[str, object]]
     residue_renumberings: list[dict[str, object]]
+    ligand_residue_renames: list[dict[str, object]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -38,6 +49,7 @@ class LeapInputResult:
             "water_renames": self.water_renames,
             "ligand_coordinate_anchors": self.ligand_coordinate_anchors,
             "residue_renumberings": self.residue_renumberings,
+            "ligand_residue_renames": self.ligand_residue_renames,
         }
 
 
@@ -85,6 +97,137 @@ class DisulfideBondCommand:
         }
 
 
+# Residue names tleap already answers to once the protein, water and ion force
+# fields are sourced.  `loadpdb` resolves every residue by name against those
+# templates, and for an amino-acid name it maps the name to its terminal form
+# first -- a lysine that opens a chain becomes NLYS -- which nothing a manifest
+# loads can intercept.  So a free amino acid declared as a ligand is built as a
+# piece of protein: tleap stops on the first ligand-named hydrogen it cannot
+# type, and `LYS = <ligand unit>` would meanwhile point every real lysine in
+# the protein at the ligand.
+_NUCLEIC_RESIDUES = (
+    {f"D{base}{end}" for base in "ACGT" for end in ("", "3", "5", "N")}
+    | {f"R{base}{end}" for base in "ACGU" for end in ("", "3", "5", "N")}
+    | set("ACGTU")
+)
+
+_AMBER_ION_RESIDUES = (
+    COORDINATING_METAL_ELEMENTS
+    | BULK_ION_ELEMENTS
+    | {f"{element}{charge}" for element in COORDINATING_METAL_ELEMENTS for charge in ("1", "2", "3")}
+    | {f"{element}+" for element in BULK_ION_ELEMENTS}
+    | {f"{element}-" for element in BULK_ION_ELEMENTS}
+)
+
+LEAP_RESERVED_RESIDUE_NAMES = frozenset(
+    STANDARD_PROTEIN_RESIDUES
+    | {f"{end}{name}" for end in ("N", "C") for name in STANDARD_PROTEIN_RESIDUES}
+    | WATER_RESIDUES
+    | _NUCLEIC_RESIDUES
+    | _AMBER_ION_RESIDUES
+)
+
+
+@dataclass(frozen=True)
+class LigandResidueRename:
+    """A ligand renamed for tleap because its own name was already taken."""
+
+    ligand_id: str
+    chain_id: str
+    resid: int
+    icode: str | None
+    original_resname: str
+    tleap_resname: str
+    reason: str
+
+    @property
+    def residue_key(self) -> tuple[str, int, str | None]:
+        return (self.chain_id, self.resid, self.icode)
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "ligand_id": self.ligand_id,
+            "chain_id": self.chain_id,
+            "resid": self.resid,
+            "icode": self.icode,
+            "original_resname": self.original_resname,
+            "tleap_resname": self.tleap_resname,
+            "reason": self.reason,
+        }
+
+
+def plan_ligand_residue_renames(
+    *,
+    manifest: ManifestConfig,
+    structure: PdbStructure,
+) -> list[LigandResidueRename]:
+    """Give every declared ligand a residue name tleap has not already claimed.
+
+    Only a ligand whose name collides is renamed; the rest keep the name the
+    deposition gave them, which is what a reader of the prepared system
+    expects to see.
+    """
+
+    taken = set(LEAP_RESERVED_RESIDUE_NAMES)
+    taken.update(residue.id.resname for residue in structure.residues)
+    renames: list[LigandResidueRename] = []
+    for ligand in manifest.ligands:
+        try:
+            residue = resolve_residue_selector(structure, ligand.selector.model_dump())
+        except SelectorError:
+            # The ligand stage reports an unresolvable selector in full.
+            continue
+        if residue.id.resname not in LEAP_RESERVED_RESIDUE_NAMES:
+            continue
+        tleap_resname = _available_residue_name(residue.id.resname, taken)
+        taken.add(tleap_resname)
+        renames.append(
+            LigandResidueRename(
+                ligand_id=ligand.id,
+                chain_id=residue.id.chain_id,
+                resid=residue.id.resid,
+                icode=residue.id.icode,
+                original_resname=residue.id.resname,
+                tleap_resname=tleap_resname,
+                reason=(
+                    f"{residue.id.resname} is a residue the Amber force fields already "
+                    "define, so tleap would build this ligand from the protein template "
+                    "instead of its own parameters."
+                ),
+            )
+        )
+    return renames
+
+
+def ligand_rename_candidates(original: str) -> list[str]:
+    """The names a ligand called ``original`` may be renamed to, in order.
+
+    Shared with the readers of a renamed structure, so that recognising a
+    rename and choosing one cannot drift apart.
+    """
+
+    stem = original[:2].upper()
+    candidates = [f"{stem}{digit}" for digit in "123456789"]
+    candidates += [f"{original[:1].upper()}{index:02d}" for index in range(100)]
+    return candidates
+
+
+def is_ligand_rename_of(candidate: str, original: str) -> bool:
+    """Whether ``candidate`` is a name this module would have chosen."""
+
+    return candidate.strip().upper() in set(ligand_rename_candidates(original))
+
+
+def _available_residue_name(original: str, taken: set[str]) -> str:
+    for candidate in ligand_rename_candidates(original):
+        if candidate not in taken:
+            return candidate
+    raise LeapResidueError(
+        f"No free three-character residue name is left for a ligand named {original}; "
+        "rename it in the input structure."
+    )
+
+
 def prepare_leap_input_pdb(
     structure: PdbStructure,
     output_path: str | Path,
@@ -92,8 +235,13 @@ def prepare_leap_input_pdb(
     manifest: ManifestConfig | None = None,
     ligand_result: "LigandStageResult | None" = None,
     renumber_residues_sequentially: bool = False,
+    ligand_residue_renames: Sequence[LigandResidueRename] = (),
 ) -> LeapInputResult:
     atoms: list[AtomRecord] = []
+    rename_by_key = {rename.residue_key: rename for rename in ligand_residue_renames}
+    # Collected by position rather than applied here: the ligand anchoring
+    # below still resolves ligands under the name the manifest selector uses.
+    renamed_positions: list[tuple[int, str]] = []
     water_renames: list[dict[str, object]] = []
     residue_renumberings: list[dict[str, object]] = []
     sequential_resids: dict[tuple[str, str, int, str | None], int] = {}
@@ -140,6 +288,9 @@ def prepare_leap_input_pdb(
                         "new_atom_name": new_atom.name,
                     }
                 )
+        rename = rename_by_key.get((atom.chain_id, atom.resid, atom.icode))
+        if rename is not None and atom.resname == rename.original_resname:
+            renamed_positions.append((len(atoms), rename.tleap_resname))
         if renumber_residues_sequentially:
             key = (atom.chain_id, atom.resname, atom.resid, atom.icode)
             new_atom = replace(
@@ -155,6 +306,8 @@ def prepare_leap_input_pdb(
             manifest=manifest,
             ligand_result=ligand_result,
         )
+    for position, tleap_resname in renamed_positions:
+        atoms[position] = replace(atoms[position], resname=tleap_resname)
     output = Path(output_path)
     leap_structure = PdbStructure(
         path=output,
@@ -171,6 +324,7 @@ def prepare_leap_input_pdb(
         water_renames=water_renames,
         ligand_coordinate_anchors=ligand_coordinate_anchors,
         residue_renumberings=residue_renumberings,
+        ligand_residue_renames=[rename.to_dict() for rename in ligand_residue_renames],
     )
 
 
@@ -192,8 +346,10 @@ def validate_ligand_parameter_files(
     structure: PdbStructure,
     ligand_result: LigandStageResult,
     excluded_ligand_ids: set[str] | None = None,
+    residue_renames: Sequence[LigandResidueRename] = (),
 ) -> list[LigandParameterFiles]:
     excluded = excluded_ligand_ids or set()
+    renames_by_id = {rename.ligand_id: rename for rename in residue_renames}
     items_by_id = {item.ligand_id: item for item in ligand_result.ligands}
     variable_names: set[str] = set()
     residue_parameter_files: dict[str, tuple[bytes, bytes]] = {}
@@ -208,15 +364,20 @@ def validate_ligand_parameter_files(
             raise LeapResidueError(f"Ligand {ligand.id} final mol2 is missing.")
         if item.final_frcmod_path is None or not item.final_frcmod_path.exists():
             raise LeapResidueError(f"Ligand {ligand.id} final frcmod is missing.")
+        rename = renames_by_id.get(ligand.id)
         try:
-            residue = resolve_residue_selector(structure, ligand.selector.model_dump())
+            residue = _resolve_ligand_residue(structure, ligand, rename)
         except SelectorError as exc:
             raise LeapResidueError(f"Ligand {ligand.id} selector failed during tleap validation: {exc}") from exc
+        # The structure may already carry the tleap name, or not, depending on
+        # which stage asked. The mol2 the ligand stage fitted carries neither.
+        source_resname = rename.original_resname if rename else residue.id.resname
+        tleap_resname = rename.tleap_resname if rename else residue.id.resname
         mol2 = read_mol2(item.final_mol2_path)
         mol2_resnames = {atom.subst_name for atom in mol2.atoms}
-        if mol2_resnames != {residue.id.resname}:
+        if mol2_resnames != {source_resname}:
             raise LeapResidueError(
-                f"Ligand {ligand.id} residue name mismatch: PDB has {residue.id.resname}, "
+                f"Ligand {ligand.id} residue name mismatch: PDB has {source_resname}, "
                 f"mol2 has {sorted(mol2_resnames)}."
             )
         pdb_atom_names = [atom.name for atom in residue.atoms]
@@ -234,25 +395,59 @@ def validate_ligand_parameter_files(
             )
         except OSError as exc:
             raise LeapResidueError(f"Could not read ligand parameter files for {ligand.id}: {exc}") from exc
-        previous = residue_parameter_files.get(residue.id.resname)
+        previous = residue_parameter_files.get(tleap_resname)
         if previous is not None and previous != key:
             raise LeapResidueError(
-                f"Multiple different parameter sets for residue name {residue.id.resname} are not supported yet; "
+                f"Multiple different parameter sets for residue name {tleap_resname} are not supported yet; "
                 "use unique residue names or shared parameter files."
             )
-        residue_parameter_files[residue.id.resname] = key
+        residue_parameter_files[tleap_resname] = key
+        mol2_path = item.final_mol2_path
+        if rename is not None:
+            # A copy under the tleap name, beside the fitted mol2 it comes
+            # from, so the charges tleap reads are the fitted ones.
+            mol2_path = item.final_mol2_path.with_name(
+                f"{item.final_mol2_path.stem}.{tleap_resname}.mol2"
+            )
+            write_mol2_under_residue_name(
+                item.final_mol2_path, tleap_resname, mol2_path
+            )
         variable = _unique_variable_name(ligand.id, variable_names)
         validated.append(
             LigandParameterFiles(
                 ligand_id=ligand.id,
                 variable_name=variable,
-                residue_name=residue.id.resname,
-                final_mol2_path=item.final_mol2_path,
+                residue_name=tleap_resname,
+                final_mol2_path=mol2_path,
                 final_frcmod_path=item.final_frcmod_path,
                 atom_names=pdb_atom_names,
             )
         )
     return validated
+
+
+def _resolve_ligand_residue(
+    structure: PdbStructure,
+    ligand: object,
+    rename: LigandResidueRename | None,
+) -> ResidueRecord:
+    """Resolve a ligand whether or not the structure has been renamed yet.
+
+    The tleap name is tried first, because it is unique by construction. The
+    original name is not: a selector that names only a residue name would
+    otherwise be free to land on a protein residue once the ligand itself has
+    been renamed away from it.
+    """
+
+    selector = ligand.selector.model_dump()  # type: ignore[attr-defined]
+    if rename is not None:
+        try:
+            return resolve_residue_selector(
+                structure, {**selector, "resname": rename.tleap_resname}
+            )
+        except SelectorError:
+            pass
+    return resolve_residue_selector(structure, selector)
 
 
 def validate_tleap_ligand_coordinates(

@@ -20,6 +20,13 @@ def _write_manifest(tmp_path):
     data["ligands"] = [ligand_entry("substrate", "B", "SUB", 501)]
     data["refinement"] = {
         "enabled": True,
+        # These fixtures exercise the ASH QM/MM backend; the default is now
+        # the force-field hydrogen refinement.
+        "backend": "ash",
+        # This fixture relaxes heavy atoms and re-runs protonation, which is
+        # no longer the default now that the force-field backend is.
+        "movable_atoms": "all_active_region",
+        "post_refinement_protonation": "rerun",
         "qm_components": {"ligands": ["substrate"]},
         "ash": {"python_executable": "/fake/ash/python"},
     }

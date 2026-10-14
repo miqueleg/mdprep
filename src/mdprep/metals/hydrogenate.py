@@ -6,13 +6,16 @@ from collections import OrderedDict
 from dataclasses import dataclass, replace
 from math import dist
 from pathlib import Path
+from typing import Sequence
 
 from mdprep.config.models import ManifestConfig
 from mdprep.leap.forcefields import forcefield_sources
 from mdprep.leap.log_parser import assert_tleap_success
 from mdprep.leap.residues import (
+    LigandResidueRename,
     append_disulfide_conect_records,
     disulfide_bond_commands,
+    plan_ligand_residue_renames,
     prepare_leap_input_pdb,
     validate_ligand_parameter_files,
     validate_tleap_ligand_coordinates,
@@ -76,11 +79,16 @@ def hydrogenate_for_mcpb(
     work = Path(output_dir)
     input_dir = work / "input"
     work.mkdir(parents=True, exist_ok=True)
+    ligand_residue_renames = plan_ligand_residue_renames(
+        manifest=manifest,
+        structure=structure,
+    )
     leap_input = prepare_leap_input_pdb(
         structure,
         input_dir / "system.pre_mcpb.pdb",
         manifest=manifest,
         ligand_result=ligand_result,
+        ligand_residue_renames=ligand_residue_renames,
     )
     sources = forcefield_sources(
         protein_forcefield=manifest.protein.forcefield,
@@ -91,6 +99,7 @@ def hydrogenate_for_mcpb(
         manifest=manifest,
         structure=leap_input.structure,
         ligand_result=ligand_result,
+        residue_renames=ligand_residue_renames,
     )
     disulfides = disulfide_bond_commands(
         structure=leap_input.structure,
@@ -134,6 +143,7 @@ def hydrogenate_for_mcpb(
     maximum_coordinate_deviation = _validate_preserved_input_coordinates(
         structure,
         restored,
+        residue_renames=ligand_residue_renames,
     )
     validate_tleap_ligand_coordinates(
         manifest=manifest,
@@ -163,13 +173,20 @@ def _validate_preserved_input_coordinates(
     observed: PdbStructure,
     *,
     tolerance_angstrom: float = 0.002,
+    residue_renames: Sequence[LigandResidueRename] = (),
 ) -> float:
+    renamed_to_original = {
+        rename.residue_key: rename.original_resname for rename in residue_renames
+    }
     observed_by_identity = {
-        _preservation_identity(atom): atom for atom in observed.atoms
+        _preservation_identity(atom, renamed_to_original=renamed_to_original): atom
+        for atom in observed.atoms
     }
     maximum = 0.0
     for atom in reference.atoms:
-        candidate = observed_by_identity.get(_preservation_identity(atom))
+        candidate = observed_by_identity.get(
+            _preservation_identity(atom, renamed_to_original=renamed_to_original)
+        )
         if candidate is None:
             raise MetalHydrogenationError(
                 "Pre-MCPB tleap removed an input atom before MCPB.py: "
@@ -191,11 +208,22 @@ def _validate_preserved_input_coordinates(
 
 def _preservation_identity(
     atom: AtomRecord,
+    *,
+    renamed_to_original: dict[tuple[str, int, str | None], str] | None = None,
 ) -> tuple[str, str, int, str | None, str]:
     # tleap standardizes retained HOH/H2O/TIP3/OPC input residues to WAT.
     # This is a representation rename, not atom loss, so compare waters using
     # one canonical residue name while preserving chain/residue/atom identity.
     resname = "WAT" if atom.resname in WATER_RESIDUES else atom.resname
+    # A ligand whose deposited name is one the force fields already define is
+    # built under a substitute, so a free lysine goes through tleap as LY1 and
+    # comes back as LY1 while the input still calls it LYS. That is the same
+    # kind of representation rename, and comparing the two spellings would
+    # report every one of its atoms as deleted.
+    if renamed_to_original is not None:
+        original = renamed_to_original.get((atom.chain_id, atom.resid, atom.icode))
+        if original is not None and resname != original:
+            resname = original
     return (atom.chain_id, resname, atom.resid, atom.icode, atom.name)
 
 

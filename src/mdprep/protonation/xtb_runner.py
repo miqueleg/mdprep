@@ -37,6 +37,7 @@ def build_xtb_command(
     config: HistidineXtbConfig,
     xyz_path: str | Path,
     cluster_charge: int,
+    unpaired_electrons: int = 0,
     executable: str | None = None,
     input_path: str | Path | None = None,
 ) -> list[str]:
@@ -49,7 +50,12 @@ def build_xtb_command(
         command.append("--gxtb")
     if config.mode == "opt":
         command.extend(["--opt", config.opt_level])
-    command.extend(["--chrg", str(cluster_charge), "--uhf", "0"])
+    # A cluster containing a paramagnetic metal is not closed shell. Asking
+    # xTB for a closed-shell solution on high-spin Fe(II) does not converge,
+    # and would be wrong if it did.
+    command.extend(
+        ["--chrg", str(cluster_charge), "--uhf", str(unpaired_electrons)]
+    )
     command.extend(["--iterations", str(config.scf_iterations)])
     if config.electronic_temperature_kelvin is not None:
         command.extend(["--etemp", str(config.electronic_temperature_kelvin)])
@@ -90,6 +96,7 @@ def run_xtb(
     xyz_path: str | Path,
     work_dir: str | Path,
     cluster_charge: int,
+    unpaired_electrons: int = 0,
     stdout_path: str | Path,
     stderr_path: str | Path,
     input_path: str | Path | None = None,
@@ -99,6 +106,7 @@ def run_xtb(
         config=config,
         xyz_path=Path(xyz_path).name,
         cluster_charge=cluster_charge,
+        unpaired_electrons=unpaired_electrons,
         executable=executable,
         input_path=Path(input_path).name if input_path is not None else None,
     )

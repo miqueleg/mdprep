@@ -6,7 +6,9 @@ import json
 from pathlib import Path
 
 import typer
+import yaml
 from rich.console import Console
+from rich.markup import escape
 from rich.table import Table
 
 from mdprep import __version__
@@ -21,6 +23,7 @@ from mdprep.md.roe_brooks import RoeBrooksError, run_roe_brooks
 from mdprep.structure.inspect import InspectionSummary
 from mdprep.structure.normalize import StructureNormalizationError
 from mdprep.structure.pdb import PdbParseError, VALID_ALTLOC_POLICIES
+from mdprep.workflows.doctor import ash_note, gxtb_note, run_doctor
 from mdprep.workflows.init import generate_starter_manifest
 from mdprep.workflows.wizard import format_question, run_wizard
 from mdprep.workflows.inspect import inspect_structure
@@ -34,7 +37,10 @@ app = typer.Typer(
     help="Reproducible Amber MD preparation workflow manager.",
     no_args_is_help=True,
 )
-console = Console()
+# Residue identifiers look like emoji shortcodes to rich: a chloride at A:CL303
+# renders as "A<emoji>303". Markup stays on for styling, but anything that came
+# from a structure, a path or an exception is escaped before it is printed.
+console = Console(emoji=False, highlight=False)
 
 
 def _print_json(payload: object) -> None:
@@ -139,7 +145,7 @@ def inspect_command(
         else:
             _render_inspection(summary)
     except (FileNotFoundError, PdbParseError, ValueError) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
 
@@ -177,7 +183,7 @@ def plan_command(
             disulfide_cutoff_angstrom=disulfide_cutoff or 2.2,
         )
     except (FileNotFoundError, PdbParseError, DecisionError, ValueError) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
     if json_output:
@@ -207,6 +213,7 @@ def _render_plan(plan) -> None:
     table = Table(title="Decisions required by this structure")
     table.add_column("Decision", overflow="fold")
     table.add_column("Default", overflow="fold")
+    table.add_column("Shows", overflow="fold")
     table.add_column("Conditional on", overflow="fold")
     for decision in plan.decisions:
         default = (
@@ -220,7 +227,15 @@ def _render_plan(plan) -> None:
             )
             or "-"
         )
-        table.add_row(decision.id, default, condition)
+        if decision.focus == "targets":
+            shown = ", ".join(
+                f"{target.resname}{target.resid}" for target in decision.targets
+            ) or ", ".join(decision.target_resnames)
+        elif decision.focus == "structure":
+            shown = "whole structure"
+        else:
+            shown = "-"
+        table.add_row(decision.id, default, shown, condition)
     console.print(table)
     blocking = plan.blocking()
     console.print(
@@ -298,7 +313,7 @@ def init_command(
             include_ligand_placeholders=include_ligand_placeholders,
         )
     except (FileExistsError, FileNotFoundError, PdbParseError, ValueError) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
     console.print(f"Wrote starter manifest: {manifest_path}")
 
@@ -327,7 +342,7 @@ def _run_interactive_init(
             preset=preset,
         )
     except (FileExistsError, FileNotFoundError, PdbParseError, DecisionError, ValueError) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
 
     console.print(
@@ -338,6 +353,13 @@ def _run_interactive_init(
         console.print(
             f"[yellow]Metal site {site!r} needs a bonded MCPB block that this wizard "
             "cannot generate.[/yellow] Add it by hand following docs/metals.md."
+        )
+    for ligand in result.ligands_needing_hydrogens:
+        console.print(
+            f"[yellow]Ligand {ligand!r} has no hydrogens in this "
+            "structure.[/yellow] mdprep will not guess a ligand's protonation, "
+            "so add a smiles: to its block, or hydrogens to the input, before "
+            "running. See docs/ligands.md."
         )
     console.print("Check it with: [bold]mdprep config-check "
                   f"{result.manifest_path}[/bold]")
@@ -382,7 +404,7 @@ def prepare_command(
         PdbParseError,
         ValueError,
     ) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
     if not quiet:
         console.print(f"Wrote output PDB: {result.output_path}")
@@ -398,7 +420,7 @@ def validate_command(
     try:
         validate_system(prmtop, inpcrd)
     except ValueError as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
     console.print("Validation passed")
 
@@ -437,7 +459,7 @@ def run_md_command(
             config=manifest.molecular_dynamics,
         )
     except (FileNotFoundError, RoeBrooksError, ValueError) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
     console.print(
         f"MD completed on {result.platform}; final coordinates: {result.final_pdb}"
@@ -502,7 +524,7 @@ def compare_mcpb_command(
             output_dir=output_dir,
         )
     except (McpbParameterComparisonError, ValueError) as exc:
-        console.print(f"[red]Error:[/red] {exc}")
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
     status = {
         "pass": "PASS",
@@ -522,6 +544,61 @@ def selftest_command(
     summary = run_selftest(quick=quick, console=console)
     if not summary.passed:
         raise typer.Exit(1)
+
+
+@app.command("doctor")
+def doctor_command(
+    manifest: Path = typer.Argument(
+        None,
+        help="Report only what this manifest needs. Omit to report everything.",
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print the report as JSON."),
+) -> None:
+    """Check that the programs and packages a run needs are installed."""
+
+    data: dict | None = None
+    scope = "every mdprep feature"
+    if manifest is not None:
+        if not manifest.is_file():
+            console.print(f"[red]Manifest not found:[/red] {manifest}")
+            raise typer.Exit(2)
+        data = yaml.safe_load(manifest.read_text(encoding="utf-8")) or {}
+        scope = str(manifest)
+
+    report = run_doctor(data, scope=scope)
+    notes = [note for note in (gxtb_note(data), ash_note(data)) if note is not None]
+
+    if json_output:
+        payload = report.to_dict()
+        payload["notes"] = notes
+        console.print_json(json.dumps(payload))
+        raise typer.Exit(0 if report.ok else 1)
+
+    table = Table(title=f"mdprep requirements for {report.scope}")
+    table.add_column("")
+    table.add_column("Needed for")
+    table.add_column("Status")
+    for finding in report.findings:
+        mark = "[green]found[/green]" if finding.found else "[red]MISSING[/red]"
+        table.add_row(
+            escape(finding.requirement.name),
+            escape(finding.requirement.purpose),
+            f"{mark} {escape(finding.detail)}",
+        )
+    console.print(table)
+
+    if report.ok:
+        console.print("[green]Everything this needs is installed.[/green]")
+    else:
+        console.print(
+            f"[red]{len(report.missing)} missing.[/red] Install with:\n  "
+            f"[bold]{escape(report.install_command or '')}[/bold]\n"
+            "Or create the whole environment: "
+            "[bold]conda env create -f environment.yml[/bold]"
+        )
+    for note in notes:
+        console.print(f"[yellow]{escape(note)}[/yellow]")
+    raise typer.Exit(0 if report.ok else 1)
 
 
 def main() -> None:

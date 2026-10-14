@@ -700,6 +700,58 @@ def _hydrogen_count_near_any(
     )
 
 
+# The backbone amide hydrogens, whose names do not follow the suffix rule.
+BACKBONE_AMIDE_HYDROGENS = {"H", "H1", "H2", "H3"}
+
+
+def parent_heavy_atom(
+    hydrogen: AtomRecord,
+    residue: ResidueRecord,
+    *,
+    cutoff_angstrom: float = 1.25,
+) -> AtomRecord | None:
+    """The heavy atom a hydrogen is bonded to.
+
+    Decided from the PDB naming convention first, which is authoritative for a
+    standard residue: a hydrogen is named H followed by its heavy atom's
+    suffix, optionally with a digit distinguishing several on the same atom, so
+    HD1 belongs to ND1 and HB2 and HB3 to CB. Geometry is only the fallback,
+    for a hydrogen whose name does not follow the convention, and it picks the
+    nearest heavy atom within ``cutoff_angstrom``, returning ``None`` when
+    nothing is close enough to be bonded.
+
+    Neither is the same as asking whether a hydrogen lies within a bond length
+    of some named atom. A ring C-H that passes close to the backbone answers
+    yes to that, and the caller then deletes a side-chain hydrogen as though it
+    were a backbone one.
+    """
+
+    name = hydrogen.name.strip()
+    heavy_atoms = [atom for atom in residue.atoms if not is_hydrogen_like(atom)]
+
+    if name.upper() in BACKBONE_AMIDE_HYDROGENS:
+        return next((atom for atom in heavy_atoms if atom.name.strip() == "N"), None)
+
+    if name.upper().startswith("H") and len(name) > 1:
+        suffix = name[1:]
+        for candidate in (suffix, suffix.rstrip("0123456789")):
+            if not candidate:
+                continue
+            for atom in heavy_atoms:
+                if atom.name.strip()[1:].upper() == candidate.upper():
+                    return atom
+
+    best: AtomRecord | None = None
+    best_distance = cutoff_angstrom
+    for atom in heavy_atoms:
+        separation = dist(
+            (hydrogen.x, hydrogen.y, hydrogen.z), (atom.x, atom.y, atom.z)
+        )
+        if separation <= best_distance:
+            best, best_distance = atom, separation
+    return best
+
+
 def _hydrogen_is_near_any(
     hydrogen: AtomRecord,
     residue: ResidueRecord,
@@ -707,13 +759,16 @@ def _hydrogen_is_near_any(
     *,
     cutoff_angstrom: float = 1.25,
 ) -> bool:
-    for name in atom_names:
-        anchor = _atom_by_name(residue, name)
-        if anchor is None:
-            continue
-        if dist((hydrogen.x, hydrogen.y, hydrogen.z), (anchor.x, anchor.y, anchor.z)) <= cutoff_angstrom:
-            return True
-    return False
+    """Whether a hydrogen is bonded to one of ``atom_names``.
+
+    Bonding is decided by the naming convention, falling back to the nearest
+    heavy atom within ``cutoff_angstrom``, rather than by proximity to the
+    named ones, so a close contact cannot make a hydrogen look like somebody
+    else's.
+    """
+
+    parent = parent_heavy_atom(hydrogen, residue, cutoff_angstrom=cutoff_angstrom)
+    return parent is not None and parent.name.strip() in atom_names
 
 
 def _is_oxygen_atom(atom: AtomRecord) -> bool:

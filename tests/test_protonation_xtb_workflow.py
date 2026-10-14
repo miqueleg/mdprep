@@ -18,6 +18,11 @@ from tests.test_structure_normalize import make_manifest, manifest_data
 
 
 def run_with_fakes(monkeypatch, tmp_path, data: dict, *, hid_energy: float, hie_energy: float):
+    # These exercise the cluster backend, which is no longer the default. The
+    # embedded QM/MM backend has its own tests in test_histidine_qmmm.py.
+    data.setdefault("protonation", {}).setdefault("histidine", {}).setdefault(
+        "xtb", {}
+    )["embedding"] = "cluster"
     monkeypatch.setattr(
         "mdprep.protonation.apply.run_propka_workflow",
         lambda structure, manifest, work_dir: fake_propka_result(
@@ -26,7 +31,7 @@ def run_with_fakes(monkeypatch, tmp_path, data: dict, *, hid_energy: float, hie_
         ),
     )
 
-    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None):
+    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None, **kwargs):
         energy = hid_energy if Path(xyz_path).name == "HID.xyz" else hie_energy
         Path(stdout_path).write_text(f":: total energy      {energy:.12f} Eh\n", encoding="utf-8")
         Path(stderr_path).write_text("", encoding="utf-8")
@@ -93,7 +98,7 @@ def test_xtb_tautomers_use_clean_isolated_work_directories(monkeypatch, tmp_path
         ),
     )
 
-    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None):
+    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None, **kwargs):
         run_dir = Path(work_dir)
         observed_work_dirs.append(run_dir)
         assert run_dir.name == Path(xyz_path).stem
@@ -154,6 +159,9 @@ def test_multiple_neutral_histidines_with_ambiguous_input_hydrogens_do_not_fail(
     pdb = _two_histidine_pdb_with_ambiguous_neighbor(tmp_path)
     data = manifest_data(str(pdb))
     data["protonation"]["method"] = "propka_xtb_his"
+    data["protonation"].setdefault("histidine", {}).setdefault("xtb", {})[
+        "embedding"
+    ] = "cluster"
     monkeypatch.setattr(
         "mdprep.protonation.apply.run_propka_workflow",
         lambda structure, manifest, work_dir: fake_propka_result(
@@ -165,7 +173,7 @@ def test_multiple_neutral_histidines_with_ambiguous_input_hydrogens_do_not_fail(
         ),
     )
 
-    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None):
+    def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None, **kwargs):
         energy = -40.01 if Path(xyz_path).name == "HID.xyz" else -40.00
         Path(stdout_path).write_text(f":: total energy      {energy:.12f} Eh\n", encoding="utf-8")
         Path(stderr_path).write_text("", encoding="utf-8")
@@ -294,7 +302,7 @@ def test_dehydrogenated_histidine_cluster_uses_temporary_pdbfixer_environment(
     )
     hydrogenated = read_pdb(temporary_path)
 
-    def fake_hydrogenation(structure, *, ph, random_seed, work_dir):
+    def fake_hydrogenation(structure, *, ph, random_seed, work_dir, **kwargs):
         assert random_seed == 20260722
         return TemporaryHydrogenationResult(
             backend="pdbfixer",

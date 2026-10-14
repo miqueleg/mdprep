@@ -23,13 +23,26 @@ runner = CliRunner()
 
 
 def scripted_prompter(answers_by_id: dict[str, str]):
-    """Answer by decision id; anything not listed takes its default."""
+    """Answer by decision id.
+
+    Anything not listed takes its default, except a question that has no
+    default: those get a placeholder so a test can stay focused on the one
+    decision it is about.
+    """
 
     asked: list[str] = []
 
     def prompt(decision) -> str:
         asked.append(decision.id)
-        return answers_by_id.get(decision.id, "")
+        if decision.id in answers_by_id:
+            return answers_by_id[decision.id]
+        if not decision.requires_user_input:
+            return ""
+        if decision.kind == "boolean":
+            return "no"
+        if decision.kind == "choice":
+            return decision.choices[0].value
+        return "0"
 
     prompt.asked = asked  # type: ignore[attr-defined]
     return prompt
@@ -40,8 +53,8 @@ def test_wizard_writes_a_manifest_that_passes_config_check(tmp_path):
     prompt = scripted_prompter(
         {
             "structure.remove_unknown_heterogens": "no",
-            "ligand.sub_501.net_charge": "-1",
-            "ligand.cof_601.net_charge": "0",
+            "ligand.b_sub_501.net_charge": "-1",
+            "ligand.c_cof_601.net_charge": "0",
         }
     )
 
@@ -62,7 +75,7 @@ def test_wizard_never_accepts_a_default_for_a_blocking_question(tmp_path):
 
     def prompt(decision) -> str:
         attempts.append(decision.id)
-        if decision.id == "ligand.sub_501.net_charge":
+        if decision.id == "ligand.b_sub_501.net_charge":
             # Two empty answers, then a real one.
             if attempts.count(decision.id) < 3:
                 return ""
@@ -77,7 +90,7 @@ def test_wizard_never_accepts_a_default_for_a_blocking_question(tmp_path):
         prompt=prompt,
     )
 
-    assert attempts.count("ligand.sub_501.net_charge") == 3
+    assert attempts.count("ligand.b_sub_501.net_charge") == 3
 
 
 def test_wizard_rejects_an_invalid_answer_and_asks_again(tmp_path):
@@ -104,8 +117,8 @@ def test_unreachable_questions_are_never_asked(tmp_path):
     prompt = scripted_prompter(
         {
             "structure.remove_unknown_heterogens": "no",
-            "ligand.sub_501.include": "no",
-            "ligand.cof_601.net_charge": "0",
+            "ligand.b_sub_501.include": "no",
+            "ligand.c_cof_601.net_charge": "0",
         }
     )
 
@@ -116,8 +129,8 @@ def test_unreachable_questions_are_never_asked(tmp_path):
     )
 
     asked = prompt.asked  # type: ignore[attr-defined]
-    assert "ligand.sub_501.net_charge" not in asked
-    assert "ligand.cof_601.net_charge" in asked
+    assert "ligand.b_sub_501.net_charge" not in asked
+    assert "ligand.c_cof_601.net_charge" in asked
 
 
 def test_preset_answers_are_not_asked(tmp_path):
@@ -127,7 +140,7 @@ def test_preset_answers_are_not_asked(tmp_path):
         DATA / "protein_with_waters.pdb",
         output_path=tmp_path / "m.yaml",
         prompt=prompt,
-        preset={"project.output_dir": "/scratch/run1", "ligand.so4_1.net_charge": -2},
+        preset={"project.output_dir": "/scratch/run1", "ligand.a_so4_1.net_charge": -2},
     )
 
     asked = prompt.asked  # type: ignore[attr-defined]
@@ -151,8 +164,14 @@ def test_wizard_refuses_to_overwrite_without_permission(tmp_path):
     assert output.read_text(encoding="utf-8") == "already here\n"
 
 
-def test_mcpb_choice_is_flagged_rather_than_written(tmp_path):
-    prompt = scripted_prompter({"metal.zn_500_site.model": "bonded_mcpb"})
+def test_a_rejected_coordination_shell_is_flagged_not_written(tmp_path):
+    prompt = scripted_prompter(
+        {
+            "metal.z_zn_500_site.model": "bonded_mcpb",
+            "metal.z_zn_500_site.charge": "2",
+            "metal.z_zn_500_site.confirm_donors": "no",
+        }
+    )
 
     result = run_wizard(
         DATA / "protein_histidine_zinc.pdb",
@@ -160,10 +179,33 @@ def test_mcpb_choice_is_flagged_rather_than_written(tmp_path):
         prompt=prompt,
     )
 
-    assert result.mcpb_sites_needing_manual_work == ("zn_500_site",)
+    assert result.mcpb_sites_needing_manual_work == ("z_zn_500_site",)
     text = (tmp_path / "m.yaml").read_text(encoding="utf-8")
     assert "bonded_mcpb" in text  # the note
     assert yaml.safe_load(text)["metals"] == []
+
+
+def test_a_confirmed_coordination_shell_is_written(tmp_path):
+    prompt = scripted_prompter(
+        {
+            "metal.z_zn_500_site.model": "bonded_mcpb",
+            "metal.z_zn_500_site.charge": "2",
+            "metal.z_zn_500_site.confirm_donors": "yes",
+            "metal.z_zn_500_site.multiplicity": "1",
+            "metal.z_zn_500_site.model_charge": "2",
+        }
+    )
+
+    result = run_wizard(
+        DATA / "protein_histidine_zinc.pdb",
+        output_path=tmp_path / "m.yaml",
+        prompt=prompt,
+    )
+
+    assert result.mcpb_sites_needing_manual_work == ()
+    manifest = yaml.safe_load((tmp_path / "m.yaml").read_text(encoding="utf-8"))
+    ManifestConfig.model_validate(manifest)
+    assert manifest["metals"][0]["mcpb"]["bonds"]
 
 
 def test_rendered_manifest_records_that_values_were_entered_not_inferred():
@@ -179,7 +221,7 @@ def test_rendered_manifest_records_that_values_were_entered_not_inferred():
 def test_question_text_shows_evidence_and_rationale():
     plan = plan_decisions(DATA / "protein_two_ligands.pdb")
 
-    text = format_question(plan.by_id("ligand.sub_501.net_charge"))
+    text = format_question(plan.by_id("ligand.b_sub_501.net_charge"))
 
     assert "B:SUB501" in text
     assert "cannot be guessed" in text
@@ -232,17 +274,21 @@ def test_init_interactive_writes_a_valid_manifest(tmp_path):
             "demo",           # project.name
             "",               # project.output_dir
             "no",             # structure.remove_unknown_heterogens
+            "yes",            # structure.repair.add_missing_heavy_atoms
+            "",               # structure.repair.unresolved_residues
             "",               # protein.forcefield
             "",               # protein.water_model
             "",               # protonation.method
-            "",               # ligand.sub_501.include
-            "-1",             # ligand.sub_501.net_charge
-            "",               # ligand.sub_501.atom_types
-            "",               # ligand.sub_501.charge_method
-            "",               # ligand.cof_601.include
-            "0",              # ligand.cof_601.net_charge
-            "",               # ligand.cof_601.atom_types
-            "",               # ligand.cof_601.charge_method
+            "",               # ligand.b_sub_501.include
+            "-1",             # ligand.b_sub_501.net_charge
+            "C",              # ligand.b_sub_501.smiles
+            "",               # ligand.b_sub_501.atom_types
+            "",               # ligand.b_sub_501.charge_method
+            "",               # ligand.c_cof_601.include
+            "0",              # ligand.c_cof_601.net_charge
+            "C",              # ligand.c_cof_601.smiles
+            "",               # ligand.c_cof_601.atom_types
+            "",               # ligand.c_cof_601.charge_method
             "",               # solvation.enabled
             "",               # solvation.box
             "",               # solvation.buffer_angstrom

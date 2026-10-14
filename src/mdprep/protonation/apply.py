@@ -296,6 +296,13 @@ def apply_protonation_stage(
                 xtb_temporary_hydrogenation = add_temporary_protein_hydrogens(
                     structure,
                     ph=manifest.protonation.ph,
+                    # The states PropKa and the manual overrides settled on.
+                    # Without these the hydrogens come from a pKa table that is
+                    # not the one this run used, and the protons stop matching
+                    # the charges every later stage declares.
+                    assigned_states=_assigned_states_by_residue_key(
+                        structure, final_by_residue
+                    ),
                     random_seed=xtb_config.temporary_hydrogen_random_seed,
                     work_dir=(
                         _protonation_work_dir(output_protonation_pdb_path)
@@ -444,6 +451,7 @@ def reuse_protonation_assignments_after_refinement(
     *,
     input_refined_pdb_path: str | Path,
     output_protonation_pdb_path: str | Path,
+    ligand_residue_keys: set[tuple[str, int, str | None]] | None = None,
 ) -> ProtonationResult:
     """Restore initial residue states while retaining every refined hydrogen.
 
@@ -495,7 +503,9 @@ def reuse_protonation_assignments_after_refinement(
         conect_bonds=set(structure.conect_bonds),
         ter_after_serials=set(structure.ter_after_serials),
     )
-    _validate_reused_refined_hydrogens(reused_structure)
+    _validate_reused_refined_hydrogens(
+        reused_structure, ligand_residue_keys=ligand_residue_keys or set()
+    )
     hydrogen_count = sum(is_hydrogen_atom(atom) for atom in reused_structure.atoms)
     if hydrogen_count == 0:
         raise ProtonationApplicationError(
@@ -535,8 +545,23 @@ def reuse_protonation_assignments_after_refinement(
     )
 
 
-def _validate_reused_refined_hydrogens(structure: PdbStructure) -> None:
+def _validate_reused_refined_hydrogens(
+    structure: PdbStructure,
+    *,
+    ligand_residue_keys: set[tuple[str, int, str | None]] = frozenset(),  # type: ignore[assignment]
+) -> None:
+    """Check that each residue's hydrogens match the state it was assigned.
+
+    Declared ligands are skipped. A free amino acid in the structure carries
+    the same residue name as the protein's own -- 6NIE has a free lysine
+    called LYS -- but its protonation comes from the SMILES the manifest
+    states, not from a protein template. Checking it against the template
+    rejects a neutral amine for having two hydrogens on NZ instead of three.
+    """
+
     for residue in structure.residues:
+        if (residue.id.chain_id, residue.id.resid, residue.id.icode) in ligand_residue_keys:
+            continue
         state = residue.id.resname
         if state in {"HID", "HIE", "HIP"}:
             nd1 = _hydrogen_count_near_any(residue, ("ND1",))
@@ -640,6 +665,21 @@ def _initial_xtb_environment_states(
                 "imidazole hydrogens in the input; using HIE as a deterministic temporary environment state until "
                 "its own HID/HIE comparison runs."
             )
+    return states
+
+
+def _assigned_states_by_residue_key(
+    structure: PdbStructure,
+    final_by_residue: dict[int, str],
+) -> dict[tuple[str, int, str | None], str]:
+    """Re-key the decided states by chain/number/icode, which OpenMM can match."""
+
+    states: dict[tuple[str, int, str | None], str] = {}
+    for residue in structure.residues:
+        state = final_by_residue.get(id(residue))
+        if state is None:
+            continue
+        states[(residue.id.chain_id or "", residue.id.resid, residue.id.icode)] = state
     return states
 
 

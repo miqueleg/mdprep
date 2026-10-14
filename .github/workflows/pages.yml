@@ -1,0 +1,73 @@
+name: web
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  # The page loads the real mdprep wheel under Pyodide, so the thing most
+  # likely to break it is a new import in the planning path rather than a
+  # change to the page itself. That is covered by the unit tests; this job
+  # checks the artifacts the site is actually served from.
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+
+      - name: Check the browser planning path and the bundle writer
+        run: pytest -q tests/test_browser_planning_path.py tests/test_web_bundle_zip.py
+
+      - name: Check JavaScript syntax
+        run: |
+          node --check web/app.js
+          node --check web/zip.js
+
+      - name: Build the Pyodide wheel
+        run: python web/build.py
+
+      # The only check that exercises Pyodide, 3Dmol and the page together.
+      # It skips cleanly if the runner has no Chrome, so it cannot wedge a
+      # release, but on GitHub's images it normally runs.
+      - name: Drive the page in a headless browser
+        run: |
+          npm install --no-save puppeteer-core
+          pytest -q -m "" tests/test_web_builder_browser.py
+
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web
+
+  deploy:
+    needs: build
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

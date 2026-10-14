@@ -1,8 +1,77 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `mdprep plan` and `mdprep init --interactive`: a structure-aware decision
+  engine that reduces a 250+ setting schema to the questions one structure
+  actually needs, and asks them. Chemistry-sensitive values have no default and
+  cannot be skipped.
+- Each decision carries viewer hints (`focus`, `targets`, `target_resnames`) so
+  a 3D front end can frame exactly the residues a question is about.
+- `mdprep inspect` reports free monatomic metal ions.
+- A static web input builder (`web/`) that runs mdprep in the browser under
+  Pyodide, shows a 3D view framed on whatever each question is about, and
+  produces a validated manifest plus runnable Colab cells.
+- `mdprep.workflows.runtime.conda_packages_for` derives the external toolchain a
+  given manifest needs, so a generated setup cell installs PropKa, xTB or PySCF
+  only when the run will actually invoke them.
+
+- `structure.keep_chains` restricts a build to named chains, which a bonded
+  MCPB site requires and a multi-copy crystal structure needs.
+- The decision engine proposes a metal coordination sphere from interatomic
+  distances, requires it to be confirmed, and generates the bonded MCPB block
+  with a GFN2 Seminario Hessian and GFN2 QM/MM refinement geometry.
+- `examples/16_besd_halogenase_gfn2_mcpb.yaml`, the BesD halogenase reference
+  case.
+- Detection of incomplete residues and chain breaks, asked about before any
+  expensive stage runs, and protection for waters coordinating a metal.
+- `examples/mdprep_colab_run.ipynb`, a Colab notebook that runs a manifest and
+  installs only the toolchain that manifest needs.
+
+- `metals[].coordinating_ions` declares a non-metal ion bound in a metal site,
+  such as a coordinating halide, which previously had nowhere to live: it is
+  not a metal and antechamber cannot treat a single atom.
+
+### Changed
+
+- The refinement stage defaults to `backend: openmm`, a force-field hydrogen
+  relaxation, instead of GFN2 QM/MM. The stage only ever moved hydrogens, and
+  a force field settles them in seconds. `backend: ash` keeps the QM/MM route
+  and is required to relax heavy atoms. `movable_atoms` and
+  `post_refinement_protonation` default to match the hydrogen-only backend.
+- Histidine HID/HIE selection stays with xTB: force-field energies of the two
+  tautomers are not comparable, because they are different residue templates
+  rather than one molecule with a proton moved.
+
+- Dropped the unused `scipy` and `pandas` runtime dependencies.
+- A ligand that coordinates a bonded metal site now defaults to taking its
+  charges from that site's MCPB fit instead of AM1-BCC.
+
 ## 0.2.1 - 2026-10-01
 
 ### Fixed
+
+- A ligand whose residue name is one the Amber force fields already define is
+  now built under a name they do not. `tleap` resolves residues by name and
+  maps an amino-acid name to its terminal form first, so the BesD free-lysine
+  substrate was built from the `NLYS` protein template and the run died with
+  "Atom .R<NLYS 252>.A<OXT 25> does not have a type" for every one of its
+  ligand-named atoms; binding the ligand unit to `LYS` instead would have
+  pointed every lysine in the protein at the ligand's parameters. The leap
+  input PDB, a copy of the fitted mol2, the `tleap` script and the final
+  validation all use the new name, and every rename is reported.
+- The temporary xTB hydrogen environment no longer hydrogenates a residue
+  twice. OpenMM matches the hydrogens a residue already has through the bonds
+  its residue templates define, so hydrogens mdprep placed from
+  `ligands[].smiles`, named after their parent heavy atom, were invisible to it
+  and it built a second complete set beside them: the BesD free-lysine
+  substrate came out carrying both HB2/HB3 and HB/HBA. Such a residue is now
+  passed through untouched and reported, unless a protonation state was decided
+  for it, in which case OpenMM still rebuilds it in that state.
+- Amber ion atom types were built as `element + charge + "+"`, which produced
+  `Na1+` for every monovalent cation and could not express an anion at all.
 
 - Roe--Brooks stage 2 no longer fails with "Particle coordinate is NaN" on
   solvated systems. Free ions were positionally restrained because Amber names

@@ -74,3 +74,17 @@ separate cell installs the pinned official g-xTB Linux release, verifies its
 archive and executable checksums, and must complete a real `--gxtb --hess`
 smoke calculation before its executable path is offered for an MCPB manifest.
 Standard conda-forge xTB is not treated as proof that g-xTB is available.
+
+## Colab notebooks
+
+`mdprep_colab_run.ipynb` **runs** a manifest. Build one in the browser with the
+[input builder](../web/README.md), or answer the questions in the notebook with
+`mdprep init --interactive`; either way the notebook installs only the external
+programs that manifest will actually invoke, prepares the system, validates it,
+and optionally equilibrates it.
+
+`mdprep_interactive_colab.ipynb` is the older all-in-one builder. It carries
+its own copy of structure inspection, coordination detection and manifest
+construction in `colab/mdprep_colab_pipeline.py`, which predates
+`mdprep.config.decisions`. It still works; new work should go to the shared
+engine and the runner notebook instead.

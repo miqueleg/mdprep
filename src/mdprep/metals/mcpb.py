@@ -16,10 +16,12 @@ from mdprep.ambertools.mol2 import Mol2Error, read_mol2
 from mdprep.config.models import ManifestConfig
 from mdprep.external.discovery import which_executable
 from mdprep.external.runner import CommandResult, run_command
-from mdprep.metals.coordination import ResolvedMetalSite
+from mdprep.metals.coordination import ResolvedMetalIon, ResolvedMetalSite
 from mdprep.metals.nonbonded import (
     AmberIonParameter,
+    load_amber_ion_parameter,
     NonbondedMetalError,
+    ion_atom_type,
     resolve_amberhome,
     write_single_ion_mol2,
 )
@@ -188,13 +190,23 @@ def run_mcpb_site(
     work.mkdir(parents=True, exist_ok=True)
     group_name = _safe_group_name(site.config.id)
     input_pdb = work / "system.mcpb_input.pdb"
-    numbering = write_mcpb_numbered_pdb(structure, input_pdb)
+    numbering = write_mcpb_numbered_pdb(
+        structure, input_pdb, ion_names=_mcpb_ion_names(site)
+    )
     ligand_mol2, ligand_frcmods, gaff = _stage_ligand_parameters(
         manifest=manifest,
         ligand_result=ligand_result,
         work_dir=work,
     )
+    ligand_frcmods = ligand_frcmods + _stage_coordinating_ion_frcmods(
+        site, manifest, work_dir=work
+    )
     ion_mol2 = _write_mcpb_ion_mol2(site, numbering=numbering, work_dir=work)
+    ligand_mol2 = (
+        ligand_mol2
+        + _write_mcpb_coordinating_ion_mol2(site, numbering=numbering, work_dir=work)
+        + _write_mcpb_ion_charge_mol2(site, numbering=numbering, work_dir=work)
+    )
     input_path = work / "mcpb.in"
     input_path.write_text(
         build_mcpb_input(
@@ -493,7 +505,25 @@ def collect_mcpb_refitted_ligands(
 def write_mcpb_numbered_pdb(
     structure: PdbStructure,
     path: str | Path,
+    *,
+    ion_names: dict[tuple[str, int, str | None], str] | None = None,
 ) -> McpbNumberingMap:
+    """Renumber a structure into the contiguous form MCPB.py expects.
+
+    ``ion_names`` renames both the residue and its single atom for the metal
+    ions. MCPB.py reads an ion's charge by its ATOM name in one place and by
+    its RESIDUE name in another, and builds a van der Waals key from the
+    element symbol plus that charge, so all three have to be the same bare
+    symbol: FE, giving Fe2 for Fe(II). A deposition may call the atom
+    anything, and Amber's own libraries name the residue after the oxidation
+    state, so neither can be used as it stands.
+
+    The rename applies only to these working files. The original atom is kept
+    in the numbering map, so the structure handed back afterwards still
+    carries the names the input used.
+    """
+
+    renames = ion_names or {}
     atoms: list[AtomRecord] = []
     original_by_atom: dict[int, AtomRecord] = {}
     original_by_residue: dict[int, ResidueRecord] = {}
@@ -514,10 +544,13 @@ def write_mcpb_numbered_pdb(
                 raise McpbWorkflowError(f"Duplicate atom identity before MCPB.py: {atom.atom_identity}")
             atom_id_by_identity[atom.atom_identity] = atom_id
             original_by_atom[atom_id] = atom
+            renamed = renames.get(residue_key)
             atoms.append(
                 replace(
                     atom,
                     serial=atom_id,
+                    name=atom.name if renamed is None else renamed,
+                    resname=atom.resname if renamed is None else renamed,
                     chain_id="A",
                     resid=residue_id,
                     icode=None,
@@ -761,7 +794,7 @@ def _write_mcpb_ion_mol2(
 ) -> list[Path]:
     paths: list[Path] = []
     for index, ion in enumerate(site.ions, start=1):
-        atom_type = f"{ion.element}{ion.charge}+"
+        atom_type = ion_atom_type(ion.element, ion.charge)
         parameter = AmberIonParameter(
             element=ion.element,
             charge=ion.charge,
@@ -778,9 +811,17 @@ def _write_mcpb_ion_mol2(
         numbered_resid = numbering.mcpb_resid_by_original_key[
             (ion.residue.id.chain_id, ion.residue.id.resid, ion.residue.id.icode)
         ]
-        numbered_atom = replace(ion.atom, serial=numbered_atom_id, chain_id="A", resid=numbered_resid, icode=None)
+        numbered_atom = replace(
+            ion.atom,
+            serial=numbered_atom_id,
+            # The same element-symbol name the numbered PDB now carries.
+            name=ion.element.strip().upper(),
+            chain_id="A",
+            resid=numbered_resid,
+            icode=None,
+        )
         numbered_residue = ResidueRecord(
-            id=ResidueId("A", ion.residue.id.resname, numbered_resid),
+            id=ResidueId("A", ion.element.strip().upper(), numbered_resid),
             atoms=[numbered_atom],
             record_names={numbered_atom.record_name},
             original_index=numbered_resid - 1,
@@ -822,6 +863,277 @@ def _stage_ligand_parameters(
         shutil.copyfile(item.final_frcmod_path, frcmod_target)
         frcmod_paths.append(frcmod_target)
     return mol2_paths, frcmod_paths, gaff
+
+
+def _mcpb_ion_names(
+    site: ResolvedMetalSite,
+) -> dict[tuple[str, int, str | None], str]:
+    """The name MCPB.py needs for each of the site's metal ions.
+
+    One name for the residue and its atom alike, because MCPB.py reads the
+    charge by the atom name in one place and by the residue name in another,
+    and pairs it with the element symbol to find van der Waals parameters.
+    """
+
+    return {
+        (ion.residue.id.chain_id, ion.residue.id.resid, ion.residue.id.icode): (
+            ion.element.strip().upper()
+        )
+        for ion in site.ions
+    }
+
+
+def _write_mcpb_ion_charge_mol2(
+    site: ResolvedMetalSite,
+    *,
+    numbering: McpbNumberingMap,
+    work_dir: Path,
+) -> list[Path]:
+    """Declare each metal ion's charge where MCPB.py will look for it.
+
+    MCPB.py builds its charge table from the force field's amino acids and
+    from naa_mol2files, and the Amber force fields carry no ions at all, so an
+    ion's charge reaches MCPB.py only through a mol2 listed there. Without one
+    it raises KeyError on the ion's atom name while writing the large model's
+    ESP input.
+
+    The charge written is the oxidation state declared in the manifest, which
+    is the user stating it rather than anything inferred. The residue name is
+    the element symbol, matching the atom name used in the numbered PDB, since
+    that is the key MCPB.py looks up.
+    """
+
+    paths: list[Path] = []
+    seen: set[str] = set()
+    for ion in site.ions:
+        name = ion.element.strip().upper()
+        if name in seen:
+            continue
+        seen.add(name)
+        numbered_resid = numbering.mcpb_resid_by_original_key[
+            (ion.residue.id.chain_id, ion.residue.id.resid, ion.residue.id.icode)
+        ]
+        numbered_atom = replace(
+            ion.atom,
+            serial=numbering.mcpb_atom_id_by_original_identity[ion.atom.atom_identity],
+            name=name,
+            chain_id="A",
+            resid=numbered_resid,
+            icode=None,
+        )
+        numbered_residue = ResidueRecord(
+            id=ResidueId("A", name, numbered_resid),
+            atoms=[numbered_atom],
+            record_names={numbered_atom.record_name},
+            original_index=numbered_resid - 1,
+        )
+        parameter = AmberIonParameter(
+            element=ion.element,
+            charge=ion.charge,
+            atom_type=ion_atom_type(ion.element, ion.charge),
+            mass=0.0,
+            rmin_over_2_angstrom=0.0,
+            epsilon_kcal_mol=0.0,
+            parameter_set="mcpb_charge_declaration",
+            water_model="",
+            frcmod_name="",
+            frcmod_path=Path("."),
+        )
+        path = work_dir / f"{name}.mol2"
+        write_single_ion_mol2(
+            ResolvedMetalIon(
+                site_id=site.config.id,
+                element=ion.element,
+                charge=ion.charge,
+                atom=numbered_atom,
+                residue=numbered_residue,
+            ),
+            parameter,
+            path,
+        )
+        paths.append(path)
+    return paths
+
+
+# MCPB.py's frcmod reader takes an atom type from a fixed two-character field
+# (pymsmt.lib.readmass is `line[0:2]`), so a three-character Amber ion type
+# cannot be expressed at all: Cl- is read as Cl with a mass of "-  35.45", and
+# MCPB.py then raises KeyError on Cl- while writing the initial frcmod. F- and
+# I- happen to fit; Cl- and Br- do not.
+MCPB_MAX_ATOM_TYPE_LENGTH = 2
+
+
+def mcpb_ion_atom_type(element: str, charge: int) -> str:
+    """The atom type to give a coordinating ion inside MCPB.py's input.
+
+    Amber's own type where it fits in MCPB.py's two-character field, and an
+    uppercase element alias where it does not. The alias is only a name: it is
+    emitted with the same Li/Merz mass and Lennard-Jones parameters as the
+    type it stands for, and only inside the MCPB working directory. Everything
+    outside -- tleap, the final topology -- keeps Amber's own type.
+    """
+
+    amber_type = ion_atom_type(element, charge)
+    if len(amber_type) <= MCPB_MAX_ATOM_TYPE_LENGTH:
+        return amber_type
+    alias = element.strip().upper()
+    if len(alias) > MCPB_MAX_ATOM_TYPE_LENGTH:
+        raise McpbWorkflowError(
+            f"{element} needs an atom type of at most "
+            f"{MCPB_MAX_ATOM_TYPE_LENGTH} characters for MCPB.py, and neither "
+            f"{amber_type} nor {alias} fits."
+        )
+    return alias
+
+
+def _stage_coordinating_ion_frcmods(
+    site: ResolvedMetalSite,
+    manifest: ManifestConfig,
+    *,
+    work_dir: Path,
+) -> list[Path]:
+    """Write the ion parameters MCPB.py needs, under a type it can read.
+
+    The values are Amber's own, read out of the Li/Merz file the final build
+    will use, so the alias changes the spelling of the type and nothing about
+    the chemistry.
+    """
+
+    assert site.config.mcpb is not None
+    if not site.config.coordinating_ions:
+        return []
+    amberhome = resolve_amberhome()
+    parameter_set = site.config.mcpb.provisional_nonbonded_parameter_set
+    lines = [
+        "mdprep: Amber ion parameters under a two-character type for MCPB.py",
+        "MASS",
+    ]
+    nonbonded: list[str] = []
+    seen: set[str] = set()
+    for ion in site.config.coordinating_ions:
+        try:
+            parameter = load_amber_ion_parameter(
+                element=ion.element,
+                charge=ion.charge,
+                water_model=manifest.protein.water_model,
+                parameter_set=parameter_set,
+                amberhome=amberhome,
+            )
+        except NonbondedMetalError as exc:
+            raise McpbWorkflowError(
+                f"Coordinating ion {ion.element} has no Amber parameters for "
+                f"the {parameter_set} set: {exc}"
+            ) from exc
+        alias = mcpb_ion_atom_type(ion.element, ion.charge)
+        if alias in seen:
+            continue
+        seen.add(alias)
+        lines.append(f"{alias} {parameter.mass:.2f}")
+        nonbonded.append(
+            f"  {alias}   {parameter.rmin_over_2_angstrom:.4f}  "
+            f"{parameter.epsilon_kcal_mol:.8f}   "
+            f"{parameter.atom_type} from {parameter.frcmod_name}"
+        )
+    if not seen:
+        return []
+    lines.extend(["", "NONBON", *nonbonded, ""])
+    path = work_dir / "mdprep_coordinating_ions.frcmod"
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return [path]
+
+
+def _write_mcpb_coordinating_ion_mol2(
+    site: ResolvedMetalSite,
+    *,
+    numbering: McpbNumberingMap,
+    work_dir: Path,
+) -> list[Path]:
+    """One-atom mol2 files for the site's coordinating ions.
+
+    MCPB.py asks for a mol2 for every non-standard residue bonded to the
+    metal, including an ion Amber already parameterises -- it needs the atom
+    type and the charge, not new parameters. antechamber cannot supply one,
+    because its semi-empirical step refuses a single atom, so it is written
+    directly with the ion atom type tleap will use for the same residue.
+
+    The coordinates come from the site's own bond coordinators, so the mol2
+    describes the atom actually in the structure rather than a copy of the
+    selector.
+    """
+
+    assert site.config.mcpb is not None
+    coordinator_by_key = {
+        (
+            bond.coordinator_residue.id.chain_id,
+            bond.coordinator_residue.id.resid,
+            bond.coordinator_residue.id.icode,
+        ): bond.coordinator_residue
+        for bond in site.bonds
+    }
+    paths: list[Path] = []
+    seen_resnames: set[str] = set()
+    for ion_config in site.config.coordinating_ions:
+        selector = ion_config.selector
+        key = (selector.chain, selector.resid, selector.icode)
+        residue = coordinator_by_key.get(key)
+        if residue is None:
+            raise McpbWorkflowError(
+                f"Coordinating ion {selector.resname} {selector.resid} is not "
+                f"bonded to any ion of metal site {site.config.id}. Add it to "
+                "mcpb.bonds, or drop it from coordinating_ions if it is not "
+                "part of the site."
+            )
+        if len(residue.atoms) != 1:
+            raise McpbWorkflowError(
+                f"A coordinating ion must be a single atom; {residue.id.display()} "
+                f"has {len(residue.atoms)}."
+            )
+        resname = residue.id.resname
+        if resname in seen_resnames:
+            continue
+        seen_resnames.add(resname)
+
+        numbered_resid = numbering.mcpb_resid_by_original_key[key]
+        atom = residue.atoms[0]
+        numbered_atom = replace(
+            atom,
+            serial=numbering.mcpb_atom_id_by_original_identity[atom.atom_identity],
+            chain_id="A",
+            resid=numbered_resid,
+            icode=None,
+        )
+        numbered_residue = ResidueRecord(
+            id=ResidueId("A", resname, numbered_resid),
+            atoms=[numbered_atom],
+            record_names={numbered_atom.record_name},
+            original_index=numbered_resid - 1,
+        )
+        parameter = AmberIonParameter(
+            element=ion_config.element,
+            charge=ion_config.charge,
+            atom_type=mcpb_ion_atom_type(ion_config.element, ion_config.charge),
+            mass=0.0,
+            rmin_over_2_angstrom=0.0,
+            epsilon_kcal_mol=0.0,
+            parameter_set="mcpb_input",
+            water_model="",
+            frcmod_name="",
+            frcmod_path=Path("."),
+        )
+        path = work_dir / f"{resname}.mol2"
+        write_single_ion_mol2(
+            ResolvedMetalIon(
+                site_id=site.config.id,
+                element=ion_config.element,
+                charge=ion_config.charge,
+                atom=numbered_atom,
+                residue=numbered_residue,
+            ),
+            parameter,
+            path,
+        )
+        paths.append(path)
+    return paths
 
 
 def _stage_qm_artifacts(config: object, *, group_name: str, work_dir: Path) -> None:
@@ -879,6 +1191,15 @@ def _validate_nonstandard_site_residues(
         (ligand.selector.chain, ligand.selector.resid, ligand.selector.icode)
         for ligand in manifest.ligands
     }
+    # A coordinating ion is declared on the site, not under ligands, because
+    # it is neither: an ion entry is a metal and a halide is not, while
+    # antechamber refuses a single atom so it cannot be a GAFF cofactor.
+    # Amber parameterises it directly from its ion library, so it is already
+    # as parameterized as it needs to be.
+    ligand_keys.update(
+        (ion.selector.chain, ion.selector.resid, ion.selector.icode)
+        for ion in site.config.coordinating_ions
+    )
     site_residues = {
         (
             bond.coordinator_residue.id.chain_id,

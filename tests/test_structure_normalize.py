@@ -125,6 +125,38 @@ def test_configured_ligand_is_kept():
     assert [residue.id.resname for residue in result.normalized_structure.residues] == ["ALA", "SUB", "COF"]
 
 
+def test_undeclared_heterogen_in_a_discarded_chain_is_not_demanded():
+    """keep_chains selects the build, so it selects what must be declared.
+
+    A deposition of several copies carries one set of cofactors per copy.
+    Requiring a declaration for the copies about to be thrown away rejects a
+    manifest that is already complete for the chain being built.
+    """
+
+    data = manifest_data("tests/data/protein_two_ligands.pdb")
+    data["structure"]["remove_unknown_heterogens"] = False
+    data["structure"]["keep_chains"] = ["A", "B"]
+    data["ligands"] = [ligand_entry("SUB_501", "B", "SUB", 501)]
+
+    result = normalize_structure_stage(make_manifest(data))
+
+    # COF 601 lives in chain C, which is not being built.
+    assert [residue.id.resname for residue in result.normalized_structure.residues] == [
+        "ALA",
+        "SUB",
+    ]
+
+
+def test_undeclared_heterogen_in_a_kept_chain_is_still_demanded():
+    data = manifest_data("tests/data/protein_two_ligands.pdb")
+    data["structure"]["remove_unknown_heterogens"] = False
+    data["structure"]["keep_chains"] = ["A", "B", "C"]
+    data["ligands"] = [ligand_entry("SUB_501", "B", "SUB", 501)]
+
+    with pytest.raises(StructureNormalizationError, match="COF"):
+        normalize_structure_stage(make_manifest(data))
+
+
 def test_atom_record_ligand_can_be_configured_by_resname_only():
     data = manifest_data("tests/data/protein_atom_record_ligand_blank_chain.pdb")
     data["structure"]["remove_unknown_heterogens"] = False

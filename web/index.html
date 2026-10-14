@@ -1,0 +1,127 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>mdprep input builder</title>
+    <!-- Inline so the page makes no favicon request, which would 404 on a
+         plain static host and clutter the console. -->
+    <link
+      rel="icon"
+      href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%231f6f4a'/%3E%3Ccircle cx='11' cy='12' r='3.5' fill='%23fff'/%3E%3Ccircle cx='21' cy='14' r='3.5' fill='%23fff'/%3E%3Ccircle cx='16' cy='22' r='3.5' fill='%23fff'/%3E%3C/svg%3E"
+    />
+    <link rel="stylesheet" href="style.css" />
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/3Dmol/2.5.5/3Dmol-min.js"></script>
+    <script src="https://cdn.jsdelivr.net/pyodide/v0.29.5/full/pyodide.js"></script>
+  </head>
+  <body>
+    <header>
+      <h1>mdprep input builder</h1>
+      <p class="tagline">
+        Answer only the questions your structure needs, then take the manifest
+        to Colab. Your structure is read in your browser and never uploaded.
+      </p>
+    </header>
+
+    <!-- 1. Load a structure -->
+    <section id="load-panel" class="panel">
+      <h2>1. Load a structure</h2>
+      <div class="loaders">
+        <div class="loader">
+          <label for="pdb-id">Fetch from RCSB</label>
+          <div class="row">
+            <input id="pdb-id" type="text" placeholder="e.g. 1AKI" maxlength="8" />
+            <button id="fetch-pdb" type="button">Fetch</button>
+          </div>
+          <p class="hint">Colab can re-download this by ID, so no file changes hands.</p>
+        </div>
+        <div class="loader">
+          <label for="pdb-file">Or upload your own PDB</label>
+          <input id="pdb-file" type="file" accept=".pdb,.ent,.txt" />
+          <p class="hint">
+            Stays in this browser. The download at the end bundles it with the
+            manifest so Colab gets the same file.
+          </p>
+        </div>
+      </div>
+      <p id="load-status" class="status" role="status" aria-live="polite">
+        Starting the Python runtime&hellip;
+      </p>
+    </section>
+
+    <!-- 2. Findings -->
+    <section id="findings-panel" class="panel hidden">
+      <h2>2. What mdprep found</h2>
+      <div id="findings"></div>
+    </section>
+
+    <!-- 3. Questions, with the viewer alongside -->
+    <section id="question-panel" class="panel hidden">
+      <h2>3. Decisions</h2>
+      <div class="split">
+        <div class="viewer-side">
+          <div id="viewer"></div>
+          <p id="viewer-caption" class="hint"></p>
+        </div>
+        <div class="question-side">
+          <div class="progress">
+            <div id="progress-bar"></div>
+          </div>
+          <p id="progress-text" class="hint"></p>
+
+          <h3 id="question-text"></h3>
+          <p id="question-why" class="why"></p>
+          <ul id="question-evidence" class="evidence"></ul>
+
+          <div id="answer-area"></div>
+          <p id="answer-error" class="error" role="alert"></p>
+
+          <div class="controls">
+            <button id="back" type="button">Back</button>
+            <button id="next" type="button" class="primary">Next</button>
+          </div>
+          <p id="blocking-note" class="blocking-note"></p>
+        </div>
+      </div>
+    </section>
+
+    <!-- 4. Result -->
+    <section id="result-panel" class="panel hidden">
+      <h2>4. Your mdprep inputs</h2>
+      <div id="result-warnings"></div>
+
+      <h3>Manifest</h3>
+      <pre id="manifest-yaml"></pre>
+      <div class="controls">
+        <button id="copy-manifest" type="button">Copy manifest</button>
+        <button id="download-bundle" type="button" class="primary">
+          Download bundle
+        </button>
+        <button id="restart" type="button">Start over</button>
+      </div>
+
+      <h3>Run it in Colab</h3>
+
+      <h4>Cell 1 &mdash; set up the runtime (once per session)</h4>
+      <pre id="colab-setup"></pre>
+      <button id="copy-setup" type="button">Copy setup cell</button>
+      <p id="toolchain-note" class="hint"></p>
+
+      <h4>Cell 2 &mdash; load the inputs and prepare</h4>
+      <p class="hint" id="colab-intro"></p>
+      <pre id="colab-command"></pre>
+      <button id="copy-colab" type="button">Copy run cell</button>
+    </section>
+
+    <footer>
+      <p>
+        Generated manifests are validated against the full mdprep schema in your
+        browser, so anything this page produces passes
+        <code>mdprep config-check</code>.
+      </p>
+    </footer>
+
+    <script src="zip.js"></script>
+    <script src="app.js"></script>
+  </body>
+</html>

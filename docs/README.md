@@ -3,6 +3,7 @@
 - [Installation](installation.md)
 - [Quickstart](quickstart.md)
 - [Guided manifest generation](guided_manifests.md)
+- [Web input builder](../web/README.md)
 - [Manifest reference](manifest_reference.md)
 - [Protonation](protonation.md)
 - [Ligands](ligands.md)

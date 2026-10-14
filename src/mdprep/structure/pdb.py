@@ -280,7 +280,9 @@ STANDARD_PROTEIN_RESNAMES = {
     "VAL",
 }
 
-PERIODIC_ELEMENTS = {
+# In atomic-number order, which is what makes ATOMIC_NUMBER derivable
+# rather than a second copy of the same data to keep in step.
+PERIODIC_ELEMENTS_IN_ORDER = (
     "H",
     "HE",
     "LI",
@@ -399,6 +401,13 @@ PERIODIC_ELEMENTS = {
     "LV",
     "TS",
     "OG",
+)
+
+PERIODIC_ELEMENTS = frozenset(PERIODIC_ELEMENTS_IN_ORDER)
+
+ATOMIC_NUMBER = {
+    symbol: number
+    for number, symbol in enumerate(PERIODIC_ELEMENTS_IN_ORDER, start=1)
 }
 
 
@@ -420,11 +429,17 @@ def infer_element(
     residue_upper = (resname or "").strip().upper()
     # Some AmberTools/MCPB.py PDB writers emit a one-atom ion as ATOM rather
     # than HETATM and align its atom field like a one-letter element (for
-    # example " FE "). A coincident elemental residue/atom symbol is the
-    # unambiguous ion identity in either record form.
+    # example " FE "). Read by the column convention that is iron spelled as
+    # fluorine. A coincident elemental residue/atom symbol is the unambiguous
+    # ion identity in either record form.
+    #
+    # Amber names many ion residues after the oxidation state -- FE2 for
+    # Fe(II), FE for Fe(III), CU1, EU3, YB2 -- so the residue name has to be
+    # reduced to its symbol before the comparison. Without that, FE2/FE fell
+    # through to the column convention and a structure's iron became fluorine.
     if (
         record_name in {"ATOM", "HETATM"}
-        and residue_upper == upper
+        and residue_upper.rstrip("0123456789+-") == upper
         and upper in PERIODIC_ELEMENTS
     ):
         return _canonical_element(upper)

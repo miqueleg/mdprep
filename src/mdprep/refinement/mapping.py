@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import sqrt
 
+from mdprep.leap.residues import is_ligand_rename_of
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord
 
 
@@ -103,7 +104,12 @@ def map_residues_by_coordinates(
 def compatible_resnames(left: str, right: str) -> bool:
     if left == right:
         return True
-    return any(left in family and right in family for family in _PROTONATION_FAMILIES)
+    if any(left in family and right in family for family in _PROTONATION_FAMILIES):
+        return True
+    # A ligand whose deposited name is one the force fields already define is
+    # built under a substitute, so the same residue appears under two names on
+    # either side of tleap. Only a name this codebase would have chosen counts.
+    return is_ligand_rename_of(right, left) or is_ligand_rename_of(left, right)
 
 
 def is_virtual_site(atom: AtomRecord) -> bool:

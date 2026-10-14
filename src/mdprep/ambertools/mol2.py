@@ -125,6 +125,34 @@ def write_mol2_with_charges(
     write_mol2(mol2, output_path)
 
 
+def write_mol2_under_residue_name(
+    mol2_path: str | Path,
+    residue_name: str,
+    output_path: str | Path,
+) -> None:
+    """Copy a mol2 under a different residue name, changing nothing else.
+
+    Atom names, atom order, coordinates, atom types and charges are carried
+    across untouched; only the substructure name moves. tleap needs this when a
+    ligand's own residue name is one the protein force field already defines,
+    because then the name cannot be used to reach the ligand's unit.
+    """
+
+    mol2 = read_mol2(mol2_path)
+    mol2.atoms = [replace(atom, subst_name=residue_name) for atom in mol2.atoms]
+    substructure = _marker_index(mol2.lines, "@<TRIPOS>SUBSTRUCTURE")
+    if substructure is not None:
+        for index in range(substructure + 1, len(mol2.lines)):
+            line = mol2.lines[index]
+            if line.startswith("@<TRIPOS>"):
+                break
+            fields = line.split()
+            if len(fields) < 2:
+                continue
+            mol2.lines[index] = line.replace(fields[1], residue_name, 1)
+    write_mol2(mol2, output_path)
+
+
 def validate_and_write_final_mol2(
     *,
     mol2_path: str | Path,

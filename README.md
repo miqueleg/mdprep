@@ -195,13 +195,15 @@ specified in steps in the manifest.
 | Task | Documentation | Example |
 | --- | --- | --- |
 | Generating a manifest | [Guided manifest generation](docs/guided_manifests.md) | `mdprep plan`, `mdprep init --interactive` |
+| Generating one in a browser | [Web input builder](web/README.md) | `python web/build.py` |
 | Manifest fields | [Manifest reference](docs/manifest_reference.md) | [All examples](examples/README.md) |
 | Protonation and histidines | [Protonation](docs/protonation.md) | `examples/02_manual_catalytic_protonation.yaml` |
 | Ligands, AM1-BCC, RESP, QMMESP | [Ligands](docs/ligands.md) and [QMMESP](docs/qmmesp_pyscf.md) | `examples/03_multi_ligand_am1bcc.yaml`, `04_qmmesp_pyscf_ligand.yaml` |
 | Metal centers and MCPB.py | [Metal centers](docs/metals.md) | `examples/08_nonbonded_zinc_1264.yaml`, `09_bonded_zinc_mcpb_prepare.yaml` |
 | Active-site QM/MM refinement | [QM/MM refinement](docs/qmmm_refinement.md) | `examples/10_qmmm_refinement_ash.yaml` |
 | Roe–Brooks OpenMM MD | [Molecular dynamics](docs/molecular_dynamics.md) | `examples/15_roe_brooks_openmm.yaml` |
-| Guided Colab builder | [Colab example notes](examples/README.md) | `examples/mdprep_interactive_colab.ipynb` |
+| Running a manifest in Colab | [Colab example notes](examples/README.md) | `examples/mdprep_colab_run.ipynb` |
+| Guided Colab builder (legacy) | [Colab example notes](examples/README.md) | `examples/mdprep_interactive_colab.ipynb` |
 | Complete Fe(III) workflow | [7E07 tutorial](examples/tutorials/7E07_bonded_fe3/README.md) | `examples/tutorials/7E07_bonded_fe3/system.yaml` |
 
 All public example manifests are schema-validated in the test suite.

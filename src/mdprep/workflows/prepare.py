@@ -241,6 +241,16 @@ def prepare_system(
                     refinement_result.refined_hydrogenated_pdb_path
                 ),
                 output_protonation_pdb_path=final_protonation_pdb,
+                # A declared ligand's protonation comes from its SMILES, not
+                # from a protein template it happens to share a name with.
+                ligand_residue_keys={
+                    (
+                        ligand.selector.chain,
+                        ligand.selector.resid,
+                        ligand.selector.icode,
+                    )
+                    for ligand in manifest.ligands
+                },
             )
         else:
             protonation_result = apply_protonation_stage(
@@ -389,23 +399,23 @@ def prepare_system(
             json_path=reports_dir / "tleap_report.json",
             markdown_path=reports_dir / "tleap_report.md",
         )
-        # Keep the legacy no-metal call shape so downstream integrations that
-        # wrap the validation hook do not need to understand metal metadata.
+        # Keep the legacy call shape so downstream integrations that wrap the
+        # validation hook do not need to understand metal metadata, or renames
+        # that did not happen.
+        validation_extras: dict[str, object] = {}
         if manifest.metals:
-            validation_report = validate_final_outputs(
-                manifest=manifest,
-                prmtop=tleap_result.final_outputs.prmtop,
-                inpcrd=tleap_result.final_outputs.inpcrd,
-                pdb=tleap_result.final_outputs.pdb,
-                metal_result=metal_result,
+            validation_extras["metal_result"] = metal_result
+        if tleap_result.leap_input.ligand_residue_renames:
+            validation_extras["ligand_residue_renames"] = (
+                tleap_result.leap_input.ligand_residue_renames
             )
-        else:
-            validation_report = validate_final_outputs(
-                manifest=manifest,
-                prmtop=tleap_result.final_outputs.prmtop,
-                inpcrd=tleap_result.final_outputs.inpcrd,
-                pdb=tleap_result.final_outputs.pdb,
-            )
+        validation_report = validate_final_outputs(
+            manifest=manifest,
+            prmtop=tleap_result.final_outputs.prmtop,
+            inpcrd=tleap_result.final_outputs.inpcrd,
+            pdb=tleap_result.final_outputs.pdb,
+            **validation_extras,
+        )
         write_validation_reports(
             validation_report,
             json_path=reports_dir / "validation_report.json",

@@ -140,18 +140,25 @@ def test_gxtb_backend_requires_explicit_settings():
         )
 
 
-def test_generic_xtb_backend_requires_explicit_settings():
-    with pytest.raises(ValidationError, match="requires explicit xtb settings"):
-        McpbPySCFConfig.model_validate(
-            {
-                "optimized_small_model_pdb": "optimized.pdb",
-                "small_model_geometry_status": "user_optimized",
-                "hessian_backend": "xtb",
-                "method": "B3LYP",
-                "basis": "6-31G*",
-            }
-        )
+def test_the_default_xtb_backend_needs_no_settings_block():
+    """hessian_backend: xtb is the default, so a manifest that wants the
+    defaults should not have to restate them."""
 
+    config = McpbPySCFConfig.model_validate(
+        {
+            "optimized_small_model_pdb": "optimized.pdb",
+            "small_model_geometry_status": "user_optimized",
+            "hessian_backend": "xtb",
+            "method": "B3LYP",
+            "basis": "6-31G*",
+        }
+    )
+
+    assert config.xtb is not None
+    assert config.xtb.model == "gxtb"
+
+
+def test_generic_xtb_backend_accepts_explicit_settings():
     config = McpbPySCFConfig.model_validate(
         {
             "geometry_source": "qmmm_refinement",
@@ -173,11 +180,18 @@ def test_gxtb_hessian_uses_tight_deterministic_defaults():
     assert config.max_scf_iterations is None
 
 
-def test_gfn2_hessian_uses_tight_deterministic_defaults():
+def test_a_metal_site_hessian_defaults_to_gxtb():
+    """GFN2 is parameterised for main-group chemistry and gets transition
+    metals wrong -- on the BesD iron it gives one Fe-O bond a negative force
+    constant -- so a metal site asks for g-xTB unless told otherwise."""
+
     config = McpbXtbHessianConfig()
 
-    assert config.model == "gfn2"
+    assert config.model == "gxtb"
     assert config.accuracy == pytest.approx(0.001)
+    # Left unset so the resolver can look for a g-xTB build; an unqualified
+    # "xtb" on PATH is usually the GFN-only conda package.
+    assert config.executable is None
 
 
 def test_gxtb_runner_records_commands_and_validates_hessian(monkeypatch, tmp_path):
@@ -371,3 +385,46 @@ def test_production_gxtb_hessian_rejects_raw_asymmetry_warnings(
             user_optimized_pdb=optimized,
             work_dir=tmp_path / "qm",
         )
+
+
+def test_a_gxtb_build_is_looked_for_before_falling_back_to_path(monkeypatch):
+    """The xtb conda installs is GFN-only, so an unqualified "xtb" on PATH is
+    usually the wrong binary for a g-xTB Hessian."""
+
+    from mdprep.metals.gxtb_hessian import (
+        GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE,
+        gxtb_executable_candidates,
+    )
+
+    monkeypatch.delenv(GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE, raising=False)
+    assert gxtb_executable_candidates(None, "gxtb") == ["g-xtb", "xtb"]
+
+    monkeypatch.setenv(GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE, "/opt/g-xtb/bin/xtb")
+    assert gxtb_executable_candidates(None, "gxtb")[0] == "/opt/g-xtb/bin/xtb"
+
+    # An explicit path in the manifest wins, and is the only thing tried.
+    assert gxtb_executable_candidates("/my/xtb", "gxtb") == ["/my/xtb"]
+    # GFN2 wants the ordinary binary.
+    assert gxtb_executable_candidates(None, "gfn2") == ["xtb"]
+
+
+def test_a_missing_gxtb_build_says_how_to_get_one(monkeypatch, tmp_path):
+    from mdprep.metals.gxtb_hessian import (
+        GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE,
+        GxtbHessianError,
+        _resolve_executable,
+    )
+
+    monkeypatch.delenv(GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE, raising=False)
+    monkeypatch.setattr(
+        "mdprep.metals.gxtb_hessian.which_executable", lambda name: None
+    )
+
+    with pytest.raises(GxtbHessianError) as excinfo:
+        _resolve_executable(None, model="gxtb")
+
+    message = str(excinfo.value)
+    assert "github.com/grimme-lab/g-xtb" in message
+    assert GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE in message
+    # And names the escape hatch, with the reason it is not the default.
+    assert "model: gfn2" in message
