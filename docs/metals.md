@@ -294,28 +294,37 @@ GFN2 is parameterised for main-group chemistry and describes transition-metal
 coordination poorly, which is what the negative value is. The geometry is not
 at fault: every distance is normal.
 
-### Use g-xTB for a transition-metal Hessian
+### g-xTB is the default, and why
 
-`xtb.model: gxtb` fixes it at the same order of cost. On this site the
-Hessian took 8.1 s against GFN2's 2.2 s, and all five bonds come out positive
-and in a normal range. The whole BesD preparation -- structure through
-solvated Amber system -- then completes in about a minute.
+A bonded metal site takes `hessian_backend: xtb` with `xtb.model: gxtb`
+unless told otherwise. On this site that Hessian took 8.1 s against GFN2's
+2.2 s, and the whole BesD preparation -- structure through solvated Amber
+system -- completes in about a minute. The defaults need no block at all:
 
 ```yaml
-pyscf:
-  hessian_backend: xtb
-  xtb:
-    model: gxtb
-    executable: /path/to/g-xtb/bin/xtb   # a g-xTB-enabled build, not plain xtb
-    num_threads: 8
-  esp_backend: xtb                        # GFN2 is fine for the ESP
+mcpb:
+  pyscf:
+    geometry_source: qmmm_refinement
+    esp_backend: xtb      # GFN2 is fine here; the Hessian is where it is not
 ```
 
-g-xTB needs a separate binary from the
-[official g-xTB releases](https://github.com/grimme-lab/g-xtb/releases);
-`xtb.model: gfn2` runs on the ordinary conda xtb. That is why the shipped BesD
-example uses GFN2 and stops at this bond rather than depending on a download:
-the error names the bond, and this is the fix.
+g-xTB is a separate build from the GFN-only xtb conda installs. Download it
+from the [official g-xTB releases](https://github.com/grimme-lab/g-xtb/releases)
+and point mdprep at it once:
+
+```bash
+export MDPREP_GXTB_EXECUTABLE=/path/to/g-xtb/bin/xtb
+```
+
+or give `mcpb.pyscf.xtb.executable` the path. mdprep looks for
+`MDPREP_GXTB_EXECUTABLE`, then `g-xtb`, then `xtb`, and `mdprep doctor
+<manifest>` says whether a usable one was found -- it runs the candidate's
+`--help` rather than trusting its name, because the conda `xtb` is called
+`xtb` too and would otherwise look like a pass.
+
+`xtb.model: gfn2` runs on the ordinary conda xtb and needs no download. It is
+the right choice only once you have checked the force constants for the site
+in hand; on a transition metal it may well give one that mdprep refuses.
 
 If you want a DFT reference instead, `hessian_backend: pyscf` with a pure
 functional and a small basis (for example `method: TPSS`, `basis: def2-SVP`)
