@@ -375,3 +375,31 @@ def test_a_carboxylate_is_not_mistaken_for_a_contradiction():
 
     # Both carboxylates are present and neither is reported.
     assert geometry_contradicts_bond_orders(molecule, residue) == []
+
+
+def test_a_ligand_from_a_prediction_with_a_wide_name_can_be_hydrogenated():
+    """The failure this guards against was reported from a real run.
+
+    Boltz named the ligand LIG2 and its chain AKG, neither of which fits the
+    column a PDB record gives it. mdprep wrote the name out in full, every
+    later field moved one column right, and RDKit refused the block with
+    "Problem with residue number" -- several thousand atoms away from the
+    ligand that actually caused it.
+    """
+
+    from mdprep.structure.reader import read_structure
+
+    structure = read_structure(DATA / "boltz_wide_names.cif")
+    residue = next(
+        residue
+        for residue in structure.residues
+        if len(residue.atoms) == 4 and residue.id.resname not in {"HIS", "ASP"}
+    )
+
+    result = add_ligand_hydrogens(
+        residue,
+        smiles="OCC=O",
+        ligand_id="wide_name_ligand",
+    )
+
+    assert count_hydrogens(result.residue) > 0

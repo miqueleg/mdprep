@@ -1,0 +1,50 @@
+data_model
+_entry.id model
+#
+# Boltz output naming a second SMILES ligand LIG2 and naming chains after the
+# entity rather than with a letter. Neither fits a PDB column, and both are
+# what a student's own prediction looks like.
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_seq_id
+_atom_site.auth_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.label_asym_id
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.label_entity_id
+_atom_site.auth_asym_id
+_atom_site.auth_comp_id
+_atom_site.B_iso_or_equiv
+_atom_site.pdbx_PDB_model_num
+ATOM 1 N N . HIS 129 129 ? A 0.000 0.000 0.000 1 1 A HIS 80.0 1
+ATOM 2 C CA . HIS 129 129 ? A 1.500 0.000 0.000 1 1 A HIS 80.0 1
+ATOM 3 C C . HIS 129 129 ? A 2.000 1.400 0.000 1 1 A HIS 80.0 1
+ATOM 4 O O . HIS 129 129 ? A 1.300 2.400 0.000 1 1 A HIS 80.0 1
+ATOM 5 C CB . HIS 129 129 ? A 2.000 -0.800 -1.200 1 1 A HIS 80.0 1
+ATOM 6 N NE2 . HIS 129 129 ? A 3.900 -0.300 -2.000 1 1 A HIS 80.0 1
+ATOM 7 N N . ASP 131 131 ? A 6.000 3.000 0.000 1 1 A ASP 80.0 1
+ATOM 8 C CA . ASP 131 131 ? A 7.500 3.000 0.000 1 1 A ASP 80.0 1
+ATOM 9 C C . ASP 131 131 ? A 8.000 4.400 0.000 1 1 A ASP 80.0 1
+ATOM 10 O O . ASP 131 131 ? A 7.300 5.400 0.000 1 1 A ASP 80.0 1
+ATOM 11 C CB . ASP 131 131 ? A 8.000 2.200 -1.200 1 1 A ASP 80.0 1
+ATOM 12 O OD1 . ASP 131 131 ? A 5.400 -0.600 -1.000 1 1 A ASP 80.0 1
+ATOM 13 N N . HIS 235 235 ? A 10.000 0.000 0.000 1 1 A HIS 80.0 1
+ATOM 14 C CA . HIS 235 235 ? A 11.500 0.000 0.000 1 1 A HIS 80.0 1
+ATOM 15 C C . HIS 235 235 ? A 12.000 1.400 0.000 1 1 A HIS 80.0 1
+ATOM 16 O O . HIS 235 235 ? A 11.300 2.400 0.000 1 1 A HIS 80.0 1
+ATOM 17 C CB . HIS 235 235 ? A 12.000 -0.800 -1.200 1 1 A HIS 80.0 1
+ATOM 18 N NE2 . HIS 235 235 ? A 4.500 1.600 -2.200 1 1 A HIS 80.0 1
+HETATM 19 Fe FE . LIG1 . 1 ? B 4.600 0.100 -0.600 1 1 FE LIG1 80.0 1
+HETATM 20 C C1 . LIG2 . 1 ? C 6.300 0.600 0.900 1 1 AKG LIG2 80.0 1
+HETATM 21 O O1 . LIG2 . 1 ? C 4.870 0.600 0.900 1 1 AKG LIG2 80.0 1
+HETATM 22 C C2 . LIG2 . 1 ? C 7.060 1.917 0.900 1 1 AKG LIG2 80.0 1
+HETATM 23 O O5 . LIG2 . 1 ? C 8.270 1.917 0.900 1 1 AKG LIG2 80.0 1
+#

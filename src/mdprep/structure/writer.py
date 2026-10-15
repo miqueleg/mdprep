@@ -93,6 +93,7 @@ def format_serial_field(serial: int) -> str:
 
 
 def format_atom_record(atom: AtomRecord) -> str:
+    _check_fields_fit(atom)
     serial = atom.serial if atom.serial is not None else 0
     atom_name = _atom_name_field(atom)
     altloc = atom.altloc or " "
@@ -107,6 +108,47 @@ def format_atom_record(atom: AtomRecord) -> str:
         f"{atom.x:8.3f}{atom.y:8.3f}{atom.z:8.3f}"
         f"{occupancy:6.2f}{bfactor:6.2f}          {element}\n"
     )
+
+
+def _check_fields_fit(atom: AtomRecord) -> None:
+    """Refuse to write a record whose fields would not line up.
+
+    Every field below is a minimum width, not a maximum, so a value one
+    character too wide shifts the whole rest of the line right rather than
+    being truncated or rejected. The result still looks like a PDB file and is
+    read back as nonsense -- a chain id inside the residue number, coordinates
+    missing their first digit -- somewhere far from here. Readers are expected
+    to have fitted their input to these widths already (see
+    mdprep.structure.pdb_fields), so reaching this is a bug rather than bad
+    user input, and it should say so where it happens.
+    """
+
+    from mdprep.structure.pdb_fields import (
+        CHAIN_ID_WIDTH,
+        RESID_MAX,
+        RESID_MIN,
+        RESNAME_WIDTH,
+        PdbFieldError,
+    )
+
+    if len(atom.resname) > RESNAME_WIDTH:
+        raise PdbFieldError(
+            f"Residue name {atom.resname!r} needs {len(atom.resname)} columns but "
+            f"a PDB record has {RESNAME_WIDTH} for it, so writing it would shift "
+            "every later field out of place."
+        )
+    if len(atom.chain_id) > CHAIN_ID_WIDTH:
+        raise PdbFieldError(
+            f"Chain id {atom.chain_id!r} needs {len(atom.chain_id)} columns but a "
+            f"PDB record has {CHAIN_ID_WIDTH} for it, so writing it would shift "
+            "every later field out of place."
+        )
+    if not RESID_MIN <= atom.resid <= RESID_MAX:
+        raise PdbFieldError(
+            f"Residue number {atom.resid} is outside the range a PDB record can "
+            f"hold ({RESID_MIN} to {RESID_MAX}), so writing it would shift every "
+            "later field out of place."
+        )
 
 
 def _atom_name_field(atom: AtomRecord) -> str:
