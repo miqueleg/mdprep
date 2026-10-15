@@ -31,6 +31,15 @@ Then open <http://localhost:8000>. Rebuild the wheel after changing any Python.
 
 `web/vendor/` is a build artifact and is not committed.
 
+## Publishing it
+
+The `web` workflow builds the site on every push and pull request, and
+publishes it from `master`. Publishing needs GitHub Pages enabled on the
+repository: **Settings -> Pages -> Source: GitHub Actions**. Until that is
+done the build still runs and uploads the site as an artifact, and the deploy
+step skips with a notice rather than failing -- a missing repository setting
+is not something a commit can fix, so it should not turn the workflow red.
+
 ## Files
 
 | File | Purpose |

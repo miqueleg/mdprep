@@ -17,6 +17,7 @@ from mdprep.structure.classify import (
 from mdprep.structure.disulfides import DisulfideCandidate, detect_possible_disulfides
 from mdprep.structure.models import PdbStructure, ResidueRecord
 from mdprep.structure.pdb import AltlocPolicy, read_pdb
+from mdprep.structure.reader import read_structure
 
 
 @dataclass(frozen=True)
@@ -72,7 +73,7 @@ def inspect_pdb_structure(
     altloc_policy: AltlocPolicy = "highest_occupancy",
     disulfide_cutoff_angstrom: float = 2.2,
 ) -> InspectionSummary:
-    structure = read_pdb(path, altloc_policy=altloc_policy)
+    structure = read_structure(path, altloc_policy=altloc_policy)
     residues = structure.residues
     protein_residues = [residue for residue in residues if is_standard_protein_residue(residue)]
     water_residues = [residue for residue in residues if is_water_residue(residue)]

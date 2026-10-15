@@ -98,14 +98,20 @@ def test_ligand_net_charge_has_no_default_and_is_blocking():
     assert decision.requires_user_input is True
 
 
-def test_metal_oxidation_state_has_no_default_and_is_blocking():
-    """A charge cannot be read off a structure, so it is always asked."""
+def test_an_oxidation_state_the_name_settles_is_proposed_and_not_blocking():
+    """A residue called ZN is zinc(II) in the PDB dictionary, so asking the
+    user to supply what the file already says is friction, not rigour. It is
+    still asked, with the proposal filled in."""
 
     plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
 
     charge = plan.by_id("metal.z_zn_500_site.charge")
 
-    assert charge.default is None and charge.requires_user_input
+    assert charge.default == "2"
+    assert not charge.requires_user_input
+    assert "chemical component dictionary" in charge.why
+    # And it is still a question, so a non-standard site can be corrected.
+    assert charge.id in {decision.id for decision in plan.decisions}
 
 
 def test_a_coordinated_metal_is_proposed_as_a_bonded_site():
@@ -120,11 +126,12 @@ def test_a_coordinated_metal_is_proposed_as_a_bonded_site():
     assert model.default == "bonded_mcpb"
     # The reason is shown, with the evidence it rests on.
     assert "donor atom(s) were found" in model.why
-    # Accepting it is not a silent commitment: the three questions a bonded
-    # site then needs cannot be defaulted.
+    # Accepting it is not a silent commitment: the questions a bonded site
+    # then needs cannot be defaulted. The oxidation state is not among them
+    # here only because this residue is called ZN, which settles it.
     blocking = {decision.id for decision in plan.blocking()}
     assert "metal.z_zn_500_site.confirm_donors" in blocking
-    assert "metal.z_zn_500_site.charge" in blocking
+    assert "metal.z_zn_500_site.multiplicity" in blocking
 
 
 def test_unknown_heterogen_removal_is_blocking():
@@ -252,8 +259,10 @@ def test_blocking_count_respects_answers_already_given():
 
     bonded_ids = {d.id for d in bonded}
     nonbonded_ids = {d.id for d in nonbonded}
-    # The oxidation state is needed either way.
-    assert "metal.z_zn_500_site.charge" in bonded_ids & nonbonded_ids
+    # Zinc's oxidation state is settled by its residue name, so it is not
+    # blocking either way; what a bonded site adds is what it alone needs.
+    assert "metal.z_zn_500_site.charge" not in bonded_ids | nonbonded_ids
+    assert "metal.z_zn_500_site.multiplicity" in bonded_ids - nonbonded_ids
     # The capped-model questions only arise for the bonded model.
     assert "metal.z_zn_500_site.model_charge" in bonded_ids
     assert "metal.z_zn_500_site.model_charge" not in nonbonded_ids
@@ -648,3 +657,161 @@ def test_a_ligand_that_already_has_hydrogens_is_neither_asked_nor_reported():
 
     assert [d.id for d in plan.decisions if d.id.endswith(".smiles")] == []
     assert plan.findings["ligands_without_hydrogens"] == []
+
+
+def test_the_capped_model_charge_is_summed_from_answers_already_given():
+    """mdprep asks for the metal's oxidation state and each ligand's net
+    charge, so by the time it asks for the model charge it has the terms.
+    Making the user add them up again invites an arithmetic slip that gives
+    converged, wrong parameters."""
+
+    from mdprep.config.decisions import proposed_model_charge
+
+    plan = plan_decisions(BESD) if (BESD := Path("examples/tutorials/besd_6nie/6NIE.pdb")).is_file() else None
+    if plan is None:
+        pytest.skip("the vendored reference structure is missing")
+
+    value, terms = proposed_model_charge(
+        plan,
+        {
+            "metal.a_fe2_302_site.charge": 2,
+            "ligand.a_akg_304.net_charge": -2,
+        },
+        "a_fe2_302_site",
+    )
+
+    # Fe(2+) + aKG(2-) + Cl(1-) + two neutral histidines.
+    assert value == -1
+    assert " ".join(terms) == "FE2 +2 AKG304 -2 HIS204 +0 HIS137 +0 CL303 -1"
+
+
+def test_a_bidentate_cofactor_is_counted_once():
+    """alpha-ketoglutarate donates two oxygens and appears twice among the
+    donors; counting its charge twice would be off by its whole charge."""
+
+    from mdprep.config.decisions import proposed_model_charge
+
+    structure = Path("examples/tutorials/besd_6nie/6NIE.pdb")
+    if not structure.is_file():
+        pytest.skip("the vendored reference structure is missing")
+    plan = plan_decisions(structure)
+    confirm = plan.by_id("metal.a_fe2_302_site.confirm_donors")
+
+    donating_atoms = [t for t in confirm.targets[1:] if t.resname == "AKG"]
+    assert len(donating_atoms) == 2  # O1 and O5
+
+    _, terms = proposed_model_charge(
+        plan,
+        {"metal.a_fe2_302_site.charge": 2, "ligand.a_akg_304.net_charge": -2},
+        "a_fe2_302_site",
+    )
+    assert len([term for term in terms if term.startswith("AKG")]) == 1
+
+
+def test_no_charge_is_proposed_while_a_term_is_still_unknown():
+    """Half a sum is worse than no suggestion: it looks like an answer."""
+
+    from mdprep.config.decisions import proposed_answers, proposed_model_charge
+
+    structure = Path("examples/tutorials/besd_6nie/6NIE.pdb")
+    if not structure.is_file():
+        pytest.skip("the vendored reference structure is missing")
+    plan = plan_decisions(structure)
+
+    # The cofactor's charge has not been given yet.
+    value, terms = proposed_model_charge(
+        plan, {"metal.a_fe2_302_site.charge": 2}, "a_fe2_302_site"
+    )
+    assert value is None
+    assert any(term.endswith("?") for term in terms)
+    assert "metal.a_fe2_302_site.model_charge" not in proposed_answers(
+        plan, {"metal.a_fe2_302_site.charge": 2}
+    )
+
+    # And none at all before the metal's own oxidation state is known.
+    assert proposed_model_charge(plan, {}, "a_fe2_302_site") == (None, [])
+
+
+def test_an_oxidation_state_the_residue_name_settles_is_proposed():
+    """The PDB dictionary names an ion after its state where there is more
+    than one, so FE2 is evidence and FE is different evidence."""
+
+    from mdprep.config.decisions import proposed_oxidation_state
+
+    assert proposed_oxidation_state("FE2", "Fe")[0] == 2
+    assert proposed_oxidation_state("FE", "Fe")[0] == 3
+    assert proposed_oxidation_state("CU1", "Cu")[0] == 1
+    assert proposed_oxidation_state("ZN", "Zn")[0] == 2
+
+
+def test_an_ambiguous_metal_with_an_uninformative_name_gets_no_proposal():
+    """Boltz names a ligand given as SMILES `LIG`, which says nothing. Iron
+    is II or III, and they differ in spin as well as charge, so guessing
+    would give a converged calculation with the wrong parameters."""
+
+    from mdprep.config.decisions import proposed_oxidation_state
+
+    value, why = proposed_oxidation_state("LIG", "Fe")
+
+    assert value is None
+    assert "more than one common state" in why
+    # Zinc is still settled, because it has only the one.
+    assert proposed_oxidation_state("LIG", "Zn")[0] == 2
+
+
+def test_the_model_charge_is_still_proposed_for_a_prediction_naming_everything_lig():
+    """The metal's own state cannot be proposed there, but once the user has
+    given it the rest of the sum is known -- which is the case that matters,
+    because it is the arithmetic rather than the chemistry."""
+
+    from mdprep.config.decisions import proposed_model_charge
+
+    plan = plan_decisions(DATA / "boltz_smiles_ligands.cif")
+    site = next(
+        decision.id.split(".")[1]
+        for decision in plan.decisions
+        if decision.section == "metals" and decision.id.endswith(".model")
+    )
+
+    # No proposal for the iron itself.
+    assert plan.by_id(f"metal.{site}.charge").default is None
+
+    value, terms = proposed_model_charge(
+        plan,
+        {f"metal.{site}.charge": 2, "ligand.akg_lig_21.net_charge": -2},
+        site,
+    )
+
+    # Fe(2+) + Asp(-1) + two neutral His + aKG(2-), the cofactor counted once
+    # though it donates through two oxygens.
+    assert value == -1
+    assert len([term for term in terms if term.startswith("LIG21")]) == 1
+
+
+def test_the_output_directory_is_marked_as_needing_a_filesystem():
+    """A browser has no path the user could usefully name: the page hands
+    back a bundle, and whoever runs the manifest chooses where output lands.
+    The question stays in the plan for front ends that do have a filesystem,
+    and keeps a default so the manifest is complete either way."""
+
+    plan = plan_decisions(DATA / "protein_two_ligands.pdb")
+
+    decision = plan.by_id("project.output_dir")
+
+    assert decision.needs_local_filesystem
+    assert decision.default == "prepared/protein_two_ligands"
+    assert not decision.requires_user_input
+    # It is the only one: nothing else asks for a path.
+    assert [d.id for d in plan.decisions if d.needs_local_filesystem] == [
+        "project.output_dir"
+    ]
+
+
+def test_the_flag_reaches_a_front_end_through_the_plan():
+    """The page filters on this, so it has to survive serialisation."""
+
+    plan = plan_decisions(DATA / "protein_two_ligands.pdb")
+    serialised = {item["id"]: item for item in plan.to_dict()["decisions"]}
+
+    assert serialised["project.output_dir"]["needs_local_filesystem"] is True
+    assert serialised["project.name"]["needs_local_filesystem"] is False

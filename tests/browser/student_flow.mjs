@@ -38,6 +38,7 @@ try {
     blocking: window.mdprepState.plan.blocking_count,
   }));
 
+  let lastIndex = -1;
   for (let i = 0; i < 200; i += 1) {
     const done = await page.evaluate(
       () => !document.getElementById("result-panel").classList.contains("hidden"));
@@ -52,7 +53,17 @@ try {
     });
     if (!q.id) { report.unanswered.push(`no decision matches: ${q.text}`); }
     const answer = ANSWERS[q.id];
-    report.asked.push({ id: q.id, answered: answer !== undefined ? String(answer) : null });
+    const note = await page.$eval("#blocking-note", (n) => n.textContent).catch(() => "");
+    const prefilled = await page.evaluate(() => {
+      const input = document.getElementById("answer-input");
+      return input ? input.value : null;
+    });
+    report.asked.push({
+      id: q.id,
+      answered: answer !== undefined ? String(answer) : null,
+      note,
+      prefilled,
+    });
     if (answer !== undefined) {
       const ok = await page.evaluate((value) => {
         const input = document.getElementById("answer-input");
@@ -66,6 +77,15 @@ try {
     }
     await page.click("#next");
     await new Promise((r) => setTimeout(r, 120));
+    // A blocking question with no answer leaves the page where it is, and
+    // the loop would otherwise spin until its limit with nothing to show.
+    const moved = await page.evaluate(() => window.mdprepState.index);
+    if (moved === lastIndex) {
+      const error = await page.$eval("#answer-error", (n) => n.textContent);
+      report.unanswered.push(`stuck on ${q.id}: ${error || "no value accepted"}`);
+      break;
+    }
+    lastIndex = moved;
   }
 
   report.manifest = await page.$eval("#manifest-yaml", (n) => n.textContent).catch(() => null);

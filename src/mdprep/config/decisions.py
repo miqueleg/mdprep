@@ -135,6 +135,11 @@ class Decision:
     focus: FocusMode = "none"
     minimum: int | float | None = None
     maximum: int | float | None = None
+    # A question that only means something where the answer will be used.
+    # A browser has no filesystem the user can usefully name, so asking for
+    # an output directory there is a box to fill in for no reason: the page
+    # hands back a bundle and whoever runs it chooses where it lands.
+    needs_local_filesystem: bool = False
 
     @property
     def subject(self) -> "ResidueTarget":
@@ -164,6 +169,7 @@ class Decision:
             "focus": self.focus,
             "minimum": self.minimum,
             "maximum": self.maximum,
+            "needs_local_filesystem": self.needs_local_filesystem,
         }
 
 
@@ -487,8 +493,14 @@ def _project_decisions(path: Path) -> list[Decision]:
             section="project",
             question="Output directory",
             kind="text",
-            why="Where prepared structures, logs and Amber files are written.",
+            why=(
+                "Where prepared structures, logs and Amber files are written, "
+                "on the machine that runs the preparation. A front end with no "
+                "filesystem of its own leaves this at its default and lets "
+                "whoever runs the manifest decide."
+            ),
             default=f"prepared/{name}",
+            needs_local_filesystem=True,
         ),
     ]
 
@@ -1025,6 +1037,53 @@ def _ligand_decisions(
 # Formal charges of the donor groups that appear in a first-shell metal site at
 # neutral pH. Used only to show a user the arithmetic behind the capped-model
 # charge they must enter; it is never used as a default.
+# Oxidation states a residue name settles on its own. The PDB chemical
+# component dictionary and Amber's ion libraries both name an ion after its
+# state where there is more than one -- FE2 is Fe(II) and FE is Fe(III), CU1
+# is Cu(I) and CU is Cu(II) -- so the name is evidence when it is one of
+# these, and says nothing when a file calls the residue LIG or UNK.
+OXIDATION_STATE_BY_RESNAME = {
+    "ZN": 2, "MG": 2, "CA": 2, "MN": 2, "NI": 2, "CO": 2, "CD": 2, "HG": 2,
+    "NA": 1, "K": 1, "LI": 1, "RB": 1, "CS": 1,
+    "FE": 3, "FE2": 2, "FE3": 3,
+    "CU": 2, "CU1": 1, "CU2": 2, "CU3": 3,
+    "AL": 3, "CR": 3, "GA": 3, "IN": 3, "LA": 3, "PB": 2, "SR": 2, "BA": 2,
+}
+
+# Metals with one biological oxidation state worth assuming when the residue
+# name gives nothing -- a prediction naming every heterogen LIG, for instance.
+# Iron, copper, manganese and cobalt are deliberately absent: each has more
+# than one common state, they differ in spin as well as charge, and a wrong
+# guess yields a converged calculation with wrong parameters.
+OXIDATION_STATE_BY_ELEMENT = {
+    "ZN": 2, "MG": 2, "CA": 2, "NA": 1, "K": 1, "LI": 1,
+}
+
+
+def proposed_oxidation_state(resname: str, element: str | None) -> tuple[int | None, str]:
+    """An oxidation state the evidence settles, and why -- or no proposal."""
+
+    name = (resname or "").strip().upper()
+    if name in OXIDATION_STATE_BY_RESNAME:
+        return (
+            OXIDATION_STATE_BY_RESNAME[name],
+            f"the residue name {name} is that oxidation state in the PDB "
+            "chemical component dictionary",
+        )
+    symbol = (element or "").strip().upper()
+    if symbol in OXIDATION_STATE_BY_ELEMENT:
+        return (
+            OXIDATION_STATE_BY_ELEMENT[symbol],
+            f"{symbol.capitalize()} has one common biological oxidation state",
+        )
+    return (
+        None,
+        f"the residue name {name or 'given'} does not identify one, and "
+        f"{symbol.capitalize() or 'this element'} has more than one common "
+        "state, which differ in spin as well as charge",
+    )
+
+
 STANDARD_DONOR_FORMAL_CHARGE = {
     "HIS": 0, "HID": 0, "HIE": 0, "HIP": 1,
     "ASP": -1, "ASH": 0, "GLU": -1, "GLH": 0,
@@ -1148,11 +1207,27 @@ def _metal_decisions(
             section="metals",
             question=f"Formal oxidation state (charge) of {display}",
             kind="integer",
-            default=None,
-            requires_user_input=True,
+            default=(
+                str(_proposed_state)
+                if (_proposed_state := proposed_oxidation_state(
+                    residue.id.resname, element
+                )[0]) is not None
+                else None
+            ),
+            requires_user_input=_proposed_state is None,
             why=(
-                "Neither the PDB residue name nor the element identifies an "
-                "oxidation state. Zn is almost always +2; Fe and Cu are not."
+                "This sets the electron count, and with the spin state it sets "
+                "what the quantum calculation is solving. "
+                + (
+                    f"Proposed as {_proposed_state:+d} because "
+                    f"{proposed_oxidation_state(residue.id.resname, element)[1]}; "
+                    "change it if that is not this site."
+                    if _proposed_state is not None
+                    else "No value is proposed here because "
+                    f"{proposed_oxidation_state(residue.id.resname, element)[1]}. "
+                    "Guessing would give a converged calculation with the wrong "
+                    "parameters."
+                )
             ),
             minimum=1,
             maximum=4,
@@ -1243,7 +1318,11 @@ def _metal_decisions(
                     "This is the charge of the metal plus every residue in the "
                     "coordination sphere, and it sets the electron count of the "
                     "quantum calculation. A wrong value gives converged, wrong "
-                    "parameters."
+                    "parameters. mdprep proposes the sum of the charges already "
+                    "given -- the metal's oxidation state, each cofactor's net "
+                    "charge, a halide's ionic charge, a protein donor's formal "
+                    "charge -- and shows the arithmetic. Change it if the site "
+                    "is not what those terms describe."
                 ),
                 evidence=donor_evidence,
                 targets=targets,
@@ -1771,6 +1850,117 @@ def ligands_needing_hydrogens(
         if ligand_id in plan.findings.get("ligands_without_hydrogens", ()):
             needing.append(ligand_id)
     return needing
+
+
+def proposed_model_charge(
+    plan: DecisionPlan, answers: Mapping[str, Any], site_id: str
+) -> tuple[int | None, list[str]]:
+    """The capped model's charge, summed from answers already given.
+
+    The small and large models hold the metal and everything bonded to it, so
+    the charge is the sum of their formal charges. mdprep asks for every one
+    of those separately -- the metal's oxidation state, each ligand's net
+    charge -- so by the time this question arrives it has the terms and
+    should not make the user add them up again.
+
+    A protein donor contributes the formal charge of its residue name, a
+    coordinating halide its ionic charge, and a cofactor the net charge the
+    user declared for it. Returns ``None`` when a term is still unknown,
+    because half a sum is worse than no suggestion.
+
+    The terms are returned alongside so a front end can show the arithmetic
+    rather than a bare number nobody can check.
+    """
+
+    confirm = plan.by_id(f"metal.{site_id}.confirm_donors")
+    if confirm is None or not confirm.targets:
+        return None, []
+
+    raw_metal = answers.get(f"metal.{site_id}.charge")
+    if raw_metal is None or str(raw_metal) == "":
+        return None, []
+    try:
+        total = int(raw_metal)
+    except (TypeError, ValueError):
+        return None, []
+    terms = [f"{confirm.targets[0].resname} {total:+d}"]
+
+    # A ligand's own block carries the charge the user gave it, found by
+    # position rather than by name: a cofactor's residue name says nothing
+    # about its protonation.
+    ligand_charges: dict[tuple[str, int, str | None], Any] = {}
+    for decision in plan.decisions:
+        if decision.section != "ligands" or not decision.id.endswith(".net_charge"):
+            continue
+        subject = decision.subject
+        if subject is None:
+            continue
+        given = answers.get(decision.id)
+        if given is None or str(given) == "":
+            continue
+        ligand_charges[(subject.chain, subject.resid, subject.icode)] = given
+
+    complete = True
+    seen: set[tuple[str, int, str | None]] = set()
+    for donor in confirm.targets[1:]:
+        key = (donor.chain, donor.resid, donor.icode)
+        # A bidentate cofactor appears once per donating atom and must be
+        # counted once.
+        if key in seen:
+            continue
+        seen.add(key)
+        resname = (donor.resname or "").strip().upper()
+        charge = STANDARD_DONOR_FORMAL_CHARGE.get(resname)
+        if charge is None and key in ligand_charges:
+            try:
+                charge = int(ligand_charges[key])
+            except (TypeError, ValueError):
+                charge = None
+        if charge is None:
+            terms.append(f"{resname}{donor.resid} ?")
+            complete = False
+            continue
+        terms.append(f"{resname}{donor.resid} {charge:+d}")
+        total += charge
+    return (total if complete else None), terms
+
+
+def proposed_answers(
+    plan: DecisionPlan, answers: Mapping[str, Any]
+) -> dict[str, str]:
+    """Values mdprep can work out from what has been answered so far.
+
+    A front end shows these the way it shows a default: filled in, and
+    changeable. They are not defaults on the decision itself because they
+    depend on other answers, which a plan computed once cannot know.
+    """
+
+    return {key: value for key, (value, _) in _proposals(plan, answers).items()}
+
+
+def proposal_explanations(
+    plan: DecisionPlan, answers: Mapping[str, Any]
+) -> dict[str, str]:
+    """The arithmetic behind each proposal, so it can be checked not trusted."""
+
+    return {key: why for key, (_, why) in _proposals(plan, answers).items()}
+
+
+def _proposals(
+    plan: DecisionPlan, answers: Mapping[str, Any]
+) -> dict[str, tuple[str, str]]:
+    proposals: dict[str, tuple[str, str]] = {}
+    for decision in plan.decisions:
+        if decision.section != "metals" or not decision.id.endswith(".model_charge"):
+            continue
+        site_id = decision.id.split(".")[1]
+        value, terms = proposed_model_charge(plan, answers, site_id)
+        if value is not None:
+            proposals[decision.id] = (
+                str(value),
+                " ".join(terms) + f" = {value:+d}",
+            )
+    return proposals
 
 
 def unresolved_mcpb_sites(

@@ -36,8 +36,8 @@
           <p class="hint">Colab can re-download this by ID, so no file changes hands.</p>
         </div>
         <div class="loader">
-          <label for="pdb-file">Or upload your own PDB</label>
-          <input id="pdb-file" type="file" accept=".pdb,.ent,.txt" />
+          <label for="pdb-file">Or upload your own PDB or mmCIF</label>
+          <input id="pdb-file" type="file" accept=".pdb,.ent,.txt,.cif,.mmcif" />
           <p class="hint">
             Stays in this browser. The download at the end bundles it with the
             manifest so Colab gets the same file.
@@ -92,11 +92,20 @@
 
       <h3>Manifest</h3>
       <pre id="manifest-yaml"></pre>
+      <p class="hint" id="download-note">
+        Nothing here is saved anywhere. This page keeps your structure and
+        these answers in the browser only, so
+        <strong>download the bundle before you close the tab</strong> &mdash;
+        it holds the structure and the manifest together, which is what
+        <code>mdprep prepare</code> needs. The manifest does not name a
+        directory on your machine; whoever runs it chooses where the output
+        goes.
+      </p>
       <div class="controls">
-        <button id="copy-manifest" type="button">Copy manifest</button>
         <button id="download-bundle" type="button" class="primary">
           Download bundle
         </button>
+        <button id="copy-manifest" type="button">Copy manifest</button>
         <button id="restart" type="button">Start over</button>
       </div>
 

@@ -33,6 +33,12 @@ const state = {
 };
 
 const el = (id) => document.getElementById(id);
+
+// Prediction writes mmCIF -- Boltz emits ModelCIF, the RCSB serves mmCIF --
+// so the builder takes either. mdprep chooses its reader by extension too,
+// which is why the name is carried through rather than the contents sniffed.
+const structureFormat = (name) =>
+  /\.(cif|mmcif)$/i.test(name || "") ? "cif" : "pdb";
 const show = (id) => el(id).classList.remove("hidden");
 const hide = (id) => el(id).classList.add("hidden");
 
@@ -68,7 +74,12 @@ async function bootPython() {
 import json
 from mdprep.config.decisions import plan_decisions, build_manifest, DecisionError
 from mdprep.workflows.wizard import render_manifest_yaml
-from mdprep.config.decisions import unresolved_mcpb_sites, ligands_needing_hydrogens
+from mdprep.config.decisions import (
+    unresolved_mcpb_sites,
+    ligands_needing_hydrogens,
+    proposed_answers,
+    proposal_explanations,
+)
 from mdprep.workflows.runtime import conda_packages_for, micromamba_setup_commands
 
 _PLAN = {}
@@ -79,6 +90,20 @@ def mdprep_plan(text, name):
     plan = plan_decisions(name)
     _PLAN["plan"] = plan
     return json.dumps(plan.to_dict())
+
+def mdprep_proposals(answers_json):
+    """Answers that follow from earlier ones, such as a capped model charge.
+
+    The arithmetic comes back with each one so the page can show it; a number
+    nobody can check is not much better than no number.
+    """
+    plan = _PLAN["plan"]
+    answers = json.loads(answers_json)
+    values = proposed_answers(plan, answers)
+    why = proposal_explanations(plan, answers)
+    return json.dumps({key: {"value": value, "why": why.get(key, "")}
+                       for key, value in values.items()})
+
 
 def mdprep_build(answers_json, mdprep_spec):
     plan = _PLAN["plan"]
@@ -168,7 +193,9 @@ function initViewer() {
   const container = el("viewer");
   container.innerHTML = "";
   state.viewer = $3Dmol.createViewer(container, { backgroundColor: "white" });
-  state.viewer.addModel(state.structureText, "pdb");
+  // 3Dmol parses the coordinates itself and needs to be told which format,
+  // so this follows the same extension the Python side dispatched on.
+  state.viewer.addModel(state.structureText, structureFormat(state.structureName));
   state.viewer.setStyle({}, { cartoon: { color: "spectrum" } });
   state.viewer.zoomTo();
   state.viewer.render();
@@ -240,6 +267,9 @@ function applicableDecisions() {
   const answers = {};
   const result = [];
   for (const decision of state.plan.decisions) {
+    // A browser has no filesystem path the user could usefully give, so
+    // these keep their default and never become a question here.
+    if (decision.needs_local_filesystem) continue;
     if (!isApplicable(decision, answers)) continue;
     result.push(decision);
     const given = state.answers[decision.id];
@@ -268,10 +298,19 @@ function renderCurrentQuestion() {
     .join("");
   el("answer-error").textContent = "";
 
-  el("blocking-note").textContent = decision.requires_user_input
-    ? "This cannot be guessed from the structure, so there is no default."
-    : "";
-  el("blocking-note").classList.toggle("visible", decision.requires_user_input);
+  // Worked out before the note, because a question that has a proposal must
+  // not also be told it has no default.
+  const proposal =
+    state.answers[decision.id] === undefined ? proposalFor(decision) : null;
+  state.proposal = proposal;
+
+  const note = proposal
+    ? `Worked out from your earlier answers: ${proposal.why}. Change it if that is not this site.`
+    : decision.requires_user_input
+      ? "This cannot be guessed from the structure, so there is no default."
+      : "";
+  el("blocking-note").textContent = note;
+  el("blocking-note").classList.toggle("visible", note !== "");
 
   const total = decisions.length;
   el("progress-text").textContent = `Question ${state.index + 1} of ${total}`;
@@ -283,10 +322,34 @@ function renderCurrentQuestion() {
   focusOn(decision);
 }
 
+// Some answers follow from earlier ones -- a capped QM model's charge is the
+// sum of the metal, the donors and the cofactors, every one of which has
+// already been asked for. Worked out in Python so the arithmetic lives in one
+// place, and offered the way a default is: filled in, and changeable.
+function proposalFor(decision) {
+  if (!state.pyodide || !state.plan) return null;
+  try {
+    const fn = state.pyodide.globals.get("mdprep_proposals");
+    const proposals = JSON.parse(fn(JSON.stringify(state.answers)));
+    fn.destroy();
+    return proposals[decision.id] ?? null;
+  } catch {
+    // A proposal is a convenience; failing to compute one must not stop the
+    // question being asked.
+    return null;
+  }
+}
+
 function renderAnswerInput(decision) {
   const area = el("answer-area");
   const existing = state.answers[decision.id];
-  const value = existing !== undefined ? existing : decision.default;
+  const proposed = state.proposal ? state.proposal.value : null;
+  const value =
+    existing !== undefined
+      ? existing
+      : proposed !== null
+        ? proposed
+        : decision.default;
   area.innerHTML = "";
 
   if (decision.kind === "choice") {
@@ -325,8 +388,14 @@ function renderAnswerInput(decision) {
   if (decision.minimum !== null) input.min = decision.minimum;
   if (decision.maximum !== null) input.max = decision.maximum;
   input.id = "answer-input";
-  input.value = value === null ? "" : value;
-  if (decision.requires_user_input && existing === undefined) input.value = "";
+  input.value = value === null || value === undefined ? "" : value;
+  // A blocking question is shown empty so its default cannot be accepted by
+  // reflex -- but a proposal is not a default. It was computed from answers
+  // this user already gave, the arithmetic is on screen beside it, and
+  // blanking it would mean asking them to retype their own sum.
+  if (decision.requires_user_input && existing === undefined && proposed === null) {
+    input.value = "";
+  }
   area.appendChild(input);
   input.focus();
 }
@@ -343,12 +412,13 @@ function onNext() {
   if (!decision) return;
   const raw = readAnswer();
   if (raw === "") {
-    if (decision.requires_user_input || decision.default === null) {
+    const fallback = (state.proposal ? state.proposal.value : null) ?? decision.default;
+    if (fallback === null || fallback === undefined) {
       el("answer-error").textContent =
         "This question has no default. Please give a value.";
       return;
     }
-    state.answers[decision.id] = decision.default;
+    state.answers[decision.id] = fallback;
   } else {
     state.answers[decision.id] = raw;
   }
@@ -490,6 +560,9 @@ async function downloadBundle() {
   link.download = "mdprep-bundle.zip";
   link.click();
   URL.revokeObjectURL(url);
+  state.downloaded = true;
+  el("download-note").textContent =
+    "Downloaded. Extract the zip and run: mdprep prepare system.yaml";
 }
 
 function bundleReadme() {
@@ -499,11 +572,15 @@ function bundleReadme() {
     `structure: ${state.structureName}`,
     "manifest:  system.yaml",
     "",
-    "Upload this zip to Colab, extract it, and run:",
+    "Extract this zip and run, from the directory it extracted into:",
     "    mdprep prepare system.yaml",
     "",
     "The manifest references the structure by the name above, so keep them",
     "together in the same directory.",
+    "",
+    "Output goes to the directory named under project.output_dir, relative",
+    "to wherever you run the command. Change it there if you want it",
+    "somewhere else.",
   ].join("\n");
 }
 
@@ -584,6 +661,16 @@ bootPython().catch((error) => {
 });
 
 // Exposed for the browser smoke test in tests/browser/smoke.mjs.
+// Everything lives in this tab. Once a manifest exists there is something
+// to lose, so closing without downloading asks first.
+window.addEventListener("beforeunload", (event) => {
+  const built = !el("result-panel").classList.contains("hidden");
+  if (built && !state.downloaded) {
+    event.preventDefault();
+    event.returnValue = "";
+  }
+});
+
 window.mdprepState = state;
 window.renderColabCellForTest = renderColabCell;
 window.storedZipBytesForTest = storedZipBytes;
