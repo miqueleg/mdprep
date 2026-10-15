@@ -171,3 +171,112 @@ def test_the_same_structure_in_both_formats_reads_identically(tmp_path):
         ]
 
     assert identity(from_cif) == identity(from_pdb)
+
+
+# --------------------------------------------------------------------------
+# Names that do not fit a PDB column
+#
+# mmCIF puts no width on a chain id or a residue name, and a PDB record gives
+# them one column and three. Boltz uses both freedoms: it names a second
+# SMILES ligand LIG2 and names chains after the entity. Everything downstream
+# of mdprep reads fixed columns, so these have to be fitted on the way in.
+# --------------------------------------------------------------------------
+
+WIDE = DATA / "boltz_wide_names.cif"
+
+
+def test_a_residue_name_too_wide_for_a_pdb_column_is_renamed():
+    structure = read_mmcif(WIDE)
+
+    names = {residue.id.resname for residue in structure.residues}
+    assert all(len(name) <= 3 for name in names)
+    # The two ligands stay distinguishable. Truncating both to LIG would be
+    # the obvious way to make them fit and would merge the iron with the
+    # cofactor.
+    ligands = [
+        residue.id.resname
+        for residue in structure.residues
+        if residue.id.resname not in {"HIS", "ASP"}
+    ]
+    assert len(ligands) == 2
+    assert len(set(ligands)) == 2
+
+
+def test_a_chain_id_too_wide_for_a_pdb_column_is_renamed():
+    structure = read_mmcif(WIDE)
+
+    chains = {residue.id.chain_id for residue in structure.residues}
+    assert all(len(chain) == 1 for chain in chains)
+    # The protein was already A and keeps it, so the renamed chains went
+    # somewhere else rather than landing on top of it.
+    assert len(chains) == 3
+
+
+def test_the_renaming_is_reported_rather_than_done_quietly():
+    """A selector written against the original file has to be translatable."""
+
+    structure = read_mmcif(WIDE)
+    reported = " ".join(structure.warnings)
+
+    assert "LIG2" in reported
+    assert "AKG" in reported
+    for residue in structure.residues:
+        if residue.id.resname not in {"HIS", "ASP"}:
+            assert residue.id.resname in reported
+
+
+def test_a_renamed_residue_is_not_given_a_name_that_means_something():
+    """Classification is by residue name: a ligand renamed WAT becomes
+    solvent and one renamed FE2 becomes a metal site. (A residue that was
+    already an ion is the one exception, and keeps its element -- see
+    test_a_wide_ion_name_keeps_the_element_it_names.)"""
+
+    from mdprep.structure.classify import STANDARD_PROTEIN_RESIDUES, WATER_RESIDUES
+    from mdprep.structure.pdb_fields import _free_resname, looks_like_ion_resname
+
+    assert _free_resname("WATX", set()) != "WAT"
+    assert not looks_like_ion_resname(_free_resname("FE2X", set()))
+    for source in ("HISX", "HOHX", "LIG2", "SUBSTRATE"):
+        chosen = _free_resname(source, set())
+        assert chosen not in STANDARD_PROTEIN_RESIDUES | WATER_RESIDUES
+        assert not looks_like_ion_resname(chosen)
+
+
+def test_a_fitted_structure_survives_being_written_and_read_back():
+    """The point of the renaming: what comes out is a PDB file whose columns
+    line up, which is what tleap, antechamber and RDKit all read."""
+
+    from mdprep.structure.pdb import read_pdb
+    from mdprep.structure.writer import write_pdb
+    import tempfile
+
+    structure = read_mmcif(WIDE)
+    with tempfile.TemporaryDirectory() as directory:
+        output = Path(directory) / "fitted.pdb"
+        write_pdb(structure, output)
+        reparsed = read_pdb(output)
+
+    assert [residue.id for residue in reparsed.residues] == [
+        residue.id for residue in structure.residues
+    ]
+    for original, rewritten in zip(structure.atoms, reparsed.atoms):
+        assert (rewritten.x, rewritten.y, rewritten.z) == (
+            original.x,
+            original.y,
+            original.z,
+        )
+
+
+def test_a_wide_ion_name_keeps_the_element_it_names():
+    """An ion residue name is not a label: Amber matches ZN and FE2 against
+    its ion templates, and mdprep reads the metal out of the same name. A
+    stand-in that dropped the element would fit the column and lose the
+    chemistry."""
+
+    from mdprep.structure.pdb_fields import _free_resname, ion_element
+
+    assert _free_resname("ZN22", set()) == "ZN"
+    assert _free_resname("FE234", set()) == "FE"
+    # Still unique when the obvious name is already in the structure.
+    assert ion_element(_free_resname("ZN22", {"ZN"})) == "ZN"
+    assert _free_resname("ZN22", {"ZN"}) != "ZN"

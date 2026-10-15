@@ -217,3 +217,95 @@ def test_a_ligand_without_a_smiles_does_not():
     assert "rdkit" not in conda_packages_for(
         manifest(ligands=[{"charge_method": "am1bcc"}])
     )
+
+
+# --------------------------------------------------------------------------
+# Metal sites in Colab
+#
+# A bonded metal site defaults to an xTB Hessian, and to the g-xTB model in
+# particular. conda-forge carries only the GFN-only build, so a setup cell
+# derived from the conda packages alone produces an environment that gets all
+# the way to the Hessian before failing.
+# --------------------------------------------------------------------------
+
+
+def mcpb_site(**pyscf_overrides) -> dict:
+    pyscf = {"hessian_backend": "xtb", "esp_backend": "xtb", "xtb": {"model": "gxtb"}}
+    pyscf.update(pyscf_overrides)
+    return {"model": "bonded_mcpb", "mcpb": {"pyscf": pyscf}}
+
+
+def test_a_metal_site_with_an_xtb_hessian_installs_xtb():
+    """Without this the run reaches the Hessian and finds no binary."""
+
+    assert "xtb" in conda_packages_for(manifest(metals=[mcpb_site()]))
+
+
+def test_a_metal_site_with_a_pyscf_hessian_does_not_need_xtb():
+    packages = conda_packages_for(
+        manifest(metals=[mcpb_site(hessian_backend="pyscf", esp_backend="pyscf", xtb=None)])
+    )
+
+    assert "xtb" not in packages
+
+
+def test_the_gxtb_build_is_installed_because_conda_does_not_carry_it():
+    from mdprep.workflows.runtime import (
+        GXTB_SHA256,
+        gxtb_executable_path,
+        manifest_wants_gxtb,
+    )
+
+    one = manifest(metals=[mcpb_site()])
+    assert manifest_wants_gxtb(one)[0]
+
+    commands = micromamba_setup_commands(one)
+    joined = "\n".join(commands)
+    assert "grimme-lab/g-xtb" in joined
+    # Verified before it is unpacked: this binary computes the force
+    # constants, so a truncated download must stop the run rather than
+    # quietly change the parameters.
+    assert GXTB_SHA256 in joined
+    assert joined.index(GXTB_SHA256) < joined.index("tar -xJf")
+    assert gxtb_executable_path() in joined
+
+
+def test_a_gfn2_hessian_does_not_download_the_gxtb_build():
+    """GFN2 is what conda installs, so nothing extra is needed."""
+
+    from mdprep.workflows.runtime import manifest_wants_gxtb
+
+    site = mcpb_site(xtb={"model": "gfn2"})
+    assert not manifest_wants_gxtb(manifest(metals=[site]))[0]
+    assert "grimme-lab" not in "\n".join(micromamba_setup_commands(manifest(metals=[site])))
+
+
+def test_a_configured_gxtb_path_is_left_alone():
+    """Someone who named their own build does not want ours downloaded."""
+
+    from mdprep.workflows.runtime import manifest_wants_gxtb
+
+    site = mcpb_site(xtb={"model": "gxtb", "executable": "/opt/gxtb/bin/xtb"})
+    wants, configured = manifest_wants_gxtb(manifest(metals=[site]))
+
+    assert wants and configured == "/opt/gxtb/bin/xtb"
+    assert "grimme-lab" not in "\n".join(micromamba_setup_commands(manifest(metals=[site])))
+
+
+def test_the_run_command_carries_gxtb_into_the_environment():
+    """`micromamba run` starts a fresh environment, so anything the setup
+    cell exported is gone by the time the run cell executes."""
+
+    from mdprep.workflows.runtime import gxtb_executable_path, micromamba_run_command
+
+    command = micromamba_run_command(manifest(metals=[mcpb_site()]), "system.yaml")
+
+    assert f"MDPREP_GXTB_EXECUTABLE={gxtb_executable_path()}" in command
+    assert command.index("MDPREP_GXTB_EXECUTABLE") < command.index("micromamba run")
+    assert command.endswith("mdprep prepare system.yaml")
+
+
+def test_the_run_command_stays_plain_when_no_metal_needs_gxtb():
+    from mdprep.workflows.runtime import micromamba_run_command
+
+    assert "GXTB" not in micromamba_run_command(manifest(), "system.yaml")

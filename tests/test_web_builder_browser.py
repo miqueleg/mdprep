@@ -13,6 +13,7 @@ cleanly when any of those is missing.
 
 import contextlib
 import json
+import tempfile
 import shutil
 import socket
 import subprocess
@@ -34,6 +35,11 @@ REPO = Path(__file__).resolve().parent.parent
 WEB = REPO / "web"
 DRIVER = REPO / "tests" / "browser" / "smoke.mjs"
 STRUCTURE = REPO / "tests" / "data" / "protein_two_ligands.pdb"
+# A metal site is the case the toolchain is hardest for, because it needs a
+# build of xtb that conda-forge does not carry.
+METAL_STRUCTURE = REPO / "tests" / "data" / "protein_histidine_zinc.pdb"
+# A spin multiplicity cannot be 0, which is the driver's fallback.
+METAL_ANSWERS = {"metal.z_zn_500_site.multiplicity": "1"}
 
 CHROME_CANDIDATES = (
     "chromium-browser",
@@ -101,17 +107,36 @@ def report():
         cwd=REPO,
     )
 
-    with serve(WEB) as url:
-        result = subprocess.run(
-            ["node", str(DRIVER), url, str(STRUCTURE), chrome],
-            capture_output=True,
-            text=True,
-            cwd=REPO,
-            timeout=600,
-        )
+    return drive(chrome, STRUCTURE)
+
+
+def drive(chrome, structure, answers=None):
+    command = [str(DRIVER), "", str(structure), chrome]
+    with tempfile.TemporaryDirectory() as directory:
+        if answers is not None:
+            answers_path = Path(directory) / "answers.json"
+            answers_path.write_text(json.dumps(answers), encoding="utf-8")
+            command.append(str(answers_path))
+        with serve(WEB) as url:
+            command[1] = url
+            result = subprocess.run(
+                ["node", *command],
+                capture_output=True,
+                text=True,
+                cwd=REPO,
+                timeout=600,
+            )
     if result.returncode != 0:
         pytest.fail(f"browser driver failed: {result.stderr[-2000:]}")
-    return json.loads(result.stdout)
+    payload = json.loads(result.stdout)
+    # Chrome occasionally will not start on a CI runner -- "Timed out waiting
+    # for the WS endpoint" -- after the driver has already retried. That says
+    # nothing about the page, and failing on it blocks the Pages deployment
+    # for a reason no commit can fix. Anything the page did once it loaded is
+    # still a failure.
+    if payload.get("launchFailed"):
+        pytest.skip(payload.get("failure", "Chrome would not start"))
+    return payload
 
 
 def test_the_page_runs_without_errors(report):
@@ -218,3 +243,72 @@ def test_the_run_cell_invokes_mdprep_inside_that_environment(report):
 
 def test_the_bundle_writer_runs_in_the_browser(report):
     assert report["bundleNames"] > 0
+
+
+# --------------------------------------------------------------------------
+# A metal site, end to end
+#
+# This is the case the generated setup cell is hardest for: a bonded MCPB site
+# defaults to a g-xTB Hessian, and conda-forge carries only the GFN-only build
+# of xtb. Driving a metal structure through the real page is the only check
+# that a student who picks the defaults gets a Colab cell that can finish.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def metal_report():
+    chrome = find_chrome()
+    if chrome is None:
+        pytest.skip("a Chromium/Chrome binary is required for the browser test")
+    if not has_puppeteer():
+        pytest.skip("puppeteer-core is required: npm install puppeteer-core")
+    subprocess.run(
+        [sys.executable, str(WEB / "build.py")],
+        check=True,
+        capture_output=True,
+        cwd=REPO,
+    )
+    return drive(chrome, METAL_STRUCTURE, answers=METAL_ANSWERS)
+
+
+def test_a_metal_structure_reaches_a_manifest(metal_report):
+    assert metal_report["ok"], metal_report.get("failure")
+    assert metal_report["errors"] == []
+
+
+def test_the_metal_manifest_validates(metal_report):
+    manifest = yaml.safe_load(metal_report["manifest"])
+
+    ManifestConfig.model_validate(manifest)
+    assert manifest["metals"], "the metal site was dropped from the manifest"
+
+
+def test_the_setup_cell_installs_the_gxtb_build_conda_does_not_have(metal_report):
+    from mdprep.workflows.runtime import GXTB_SHA256
+
+    setup = metal_report["colabSetup"]
+
+    assert "grimme-lab/g-xtb" in setup
+    # Checked before it is unpacked: this binary produces the force constants.
+    assert GXTB_SHA256 in setup
+    assert setup.index(GXTB_SHA256) < setup.index("tar -xJf")
+
+
+def test_the_run_cell_points_mdprep_at_that_build(metal_report):
+    """`micromamba run` starts a fresh environment, so the export in the
+    setup cell does not survive into the run cell."""
+
+    assert "MDPREP_GXTB_EXECUTABLE=" in metal_report["colabUpload"]
+
+
+def test_the_metal_setup_cell_installs_xtb_itself(metal_report):
+    """The ESP backend is xTB too, and that one does come from conda."""
+
+    assert " xtb" in metal_report["colabSetup"]
+
+
+def test_the_note_explains_the_extra_download(metal_report):
+    note = metal_report["toolchainNote"]
+
+    assert "g-xTB" in note
+    assert "checksum" in note

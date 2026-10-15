@@ -21,6 +21,7 @@ from math import isfinite
 from pathlib import Path
 
 from mdprep.structure.models import AtomRecord, PdbStructure
+from mdprep.structure.pdb_fields import fit_atoms_to_pdb_fields
 from mdprep.structure.pdb import (
     VALID_ALTLOC_POLICIES,
     AltlocPolicy,
@@ -213,6 +214,11 @@ def read_mmcif(
     atoms = _apply_altloc_policy(atoms, altloc_policy)
     if not atoms:
         raise MmcifParseError(f"mmCIF contains no usable atoms: {source}")
+    # mmCIF puts no width on a name and a PDB record does, and everything
+    # downstream of here is fixed-column. Fit the names now, while this is
+    # still the only code that has seen them.
+    atoms, field_warnings = fit_atoms_to_pdb_fields(atoms)
+    warnings.extend(field_warnings)
     return PdbStructure(
         path=source,
         atoms=atoms,

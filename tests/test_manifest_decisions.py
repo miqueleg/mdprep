@@ -776,9 +776,17 @@ def test_the_model_charge_is_still_proposed_for_a_prediction_naming_everything_l
     # No proposal for the iron itself.
     assert plan.by_id(f"metal.{site}.charge").default is None
 
+    # Found rather than spelled out: the chain this ligand sits in is renamed
+    # on the way in, because mmCIF allows a chain id wider than a PDB column.
+    cofactor = next(
+        decision.id
+        for decision in plan.decisions
+        if decision.id.endswith("_lig_21.net_charge")
+    )
+
     value, terms = proposed_model_charge(
         plan,
-        {f"metal.{site}.charge": 2, "ligand.akg_lig_21.net_charge": -2},
+        {f"metal.{site}.charge": 2, cofactor: -2},
         site,
     )
 

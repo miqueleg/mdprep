@@ -392,3 +392,25 @@ def test_the_pipeline_imports_nothing_undeclared():
         "Declare it in pyproject.toml, use the standard library instead, or "
         "import it lazily inside the function that needs it."
     )
+
+
+def test_the_notebook_and_the_web_builder_pin_the_same_gxtb_release() -> None:
+    """Both install g-xTB, and they must install the same one.
+
+    The notebook has its own install cell and the web builder generates one
+    from mdprep.workflows.runtime. A student can arrive by either route, and
+    a pin that drifted in one of them would give two different sets of force
+    constants from the same manifest.
+    """
+
+    from mdprep.workflows.runtime import (
+        GXTB_ARCHIVE,
+        GXTB_RELEASE_TAG,
+        GXTB_SHA256,
+    )
+
+    source = _all_source()
+
+    assert f'GXTB_RELEASE_TAG = "{GXTB_RELEASE_TAG}"' in source
+    assert GXTB_ARCHIVE in source
+    assert GXTB_SHA256 in source
