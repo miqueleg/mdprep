@@ -137,17 +137,68 @@ def _resname_map(atoms: list[AtomRecord], warnings: list[str]) -> dict[str, str]
 
     taken = {resname for resname in present if len(resname) <= RESNAME_WIDTH}
     taken |= RESERVED_RESNAMES
+    monatomic = _monatomic_elements(atoms)
+    # LIG2 and LIG3 share their first three characters, and letting whichever
+    # came first take the bare LIG leaves a reader unable to say which one it
+    # was. When a head is contested nobody gets it.
+    heads: dict[str, int] = {}
+    for resname in wide:
+        head = resname[:RESNAME_WIDTH].upper()
+        heads[head] = heads.get(head, 0) + 1
     mapping: dict[str, str] = {}
     for resname in wide:
-        replacement = _free_resname(resname, taken)
+        element = monatomic.get(resname)
+        replacement = _free_resname(
+            resname,
+            taken,
+            element=element,
+            allow_head=heads[resname[:RESNAME_WIDTH].upper()] == 1,
+        )
         taken.add(replacement)
         mapping[resname] = replacement
+        reason = (
+            f" Named after the element of its only atom, because a metal is "
+            f"identified by its residue name from here on."
+            if element is not None
+            else ""
+        )
         warnings.append(
             f"Residue name {resname!r} is longer than the three characters a PDB "
-            f"file allows, so mdprep renamed it to {replacement!r}. Selectors in "
-            f"the manifest use {replacement!r}."
+            f"file allows, so mdprep renamed it to {replacement!r}.{reason} "
+            f"Selectors in the manifest use {replacement!r}."
         )
     return mapping
+
+
+def _monatomic_elements(atoms: list[AtomRecord]) -> dict[str, str]:
+    """Residue names that always hold exactly one atom, and of what element.
+
+    Prediction output names its non-polymers by position rather than by
+    chemistry -- Boltz calls the iron LIG1 and the cofactor beside it LIG2 --
+    so the name carries nothing worth preserving, while the single atom
+    inside says exactly what the residue is. Everything downstream reads a
+    metal out of its residue name, so that is the name to give it.
+    """
+
+    composition: dict[str, set[tuple[int, str]]] = {}
+    counts: dict[tuple[str, str, int, str | None], int] = {}
+    for atom in atoms:
+        key = (atom.chain_id, atom.resname, atom.resid, atom.icode)
+        counts[key] = counts.get(key, 0) + 1
+    for atom in atoms:
+        key = (atom.chain_id, atom.resname, atom.resid, atom.icode)
+        element = (atom.element or "").strip()
+        composition.setdefault(atom.resname, set()).add(
+            (counts[key], element.upper())
+        )
+    result: dict[str, str] = {}
+    for resname, seen in composition.items():
+        if len(seen) != 1:
+            continue
+        size, element = next(iter(seen))
+        if size == 1 and element in PERIODIC_ELEMENTS and len(element) <= RESNAME_WIDTH:
+            result[resname] = element
+    return result
 
 
 def ion_element(resname: str) -> str | None:
@@ -162,11 +213,21 @@ def ion_element(resname: str) -> str | None:
     return stripped if stripped and stripped in PERIODIC_ELEMENTS else None
 
 
-def _free_resname(resname: str, taken: set[str]) -> str:
+def _free_resname(
+    resname: str,
+    taken: set[str],
+    *,
+    element: str | None = None,
+    allow_head: bool = True,
+) -> str:
     """Pick an unused three-character stand-in for one wide residue name.
 
-    The first three characters when they are free, because LIG2 reading as LIG
-    is obvious to a student; a numbered fallback otherwise.
+    ``element`` names the residue when it holds a single atom of a known
+    element, which is the only thing worth keeping about a name a predictor
+    assigned by position. Otherwise the first three characters when they are
+    free, because LIG2 reading as LIG is obvious to a student, then the
+    alphabetic part shortened around a trailing number so LIG2 and LIG3 stay
+    told apart, and a numbered fallback last.
     """
 
     # Reserved here rather than only in the caller's set, so the function is
@@ -177,7 +238,7 @@ def _free_resname(resname: str, taken: set[str]) -> str:
     # An ion keeps its element. Shortening ZN22 to Z01 would fit the column
     # and throw away the fact that it is zinc, which is what tleap matches
     # against its ion templates and what mdprep reads the metal from.
-    element = ion_element(resname)
+    element = element.upper() if element else ion_element(resname)
     if element is not None and len(element) <= RESNAME_WIDTH:
         room = RESNAME_WIDTH - len(element)
         suffixes = [""] + [str(number) for number in range(1, 10)] if room else [""]
@@ -193,9 +254,21 @@ def _free_resname(resname: str, taken: set[str]) -> str:
     def usable(candidate: str) -> bool:
         return candidate not in unavailable and not looks_like_ion_resname(candidate)
 
-    head = resname[:RESNAME_WIDTH].upper()
-    if usable(head):
+    upper = resname.upper()
+    head = upper[:RESNAME_WIDTH]
+    if allow_head and usable(head):
         return head
+    # LIG1 and LIG2 share a head, and L01/L02 loses the one character that
+    # told them apart. Keep the trailing number and shorten what precedes it.
+    digits = upper[len(upper.rstrip("0123456789")) :]
+    letters = upper[: len(upper) - len(digits)]
+    if digits and letters:
+        room = RESNAME_WIDTH - len(digits)
+        if room >= 1:
+            for shortened in (letters[:room], letters[0] + letters[-1] if room >= 2 else ""):
+                candidate = (shortened + digits)[:RESNAME_WIDTH]
+                if len(candidate) == RESNAME_WIDTH and usable(candidate):
+                    return candidate
     initial = head[0] if head[:1].isalpha() else "L"
     for prefix in (initial, "L", "X"):
         for number in range(1, 100):

@@ -114,3 +114,37 @@ def test_the_esp_refuses_an_unset_executable():
             work_dir="/tmp/mdprep-esp-no-executable",
             executable=None,  # type: ignore[arg-type]
         )
+
+
+# --------------------------------------------------------------------------
+# Surviving an xTB crash in the ESP
+#
+# xTB's ESP routine dies on particular grids -- SIGSEGV or SIGABRT inside its
+# Fortran reader, before computing anything. It is the file, not the
+# molecule: the same geometry with a grid that does not crash runs fine, and
+# so does the crashing grid with one point removed. Which grid comes out
+# depends on coordinates that move between runs, so a system can prepare one
+# day and abort the next.
+# --------------------------------------------------------------------------
+
+
+def test_a_crash_is_told_apart_from_a_refusal():
+    """Only a signal death is retried with a different grid.
+
+    Partial output is not evidence that the grid was fine: xTB crashes while
+    it is filling xtb_esp.dat and leaves it behind at nearly full size, which
+    is why this looks at the return code and nothing else.
+    """
+
+    from mdprep.qm.xtb_esp import _died_by_signal
+
+    class Result:
+        def __init__(self, code):
+            self.returncode = code
+
+    assert _died_by_signal(Result(-11))    # killed by SIGSEGV
+    assert _died_by_signal(Result(139))    # 128 + SIGSEGV
+    assert _died_by_signal(Result(134))    # 128 + SIGABRT
+    # A chemistry complaint exits normally; a different grid is no answer.
+    assert not _died_by_signal(Result(1))
+    assert not _died_by_signal(Result(0))
