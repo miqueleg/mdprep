@@ -283,3 +283,41 @@ def test_a_wide_ion_name_keeps_the_element_it_names():
     # Still unique when the obvious name is already in the structure.
     assert ion_element(_free_resname("ZN22", {"ZN"})) == "ZN"
     assert _free_resname("ZN22", {"ZN"}) != "ZN"
+
+
+def test_an_mmcif_reaches_the_repair_stage_rather_than_being_refused(tmp_path):
+    """The planner reads mmCIF, so the page accepts a prediction and writes a
+    manifest for it -- and then `mdprep prepare` refused the same file at the
+    repair stage, which reads the input directly. Reported only after the long
+    part of a Colab run.
+    """
+
+    from mdprep.structure.pdb import read_pdb
+    from mdprep.structure.repair import _write_repair_input
+
+    destination = tmp_path / "repair_input.pdb"
+    _write_repair_input(
+        WIDE,
+        destination,
+        chains=[],
+        altloc_policy="highest_occupancy",
+    )
+
+    written = read_pdb(destination)
+    source = read_mmcif(WIDE)
+    assert len(written.atoms) == len(source.atoms)
+    assert [atom.resname for atom in written.atoms] == [
+        atom.resname for atom in source.atoms
+    ]
+
+
+def test_the_repair_input_keeps_only_the_chosen_chains(tmp_path):
+    from mdprep.structure.pdb import read_pdb
+    from mdprep.structure.repair import _write_repair_input
+
+    destination = tmp_path / "chain_a.pdb"
+    _write_repair_input(
+        WIDE, destination, chains=["A"], altloc_policy="highest_occupancy"
+    )
+
+    assert {atom.chain_id for atom in read_pdb(destination).atoms} == {"A"}
