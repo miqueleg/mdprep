@@ -80,7 +80,12 @@ from mdprep.config.decisions import (
     proposed_answers,
     proposal_explanations,
 )
-from mdprep.workflows.runtime import conda_packages_for, micromamba_setup_commands
+from mdprep.workflows.runtime import (
+    conda_packages_for,
+    manifest_wants_gxtb,
+    micromamba_run_command,
+    micromamba_setup_commands,
+)
 
 _PLAN = {}
 
@@ -123,6 +128,8 @@ def mdprep_build(answers_json, mdprep_spec):
         # Only the packages this particular run will actually invoke.
         "packages": conda_packages_for(manifest),
         "setup": micromamba_setup_commands(manifest, mdprep_spec=mdprep_spec),
+        "run": micromamba_run_command(manifest, "system.yaml"),
+        "needs_gxtb": manifest_wants_gxtb(manifest)[0],
     })
 `);
   state.pyodide = pyodide;
@@ -507,7 +514,7 @@ function renderColabCell(result) {
       manifestYaml.trimEnd(),
       '""")',
       "",
-      RUN_COMMAND(manifestName),
+      `!${result.run}`,
     ];
   } else {
     intro =
@@ -521,7 +528,7 @@ function renderColabCell(result) {
       "uploaded = files.upload()   # choose mdprep-bundle.zip",
       'zipfile.ZipFile(next(iter(uploaded))).extractall(".")',
       "",
-      RUN_COMMAND(manifestName),
+      `!${result.run}`,
     ];
   }
 
@@ -532,16 +539,13 @@ function renderColabCell(result) {
     `This installs ${result.packages.join(", ")} from conda-forge, which is a ` +
     "large download, so the first cell takes several minutes. It only has to " +
     "run once per Colab session, and only the packages this manifest actually " +
-    "uses are installed.";
-}
-
-// mdprep lives in the micromamba environment, not the notebook's Python, so it
-// has to be invoked through it.
-function RUN_COMMAND(manifestName) {
-  return (
-    "!MAMBA_ROOT_PREFIX=/content/mamba-root /content/bin/micromamba run " +
-    `-n mdprep-runtime mdprep prepare ${manifestName}`
-  );
+    "uses are installed." +
+    (result.needs_gxtb
+      ? " Your metal site uses a g-xTB Hessian, so the cell also downloads " +
+        "the g-xTB build of xtb from the Grimme group's releases and checks " +
+        "it against the published checksum: conda-forge carries only the " +
+        "GFN-only xtb, which cannot do this calculation."
+      : "");
 }
 
 async function downloadBundle() {

@@ -22,6 +22,50 @@ ALWAYS_REQUIRED = ("ambertools",)
 
 QM_CHARGE_METHODS = {"gas_resp_pyscf", "qmmesp_pyscf", "mcpb_resp_pyscf"}
 
+# g-xTB is not on conda-forge. It is a separate build of xtb published by the
+# Grimme group, and the one conda installs is GFN-only, so a bonded metal site
+# -- which defaults to a g-xTB Hessian -- cannot run on a conda environment
+# alone. The release is pinned rather than tracked, with the checksum the
+# release publishes, because a prepared system is supposed to be reproducible
+# and "whatever was latest that day" is not.
+GXTB_RELEASE_TAG = "v2.0.1"
+GXTB_ARCHIVE = "xtb-6.7.1-gxtb-140526-linux-x86_64.tar.xz"
+GXTB_SHA256 = "cdfb81164f8d3300fc451dbbf2414528b533e71f7a30ec824b564cd30d6d9e5c"
+GXTB_ARCHIVE_ROOT = "xtb-6.7.1"
+GXTB_RELEASE_URL = (
+    f"https://github.com/grimme-lab/g-xtb/releases/download/{GXTB_RELEASE_TAG}"
+)
+
+
+def manifest_wants_gxtb(manifest: Mapping[str, Any]) -> tuple[bool, str | None]:
+    """Whether any metal site asks for a g-xTB Hessian, and where it was told
+    to find the binary.
+
+    The model is read rather than the backend name: `hessian_backend: xtb`
+    with `xtb.model: gxtb` is the same request as `hessian_backend: gxtb`, and
+    it is what the decision engine writes by default.
+    """
+
+    wants = False
+    configured: str | None = None
+    for site in manifest.get("metals") or []:
+        if site.get("model") != "bonded_mcpb":
+            continue
+        pyscf = (site.get("mcpb") or {}).get("pyscf") or {}
+        backend = pyscf.get("hessian_backend", "xtb")
+        if backend == "gxtb":
+            settings = pyscf.get("gxtb") or {}
+            model = "gxtb"
+        elif backend == "xtb":
+            settings = pyscf.get("xtb") or {}
+            model = settings.get("model", "gxtb")
+        else:
+            continue
+        if model == "gxtb":
+            wants = True
+            configured = configured or settings.get("executable")
+    return wants, configured
+
 
 def conda_packages_for(manifest: Mapping[str, Any]) -> list[str]:
     """conda-forge packages needed to run `mdprep prepare` on this manifest.
@@ -56,9 +100,22 @@ def conda_packages_for(manifest: Mapping[str, Any]) -> list[str]:
             add("rdkit")
 
     for site in manifest.get("metals") or []:
-        if site.get("model") == "bonded_mcpb":
-            # MCPB sites take their ESP/Hessian work through PySCF.
-            add("pyscf")
+        if site.get("model") != "bonded_mcpb":
+            continue
+        # The MCPB driver is PySCF-based whichever engine does the individual
+        # steps, so it stays on the list.
+        add("pyscf")
+        # Which engine computes the Hessian and the ESP is a per-site choice,
+        # though, and both default to xTB. Reading them is what makes a metal
+        # site installable at all: without this the run reaches for a binary
+        # the setup cell never installed.
+        pyscf_config = (site.get("mcpb") or {}).get("pyscf") or {}
+        backends = {
+            pyscf_config.get("hessian_backend", "xtb"),
+            pyscf_config.get("esp_backend", "pyscf"),
+        }
+        if backends & {"xtb", "gxtb"}:
+            add("xtb")
 
     repair = (manifest.get("structure") or {}).get("repair") or {}
     if repair.get("backend") not in (None, "none"):
@@ -88,6 +145,57 @@ def conda_packages_for(manifest: Mapping[str, Any]) -> list[str]:
     return packages
 
 
+def gxtb_executable_path(prefix: str = "/content") -> str:
+    """Where gxtb_setup_commands leaves the binary."""
+
+    return f"{prefix}/{GXTB_ARCHIVE_ROOT}/bin/xtb"
+
+
+def gxtb_setup_commands(prefix: str = "/content") -> list[str]:
+    """Shell lines that install the g-xTB build of xtb beside the environment.
+
+    Separate from the conda packages because conda-forge does not carry it.
+    The checksum is verified before anything is unpacked: this downloads a
+    100 MB binary that then computes the force constants a student's model is
+    built from, so a truncated or substituted file should stop the run rather
+    than quietly change the parameters.
+    """
+
+    archive = f"{prefix}/{GXTB_ARCHIVE}"
+    return [
+        f"curl -Ls -o {archive} {GXTB_RELEASE_URL}/{GXTB_ARCHIVE}",
+        f'echo "{GXTB_SHA256}  {archive}" | sha256sum -c -',
+        f"tar -xJf {archive} -C {prefix}",
+        f"export MDPREP_GXTB_EXECUTABLE={gxtb_executable_path(prefix)}",
+    ]
+
+
+def micromamba_run_command(
+    manifest: Mapping[str, Any],
+    manifest_name: str,
+    *,
+    environment_name: str = "mdprep-runtime",
+    prefix: str = "/content",
+) -> str:
+    """The one shell line that runs this manifest in the prepared environment.
+
+    mdprep lives in the micromamba environment rather than the notebook's
+    Python, so it has to be invoked through it, and `micromamba run` starts a
+    fresh environment -- anything the setup cell exported is gone by the time
+    the run cell executes, which is why g-xTB is named here as well.
+    """
+
+    wants_gxtb, configured = manifest_wants_gxtb(manifest)
+    settings = [f"MAMBA_ROOT_PREFIX={prefix}/mamba-root"]
+    if wants_gxtb and configured is None:
+        settings.append(f"MDPREP_GXTB_EXECUTABLE={gxtb_executable_path(prefix)}")
+    return (
+        " ".join(settings)
+        + f" {prefix}/bin/micromamba run -n {environment_name} "
+        + f"mdprep prepare {manifest_name}"
+    )
+
+
 def micromamba_setup_commands(
     manifest: Mapping[str, Any],
     *,
@@ -104,7 +212,7 @@ def micromamba_setup_commands(
     """
 
     packages = " ".join([f"python={python_version}", *conda_packages_for(manifest)])
-    return [
+    commands = [
         f"mkdir -p {prefix}/bin",
         (
             f"curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest "
@@ -120,3 +228,10 @@ def micromamba_setup_commands(
             f"pip install -q {mdprep_spec}"
         ),
     ]
+    # A bonded metal site needs a build of xtb that conda-forge does not
+    # carry, and without it the run fails only once it reaches the Hessian --
+    # after the long part of the setup and most of the preparation.
+    wants_gxtb, configured = manifest_wants_gxtb(manifest)
+    if wants_gxtb and configured is None:
+        commands.extend(gxtb_setup_commands(prefix))
+    return commands

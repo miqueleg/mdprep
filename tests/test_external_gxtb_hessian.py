@@ -92,3 +92,36 @@ def test_real_gfn2_fixed_geometry_hessian(tmp_path):
     assert np.all(np.isfinite(result.hessian_hartree_per_bohr2))
     assert result.antisymmetry_max <= 1.0e-5
     assert result.command_result.runtime_seconds > 0
+
+
+@pytest.mark.external
+def test_the_pinned_gxtb_release_still_exists_with_the_checksum_we_claim():
+    """The Colab setup cell downloads this exact file and verifies it.
+
+    If the release is retagged, deleted, or the asset rebuilt, every student
+    running a metal site gets a checksum failure in the setup cell, and the
+    only place that is visible is here. Fetches the published .sha256, which
+    is a few bytes, rather than the 40 MB archive.
+    """
+
+    import urllib.error
+    import urllib.request
+
+    from mdprep.workflows.runtime import (
+        GXTB_ARCHIVE,
+        GXTB_RELEASE_URL,
+        GXTB_SHA256,
+    )
+
+    url = f"{GXTB_RELEASE_URL}/{GXTB_ARCHIVE}.sha256"
+    try:
+        with urllib.request.urlopen(url, timeout=30) as response:
+            published = response.read().decode("utf-8").split()[0]
+    except (urllib.error.URLError, TimeoutError) as exc:
+        pytest.skip(f"cannot reach the g-xTB release: {exc}")
+
+    assert published == GXTB_SHA256, (
+        f"The g-xTB release asset changed. {url} now publishes {published}, "
+        f"but mdprep pins {GXTB_SHA256}. Every Colab metal run will fail its "
+        "checksum until this is updated."
+    )

@@ -5,17 +5,18 @@
  *   node student.mjs <baseUrl> <structure.pdb> <chrome> <answers.json>
  */
 import fs from "node:fs";
-import puppeteer from "puppeteer-core";
+import { launchChrome, reportAndExit } from "./launch.mjs";
 
 const [baseUrl, structurePath, chromePath, answersPath] = process.argv.slice(2);
 const ANSWERS = JSON.parse(fs.readFileSync(answersPath, "utf8"));
 const report = { asked: [], unanswered: [], errors: [] };
 
-const browser = await puppeteer.launch({
-  executablePath: chromePath,
-  headless: "new",
-  args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-});
+let browser;
+try {
+  browser = await launchChrome(chromePath);
+} catch (error) {
+  reportAndExit(report, error);
+}
 
 try {
   const page = await browser.newPage();
@@ -97,4 +98,4 @@ try {
 } finally {
   await browser.close();
 }
-process.stdout.write(JSON.stringify(report, null, 1));
+reportAndExit(report);

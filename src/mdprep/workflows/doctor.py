@@ -174,24 +174,9 @@ def gxtb_note(manifest: Mapping[str, Any] | None) -> str | None:
         gxtb_executable_candidates,
     )
 
-    wants_gxtb = False
-    configured: str | None = None
-    for site in manifest.get("metals") or []:
-        if site.get("model") != "bonded_mcpb":
-            continue
-        pyscf = (site.get("mcpb") or {}).get("pyscf") or {}
-        backend = pyscf.get("hessian_backend", "xtb")
-        if backend == "gxtb":
-            settings = pyscf.get("gxtb") or {}
-            model = "gxtb"
-        elif backend == "xtb":
-            settings = pyscf.get("xtb") or {}
-            model = settings.get("model", "gxtb")
-        else:
-            continue
-        if model == "gxtb":
-            wants_gxtb = True
-            configured = configured or settings.get("executable")
+    from mdprep.workflows.runtime import manifest_wants_gxtb
+
+    wants_gxtb, configured = manifest_wants_gxtb(manifest)
     if not wants_gxtb:
         return None
 

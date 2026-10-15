@@ -6,7 +6,8 @@
  *   node tests/browser/smoke.mjs <baseUrl> <structure.pdb>
  */
 
-import puppeteer from "puppeteer-core";
+import fs from "node:fs";
+import { launchChrome, reportAndExit } from "./launch.mjs";
 
 /*
  * 3Dmol sizes its canvas from the container, and the sizing can land a frame
@@ -34,14 +35,16 @@ async function canvasSize(page, timeout = 30000) {
   return page.evaluate(read);
 }
 
-const [baseUrl, structurePath, chromePath] = process.argv.slice(2);
+const [baseUrl, structurePath, chromePath, answersPath] = process.argv.slice(2);
+const ANSWERS = answersPath ? JSON.parse(fs.readFileSync(answersPath, "utf8")) : {};
 const report = { steps: [], errors: [] };
 
-const browser = await puppeteer.launch({
-  executablePath: chromePath,
-  headless: "new",
-  args: ["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
-});
+let browser;
+try {
+  browser = await launchChrome(chromePath);
+} catch (error) {
+  reportAndExit(report, error);
+}
 
 try {
   const page = await browser.newPage();
@@ -82,20 +85,41 @@ try {
 
   // Walk the questions, supplying a value only where the engine refuses to
   // default. Captions are recorded so the test can check what was framed.
-  for (let i = 0; i < 60; i += 1) {
+  //
+  // "0" is not a valid answer to every numeric question -- a spin
+  // multiplicity has to be at least 1 -- so a caller can name values by
+  // decision id. Without that this used to re-submit a rejected answer until
+  // it hit the loop limit, which is why no metal structure was ever driven
+  // here.
+  let lastIndex = await page.evaluate(() => window.mdprepState.index);
+  for (let i = 0; i < 80; i += 1) {
     const done = await page.evaluate(
       () => !document.getElementById("result-panel").classList.contains("hidden"),
     );
     if (done) break;
-    const question = await page.evaluate(() => ({
-      text: document.getElementById("question-text").textContent,
-      blocking: document.getElementById("blocking-note").textContent !== "",
-      hasInput: Boolean(document.getElementById("answer-input")),
-      radios: document.querySelectorAll('input[name="answer"]').length,
-      caption: document.getElementById("viewer-caption").textContent,
-    }));
+    const question = await page.evaluate(() => {
+      const text = document.getElementById("question-text").textContent;
+      const match = window.mdprepState.plan.decisions.find((d) => d.question === text);
+      return {
+        id: match ? match.id : null,
+        text,
+        blocking: document.getElementById("blocking-note").textContent !== "",
+        hasInput: Boolean(document.getElementById("answer-input")),
+        radios: document.querySelectorAll('input[name="answer"]').length,
+        caption: document.getElementById("viewer-caption").textContent,
+      };
+    });
     report.steps.push({ text: question.text, caption: question.caption });
-    if (question.blocking) {
+    const named = ANSWERS[question.id];
+    if (named !== undefined) {
+      await page.evaluate((value) => {
+        const input = document.getElementById("answer-input");
+        if (input) { input.value = value; return; }
+        const radios = [...document.querySelectorAll('input[name="answer"]')];
+        const hit = radios.find((r) => r.value === value);
+        if (hit) hit.checked = true;
+      }, String(named));
+    } else if (question.blocking) {
       if (question.hasInput) {
         await page.$eval("#answer-input", (node) => {
           node.value = "0";
@@ -108,6 +132,18 @@ try {
     }
     await page.click("#next");
     await new Promise((resolve) => setTimeout(resolve, 150));
+    // A rejected answer leaves the page where it was. Stop and say which
+    // question, rather than spinning to the loop limit with nothing to show.
+    const moved = await page.evaluate(() => window.mdprepState.index);
+    if (moved === lastIndex) {
+      const error = await page
+        .$eval("#answer-error", (n) => n.textContent)
+        .catch(() => "");
+      throw new Error(
+        `stuck on ${question.id || question.text}: ${error || "no value accepted"}`,
+      );
+    }
+    lastIndex = moved;
   }
 
   report.manifest = await page.$eval("#manifest-yaml", (n) => n.textContent);
@@ -142,4 +178,4 @@ try {
   await browser.close();
 }
 
-process.stdout.write(JSON.stringify(report));
+reportAndExit(report);
