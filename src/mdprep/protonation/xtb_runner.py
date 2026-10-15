@@ -40,6 +40,7 @@ def build_xtb_command(
     unpaired_electrons: int = 0,
     executable: str | None = None,
     input_path: str | Path | None = None,
+    force_single_point: bool = False,
 ) -> list[str]:
     exe = executable or config.executable
     command = [exe, str(xyz_path)]
@@ -48,7 +49,7 @@ def build_xtb_command(
         command.extend(["--gfn", "2"])
     elif "--gxtb" not in extra_args:
         command.append("--gxtb")
-    if config.mode == "opt":
+    if config.mode == "opt" and not force_single_point:
         command.extend(["--opt", config.opt_level])
     # A cluster containing a paramagnetic metal is not closed shell. Asking
     # xTB for a closed-shell solution on high-spin Fe(II) does not converge,
@@ -100,7 +101,17 @@ def run_xtb(
     stdout_path: str | Path,
     stderr_path: str | Path,
     input_path: str | Path | None = None,
+    force_single_point: bool = False,
 ) -> XtbRunResult:
+    """Run xTB once in ``work_dir``.
+
+    ``force_single_point`` drops the optimisation from an otherwise
+    optimising configuration. It is how the energy that decides a tautomer is
+    taken without the restraint that held the heavy atoms in place: that
+    restraint contributes to the optimised total, by about as much as the
+    threshold for calling the comparison close.
+    """
+
     executable = resolve_xtb_executable(config)
     command = build_xtb_command(
         config=config,
@@ -109,6 +120,7 @@ def run_xtb(
         unpaired_electrons=unpaired_electrons,
         executable=executable,
         input_path=Path(input_path).name if input_path is not None else None,
+        force_single_point=force_single_point,
     )
     result = run_command(command, cwd=work_dir, env=xtb_environment(config))
     stdout = Path(stdout_path)

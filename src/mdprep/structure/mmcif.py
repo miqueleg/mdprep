@@ -24,6 +24,7 @@ from mdprep.structure.models import AtomRecord, PdbStructure
 from mdprep.structure.pdb_fields import fit_atoms_to_pdb_fields
 from mdprep.structure.pdb import (
     VALID_ALTLOC_POLICIES,
+    monatomic_ion_element,
     AltlocPolicy,
     PdbParseError,
     _apply_altloc_policy,
@@ -191,6 +192,10 @@ def read_mmcif(
                 f"mmCIF atom_site row {number} has a non-numeric id or residue "
                 f"number: {exc}"
             ) from exc
+        # Same rule the PDB reader applies: a one-atom residue named after
+        # its element settles its own identity, and both readers have to
+        # agree or the same structure in two formats behaves differently.
+        ion = monatomic_ion_element(name, resname=resname, record_name=record)
         atoms.append(
             AtomRecord(
                 serial=serial,
@@ -205,7 +210,7 @@ def read_mmcif(
                 z=z,
                 occupancy=_as_float(_value(row, "occupancy")),
                 bfactor=_as_float(_value(row, "B_iso_or_equiv")),
-                element=element,
+                element=ion or element,
                 record_name=record,  # type: ignore[arg-type]
                 original_line="",
             )

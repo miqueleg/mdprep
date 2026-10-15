@@ -21,3 +21,6 @@ package-lock.json
 
 # Worktrees created for spawned background tasks.
 .claude/worktrees/
+
+# Tutorial structures downloaded on demand.
+tutorials/

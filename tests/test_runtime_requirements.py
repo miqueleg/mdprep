@@ -235,10 +235,25 @@ def mcpb_site(**pyscf_overrides) -> dict:
     return {"model": "bonded_mcpb", "mcpb": {"pyscf": pyscf}}
 
 
-def test_a_metal_site_with_an_xtb_hessian_installs_xtb():
+def test_a_metal_site_with_a_gfn2_hessian_installs_conda_xtb():
     """Without this the run reaches the Hessian and finds no binary."""
 
-    assert "xtb" in conda_packages_for(manifest(metals=[mcpb_site()]))
+    site = mcpb_site(xtb={"model": "gfn2"})
+    assert "xtb" in conda_packages_for(manifest(metals=[site]))
+
+
+def test_a_gxtb_site_installs_one_xtb_rather_than_two():
+    """The g-xTB release is an ordinary xtb 6.7.1 with the g-xTB method
+    added, and gives GFN2 energies identical to the conda build, so it
+    serves the histidine tautomers and the ESP as well."""
+
+    from mdprep.workflows.runtime import gxtb_bin_directory
+
+    one = manifest(metals=[mcpb_site()])
+
+    assert "xtb" not in conda_packages_for(one)
+    setup = "\n".join(micromamba_setup_commands(one))
+    assert f"export PATH={gxtb_bin_directory()}:$PATH" in setup
 
 
 def test_a_metal_site_with_a_pyscf_hessian_does_not_need_xtb():

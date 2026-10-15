@@ -44,24 +44,27 @@ def test_the_author_numbering_is_used_where_the_label_one_is_absent():
     assert iron.atoms[0].record_name == "HETATM"
 
 
-def test_the_element_column_is_taken_literally_and_matches_the_pdb_reader():
+def test_the_element_column_is_trusted_and_matches_the_pdb_reader():
     """A PDB file has to be read by column alignment to tell FE from F+E --
     which is how a deposited iron once came back as fluorine. mmCIF states
-    the element, so there is nothing to infer.
+    the element, so for ordinary atoms there is nothing to infer.
 
-    The spelling has to match what the PDB reader produces for the same atom,
-    or the same structure in two formats would behave differently downstream.
+    The one exception is a one-atom residue named after its element, where
+    both readers settle the identity from the names rather than from a column
+    a writer may have mangled. Either way the spelling has to match what the
+    PDB reader produces for the same atom, or the same structure in two
+    formats behaves differently downstream.
     """
 
     from mdprep.structure.pdb import read_pdb
 
     elements = {atom.name: atom.element for atom in read_mmcif(BOLTZ).atoms}
-    assert elements["FE"] == "FE"
     assert elements["CA"] == "C"
 
     deposited = read_pdb(Path("examples/tutorials/besd_6nie/6NIE.pdb"))
     iron = next(atom for atom in deposited.atoms if atom.resname == "FE2")
     assert iron.element == elements["FE"]
+    assert iron.element.upper() == "FE"
 
 
 def test_quoted_values_survive_splitting():

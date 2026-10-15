@@ -15,7 +15,7 @@ from mdprep.protonation.histidine_geometry import (
     build_tautomer_cluster_model,
     heavy_atom_distance,
     is_hydrogen_like,
-    write_xcontrol_fix_file,
+    write_xcontrol_constraint_file,
     write_xyz,
 )
 from mdprep.protonation.histidine_qmmm import (
@@ -142,8 +142,16 @@ def select_histidine_tautomer(
         write_xyz(hie_model.atoms, hie_xyz, comment="HIE")
         hid_input = hist_dir / "HID_xtb.inp"
         hie_input = hist_dir / "HIE_xtb.inp"
-        write_xcontrol_fix_file(hid_model.fixed_atom_indices, hid_input)
-        write_xcontrol_fix_file(hie_model.fixed_atom_indices, hie_input)
+        write_xcontrol_constraint_file(
+            hid_model.fixed_atom_indices,
+            hid_input,
+            force_constant=config.constraint_force_constant,
+        )
+        write_xcontrol_constraint_file(
+            hie_model.fixed_atom_indices,
+            hie_input,
+            force_constant=config.constraint_force_constant,
+        )
     except HistidineGeometryError as exc:
         raise HistidineXtbError(str(exc)) from exc
 
@@ -184,8 +192,28 @@ def select_histidine_tautomer(
             stderr_path=hie_stderr,
             input_path=hie_run_input if config.mode == "opt" and hie_model.fixed_atom_indices else None,
         )
-        hid_energy = parse_xtb_energy_file(hid_stdout)
-        hie_energy = parse_xtb_energy_file(hie_stdout)
+        # The cluster backend restrains the same heavy atoms, so its
+        # comparison energy comes from the same unrestrained re-evaluation.
+        hid_energy = _comparison_energy(
+            config=config,
+            run_dir=hid_run_dir,
+            tautomer="HID",
+            cluster_charge=cluster_charge,
+            unpaired_electrons=unpaired,
+            stdout_path=hid_stdout,
+            embedding_block="",
+            constrained=bool(hid_model.fixed_atom_indices),
+        )
+        hie_energy = _comparison_energy(
+            config=config,
+            run_dir=hie_run_dir,
+            tautomer="HIE",
+            cluster_charge=cluster_charge,
+            unpaired_electrons=unpaired,
+            stdout_path=hie_stdout,
+            embedding_block="",
+            constrained=bool(hie_model.fixed_atom_indices),
+        )
     except (XtbExecutionError, ValueError) as exc:
         raise HistidineXtbError(str(exc)) from exc
 
@@ -306,6 +334,7 @@ def _select_tautomer_by_embedded_qmmm(
             fixed_atom_indices=(
                 model.fixed_atom_indices if config.mode == "opt" else None
             ),
+            constraint_force_constant=config.constraint_force_constant,
             embedding=embedded,
         )
         stdout_path = run_dir / f"{tautomer}_xtb_stdout.txt"
@@ -321,7 +350,20 @@ def _select_tautomer_by_embedded_qmmm(
                 stderr_path=stderr_path,
                 input_path=input_path,
             )
-            energies[tautomer] = parse_xtb_energy_file(stdout_path)
+            energies[tautomer] = _comparison_energy(
+                config=config,
+                run_dir=run_dir,
+                tautomer=tautomer,
+                cluster_charge=model.qm_charge,
+                unpaired_electrons=model.qm_unpaired_electrons,
+                stdout_path=stdout_path,
+                embedding_block=(
+                    f"$embedding\n input=pcharge\n es=true\n$end\n"
+                    if embedded
+                    else ""
+                ),
+                constrained=bool(model.fixed_atom_indices),
+            )
         except (XtbExecutionError, ValueError) as exc:
             raise HistidineXtbError(str(exc)) from exc
         executable = run.command_result.command[0]
@@ -527,6 +569,59 @@ def _declared_ion_charges(
                 continue
             charges[id(residue)] = float(ion.charge)
     return charges
+
+
+# xTB writes the relaxed geometry here, beside the input it was given.
+XTB_OPTIMISED_GEOMETRY = "xtbopt.xyz"
+
+
+def _comparison_energy(
+    *,
+    config: HistidineXtbConfig,
+    run_dir: Path,
+    tautomer: str,
+    cluster_charge: int,
+    unpaired_electrons: int,
+    stdout_path: Path,
+    embedding_block: str,
+    constrained: bool,
+) -> float:
+    """The energy the tautomer comparison is decided on.
+
+    A single-point run is already that energy. A constrained optimisation is
+    not: the restraint holding the heavy atoms contributes to the optimised
+    total, by roughly as much as the threshold for calling the comparison
+    close, and it does not have to contribute equally to both tautomers. So
+    the relaxed geometry is re-evaluated once without the restraint, and that
+    is what gets compared.
+    """
+
+    if not (config.mode == "opt" and constrained):
+        return parse_xtb_energy_file(stdout_path)
+
+    optimised = run_dir / XTB_OPTIMISED_GEOMETRY
+    if not optimised.is_file():
+        raise HistidineXtbError(
+            f"xTB reported success for the {tautomer} optimisation but wrote "
+            f"no {XTB_OPTIMISED_GEOMETRY} in {run_dir}, so its energy cannot "
+            "be re-evaluated without the restraint."
+        )
+    sp_input = run_dir / f"{tautomer}_xtb_sp.inp"
+    sp_input.write_text(embedding_block, encoding="utf-8")
+    sp_stdout = run_dir / f"{tautomer}_xtb_sp_stdout.txt"
+    sp_stderr = run_dir / f"{tautomer}_xtb_sp_stderr.txt"
+    run_xtb(
+        config=config,
+        xyz_path=optimised,
+        work_dir=run_dir,
+        cluster_charge=cluster_charge,
+        unpaired_electrons=unpaired_electrons,
+        stdout_path=sp_stdout,
+        stderr_path=sp_stderr,
+        input_path=sp_input if embedding_block.strip() else None,
+        force_single_point=True,
+    )
+    return parse_xtb_energy_file(sp_stdout)
 
 
 def _prepare_isolated_xtb_work_dir(

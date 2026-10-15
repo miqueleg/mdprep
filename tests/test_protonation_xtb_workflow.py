@@ -32,9 +32,17 @@ def run_with_fakes(monkeypatch, tmp_path, data: dict, *, hid_energy: float, hie_
     )
 
     def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None, **kwargs):
-        energy = hid_energy if Path(xyz_path).name == "HID.xyz" else hie_energy
+        # Keyed on the work directory rather than the file, because the
+        # unrestrained re-evaluation of an optimised geometry reads
+        # xtbopt.xyz rather than HID.xyz.
+        energy = hid_energy if Path(work_dir).name == "HID" else hie_energy
         Path(stdout_path).write_text(f":: total energy      {energy:.12f} Eh\n", encoding="utf-8")
         Path(stderr_path).write_text("", encoding="utf-8")
+        if not kwargs.get("force_single_point") and config.mode == "opt":
+            # What xTB leaves behind after --opt.
+            Path(work_dir, "xtbopt.xyz").write_text(
+                Path(xyz_path).read_text(encoding="utf-8"), encoding="utf-8"
+            )
         return XtbRunResult(
             command_result=CommandResult(
                 command=("xtb", Path(xyz_path).name),
@@ -101,13 +109,19 @@ def test_xtb_tautomers_use_clean_isolated_work_directories(monkeypatch, tmp_path
     def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None, **kwargs):
         run_dir = Path(work_dir)
         observed_work_dirs.append(run_dir)
-        assert run_dir.name == Path(xyz_path).stem
+        single_point = bool(kwargs.get("force_single_point"))
+        if not single_point:
+            assert run_dir.name == Path(xyz_path).stem
         assert Path(xyz_path).parent == run_dir
         assert input_path is None or Path(input_path).parent == run_dir
         assert not (run_dir / "xtbrestart").exists()
         energy = -40.01 if run_dir.name == "HID" else -40.00
         Path(stdout_path).write_text(f":: total energy      {energy:.12f} Eh\n", encoding="utf-8")
         Path(stderr_path).write_text("", encoding="utf-8")
+        if not single_point and config.mode == "opt":
+            Path(run_dir, "xtbopt.xyz").write_text(
+                Path(xyz_path).read_text(encoding="utf-8"), encoding="utf-8"
+            )
         return XtbRunResult(
             command_result=CommandResult(
                 command=("xtb", Path(xyz_path).name),
@@ -132,7 +146,9 @@ def test_xtb_tautomers_use_clean_isolated_work_directories(monkeypatch, tmp_path
     )
 
     assert result.xtb_selections[0].selected_state == "HID"
-    assert [path.name for path in observed_work_dirs] == ["HID", "HIE"]
+    # Each tautomer is optimised and then re-evaluated without the restraint,
+    # both runs inside that tautomer's own directory.
+    assert [path.name for path in observed_work_dirs] == ["HID", "HID", "HIE", "HIE"]
 
 
 def test_propka_xtb_his_selects_lower_hie(monkeypatch, tmp_path):
@@ -174,9 +190,16 @@ def test_multiple_neutral_histidines_with_ambiguous_input_hydrogens_do_not_fail(
     )
 
     def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None, **kwargs):
-        energy = -40.01 if Path(xyz_path).name == "HID.xyz" else -40.00
+        # Keyed on the work directory, not the file: an optimised geometry is
+        # re-evaluated from xtbopt.xyz rather than HID.xyz.
+        energy = -40.01 if Path(work_dir).name == "HID" else -40.00
         Path(stdout_path).write_text(f":: total energy      {energy:.12f} Eh\n", encoding="utf-8")
         Path(stderr_path).write_text("", encoding="utf-8")
+        if not kwargs.get("force_single_point") and config.mode == "opt":
+            # What a real xTB leaves behind after --opt.
+            Path(work_dir, "xtbopt.xyz").write_text(
+                Path(xyz_path).read_text(encoding="utf-8"), encoding="utf-8"
+            )
         return XtbRunResult(
             command_result=CommandResult(
                 command=("xtb", Path(xyz_path).name),

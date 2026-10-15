@@ -33,6 +33,7 @@ from mdprep.protonation.histidine_geometry import (
     TautomerClusterModel,
     XyzAtom,
     build_tautomer_cluster_model,
+    format_constraint_block,
 )
 from mdprep.structure.models import PdbStructure, ResidueRecord
 from mdprep.structure.pdb import ATOMIC_NUMBER
@@ -567,6 +568,7 @@ def write_embedding_xcontrol(
     *,
     point_charge_filename: str = "pcharge",
     fixed_atom_indices: list[int] | None = None,
+    constraint_force_constant: float = 1.0,
     embedding: bool = True,
 ) -> None:
     """Write the xcontrol file that turns electrostatic embedding on.
@@ -578,7 +580,7 @@ def write_embedding_xcontrol(
     blocks = []
     if fixed_atom_indices:
         blocks.append(
-            "$fix\n atoms: " + ",".join(str(index) for index in fixed_atom_indices) + "\n$end"
+            format_constraint_block(fixed_atom_indices, constraint_force_constant)
         )
     if embedding:
         blocks.append(f"$embedding\n input={point_charge_filename}\n es=true\n$end")

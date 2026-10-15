@@ -249,14 +249,25 @@ def test_the_spin_state_is_carried_into_every_model():
 
 @needs_structure
 def test_the_toolchain_for_this_run_includes_xtb_propka_and_pyscf():
-    from mdprep.workflows.runtime import conda_packages_for
+    from mdprep.workflows.runtime import (
+        conda_packages_for,
+        gxtb_bin_directory,
+        micromamba_setup_commands,
+    )
 
-    packages = conda_packages_for(generated())
+    manifest = generated()
+    packages = conda_packages_for(manifest)
 
     assert "ambertools" in packages
     assert "propka" in packages          # propka_xtb_his
-    assert "xtb" in packages             # histidine tautomers and the Hessian
     assert "pyscf" in packages           # bonded MCPB large-model ESP
+
+    # xtb is needed for the histidine tautomers and the Hessian, but this run
+    # asks for a g-xTB Hessian, and that build is an ordinary xtb with the
+    # g-xTB method added. Installing conda's as well would be a second copy.
+    assert "xtb" not in packages
+    setup = "\n".join(micromamba_setup_commands(manifest))
+    assert f"export PATH={gxtb_bin_directory()}:$PATH" in setup
 
 
 # --------------------------------------------------------------------------

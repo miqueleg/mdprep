@@ -99,10 +99,9 @@ def _atom(**overrides):
     [
         {"resname": "LIG2"},
         {"chain_id": "AKG"},
-        {"resid": 12345},
         {"resid": -1000},
     ],
-    ids=["wide resname", "wide chain", "resid too high", "resid too low"],
+    ids=["wide resname", "wide chain", "resid too low"],
 )
 def test_a_field_that_would_shift_the_columns_is_refused(overrides):
     with pytest.raises(PdbFieldError):
@@ -116,3 +115,64 @@ def test_the_columns_a_reader_depends_on_are_where_they_should_be():
     assert line[21] == "A"        # chainID, column 22
     assert line[22:26] == "   1"  # resSeq, columns 23-26
     assert line[30:38] == "   1.000"  # x, columns 31-38
+
+
+def test_an_ion_keeps_its_element_when_the_writer_gets_the_column_wrong():
+    """tleap writes Fe(II)'s element field as " F", with the "2+" spilling
+    into the charge columns. Read literally that is fluorine, and the iron
+    then failed to match itself across tleap -- the provisional system said
+    fluorine where the input said iron, and the refinement mapping gave up.
+    """
+
+    import tempfile
+
+    line = (
+        "ATOM   3957  FE  FE2   246     -13.875  64.274  26.944"
+        "  1.00  0.00           F2+\n"
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / "ion.pdb"
+        path.write_text(line + "END\n", encoding="utf-8")
+        structure = read_pdb(path)
+
+    assert structure.atoms[0].element.upper() == "FE"
+
+
+def test_the_ion_rule_does_not_touch_an_ordinary_alpha_carbon():
+    """CA is calcium only when its residue says so too."""
+
+    from mdprep.structure.pdb import monatomic_ion_element
+
+    assert monatomic_ion_element("CA", resname="CA", record_name="HETATM") == "Ca"
+    assert monatomic_ion_element("CA", resname="ALA", record_name="ATOM") is None
+    assert monatomic_ion_element("FE", resname="FE2", record_name="ATOM") == "Fe"
+    assert monatomic_ion_element("C1", resname="LIG", record_name="HETATM") is None
+
+
+def test_a_solvated_box_numbers_its_residues_past_the_four_columns(tmp_path):
+    """A solvated system has more than 9,999 residues long before it has
+    99,999 atoms, so the residue field overflows first. tleap continues in
+    hybrid-36 and so does mdprep, or the final parse of a finished system
+    fails on "A000" after all the work is done.
+    """
+
+    from mdprep.structure.pdb import read_pdb
+    from mdprep.structure.writer import format_resid_field, write_pdb
+    from mdprep.structure.models import PdbStructure
+
+    assert format_resid_field(9999) == "9999"
+    assert format_resid_field(10000) == "A000"
+
+    atoms = [
+        _atom(serial=index, resid=resid, resname="WAT", name="O", element="O")
+        for index, resid in enumerate((9999, 10000, 10001, 50000), start=1)
+    ]
+    output = tmp_path / "big.pdb"
+    write_pdb(PdbStructure(path=output, atoms=atoms, residues=[], model_count=1), output)
+
+    assert [atom.resid for atom in read_pdb(output).atoms] == [
+        9999,
+        10000,
+        10001,
+        50000,
+    ]

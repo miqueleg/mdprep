@@ -65,9 +65,16 @@ def _run_with_fakes(monkeypatch, tmp_path, data: dict):
     )
 
     def fake_run_xtb(*, config, xyz_path, work_dir, cluster_charge, stdout_path, stderr_path, input_path=None, **kwargs):
-        energy = -40.01 if Path(xyz_path).name == "HID.xyz" else -40.00
+        # Keyed on the work directory, not the file: an optimised geometry is
+        # re-evaluated from xtbopt.xyz rather than HID.xyz.
+        energy = -40.01 if Path(work_dir).name == "HID" else -40.00
         Path(stdout_path).write_text(f":: total energy      {energy:.12f} Eh\n", encoding="utf-8")
         Path(stderr_path).write_text("", encoding="utf-8")
+        if not kwargs.get("force_single_point") and config.mode == "opt":
+            # What a real xTB leaves behind after --opt.
+            Path(work_dir, "xtbopt.xyz").write_text(
+                Path(xyz_path).read_text(encoding="utf-8"), encoding="utf-8"
+            )
         return XtbRunResult(
             command_result=CommandResult(
                 command=("xtb", Path(xyz_path).name),
