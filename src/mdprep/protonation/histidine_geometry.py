@@ -197,13 +197,46 @@ def build_tautomer_cluster_model(
     )
 
 
-def write_xcontrol_fix_file(fixed_atom_indices: list[int], path: str | Path) -> None:
+def format_constraint_block(
+    fixed_atom_indices: list[int],
+    force_constant: float = 1.0,
+) -> str:
+    """An xcontrol block holding the given atoms near where they started.
+
+    ``$constrain`` rather than ``$fix``, which is the directive that looks
+    right and does not work: xTB optimises in approximate normal coordinates,
+    and zeroing an atom's Cartesian gradient does not stop that coordinate
+    system from moving it. Atoms listed under ``$fix`` were measured drifting
+    over 2 A during a loose optimisation -- far enough to collapse an
+    imidazole ring onto itself and take the SCF down with it, which is how
+    this was found. ``$constrain`` holds the same atoms to within about 0.13 A.
+
+    The restraint does add its own energy to the optimised total, of the same
+    order as the threshold that decides a close call between tautomers, so
+    whoever runs the optimisation has to take the comparison energy from a
+    separate unrestrained single point rather than from this run.
+    """
+
+    atom_text = ",".join(str(index) for index in sorted(set(fixed_atom_indices)))
+    return (
+        f"$constrain\n force constant={force_constant:g}\n atoms: {atom_text}\n$end"
+    )
+
+
+def write_xcontrol_constraint_file(
+    fixed_atom_indices: list[int],
+    path: str | Path,
+    *,
+    force_constant: float = 1.0,
+) -> None:
     path_obj = Path(path)
     if not fixed_atom_indices:
         path_obj.write_text("", encoding="utf-8")
         return
-    atom_text = ",".join(str(index) for index in sorted(set(fixed_atom_indices)))
-    path_obj.write_text(f"$fix\n atoms: {atom_text}\n$end\n", encoding="utf-8")
+    path_obj.write_text(
+        format_constraint_block(fixed_atom_indices, force_constant) + "\n",
+        encoding="utf-8",
+    )
 
 
 def write_xyz(atoms: list[XyzAtom], path: str | Path, *, comment: str = "mdprep histidine tautomer") -> None:

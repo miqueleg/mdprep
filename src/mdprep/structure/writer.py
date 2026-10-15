@@ -8,6 +8,9 @@ from mdprep.structure.models import AtomRecord, PdbStructure
 from mdprep.structure.pdb import (
     HYBRID36_DIGITS_LOWER,
     HYBRID36_DIGITS_UPPER,
+    HYBRID36_RESID_LOWER_OFFSET,
+    HYBRID36_RESID_UPPER_OFFSET,
+    RESID_FIELD_WIDTH,
     SERIAL_FIELD_WIDTH,
     HYBRID36_LOWER_OFFSET,
     HYBRID36_UPPER_OFFSET,
@@ -64,9 +67,9 @@ def _format_conect_records(structure: PdbStructure) -> list[str]:
     return lines
 
 
-def _encode_base36(value: int, digits: str) -> str:
+def _encode_base36(value: int, digits: str, *, width: int = SERIAL_FIELD_WIDTH) -> str:
     characters: list[str] = []
-    for _ in range(SERIAL_FIELD_WIDTH):
+    for _ in range(width):
         value, remainder = divmod(value, 36)
         characters.append(digits[remainder])
     return "".join(reversed(characters))
@@ -92,6 +95,31 @@ def format_serial_field(serial: int) -> str:
     raise ValueError(f"Atom serial {serial} cannot be represented in a PDB file")
 
 
+def format_resid_field(resid: int) -> str:
+    """Render columns 23-26, continuing in hybrid-36 past 9,999.
+
+    Four columns do not hold the residue count of a solvated box, and this is
+    what tleap and ambpdb do when they run out: "A000" follows "9999".
+    read_pdb decodes it on the way back in.
+    """
+
+    if resid <= 9999:
+        return f"{resid:4d}"
+    if resid < HYBRID36_RESID_LOWER_OFFSET:
+        return _encode_base36(
+            resid - HYBRID36_RESID_UPPER_OFFSET,
+            HYBRID36_DIGITS_UPPER,
+            width=RESID_FIELD_WIDTH,
+        )
+    if resid < HYBRID36_RESID_LOWER_OFFSET + 26 * 36 ** (RESID_FIELD_WIDTH - 1):
+        return _encode_base36(
+            resid - HYBRID36_RESID_LOWER_OFFSET,
+            HYBRID36_DIGITS_LOWER,
+            width=RESID_FIELD_WIDTH,
+        )
+    raise ValueError(f"Residue number {resid} cannot be represented in a PDB file")
+
+
 def format_atom_record(atom: AtomRecord) -> str:
     _check_fields_fit(atom)
     serial = atom.serial if atom.serial is not None else 0
@@ -104,7 +132,7 @@ def format_atom_record(atom: AtomRecord) -> str:
     element = (atom.element or "").rjust(2)
     return (
         f"{atom.record_name:<6}{format_serial_field(serial)}{atom_name}{altloc}{atom.resname:>3} "
-        f"{chain_id}{atom.resid:4d}{icode}   "
+        f"{chain_id}{format_resid_field(atom.resid)}{icode}   "
         f"{atom.x:8.3f}{atom.y:8.3f}{atom.z:8.3f}"
         f"{occupancy:6.2f}{bfactor:6.2f}          {element}\n"
     )
@@ -143,11 +171,11 @@ def _check_fields_fit(atom: AtomRecord) -> None:
             f"PDB record has {CHAIN_ID_WIDTH} for it, so writing it would shift "
             "every later field out of place."
         )
-    if not RESID_MIN <= atom.resid <= RESID_MAX:
+    if atom.resid < RESID_MIN:
         raise PdbFieldError(
-            f"Residue number {atom.resid} is outside the range a PDB record can "
-            f"hold ({RESID_MIN} to {RESID_MAX}), so writing it would shift every "
-            "later field out of place."
+            f"Residue number {atom.resid} is below the smallest a PDB record "
+            f"can hold ({RESID_MIN}), so writing it would shift every later "
+            "field out of place."
         )
 
 

@@ -1608,7 +1608,13 @@ def _protonation_block(resolved: Mapping[str, Any]) -> dict[str, Any]:
             "neutral_tautomer_method": "xtb",
             "xtb": {
                 "model": "gfn2",
-                "mode": "opt",
+                # A single point. The heavy atoms come from the structure and
+                # are meant to stay where it put them, so the only thing an
+                # optimisation relaxes is the hydrogen the two tautomers
+                # differ by -- at the cost of an optimisation per tautomer per
+                # histidine. "opt" is supported and properly constrained for
+                # anyone who wants it.
+                "mode": "sp",
                 "num_threads": resolved.get("protonation.histidine.num_threads", 1),
             },
         }

@@ -7,7 +7,7 @@ from mdprep.protonation.histidine_geometry import (
     build_tautomer_xyz_atoms,
     parent_heavy_atom,
     place_histidine_tautomer_hydrogen,
-    write_xcontrol_fix_file,
+    write_xcontrol_constraint_file,
 )
 from mdprep.structure.models import AtomRecord, ResidueId, ResidueRecord
 from mdprep.structure.pdb import ATOMIC_NUMBER, read_pdb
@@ -202,11 +202,21 @@ def test_temporary_lyn_state_removes_third_pdbfixer_lysine_hydrogen():
     assert "HZ3" not in names
 
 
-def test_xcontrol_fix_file_contains_fixed_atoms(tmp_path):
-    path = tmp_path / "xtb.inp"
-    write_xcontrol_fix_file([3, 17, 18], path)
+def test_the_constraint_file_restrains_rather_than_fixes(tmp_path):
+    """$fix is the directive that reads correctly and does not work.
 
-    assert path.read_text(encoding="utf-8") == "$fix\n atoms: 3,17,18\n$end\n"
+    xTB optimises in approximate normal coordinates, so zeroing an atom's
+    Cartesian gradient does not stop it moving: atoms listed under $fix were
+    measured drifting over 2 A during a loose optimisation, far enough to
+    collapse an imidazole ring and take the SCF with it.
+    """
+
+    path = tmp_path / "xtb.inp"
+    write_xcontrol_constraint_file([3, 17, 18], path)
+
+    text = path.read_text(encoding="utf-8")
+    assert text == "$constrain\n force constant=1\n atoms: 3,17,18\n$end\n"
+    assert "$fix" not in text
 
 
 def _with_histidine_n_hydrogens(residue: ResidueRecord) -> ResidueRecord:

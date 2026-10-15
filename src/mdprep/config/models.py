@@ -139,8 +139,19 @@ class ProtonationOverride(StrictModel):
 class HistidineXtbConfig(StrictModel):
     executable: str = "xtb"
     model: Literal["gfn2", "gxtb"] = "gfn2"
-    mode: Literal["sp", "opt"] = "opt"
+    # A single point by default. The heavy atoms come from the structure and
+    # are meant to stay there, so an optimisation only relaxes the hydrogens
+    # the tautomer differs by -- and it costs an optimisation per tautomer per
+    # histidine to do it. "opt" is supported and constrained properly; it is
+    # just not what most runs need.
+    mode: Literal["sp", "opt"] = "sp"
     opt_level: Literal["loose", "normal", "tight"] = "loose"
+    # Hartree/bohr^2 on each heavy atom when mode is "opt". xTB's $fix does
+    # not hold atoms through an approximate-normal-coordinate optimisation --
+    # measured drift of over 2 A on atoms it was told to fix -- so they are
+    # restrained instead, and the comparison energy is taken from a separate
+    # unrestrained single point so the restraint cannot reach it.
+    constraint_force_constant: float = Field(default=1.0, gt=0)
     solvent: str | None = "water"
     # "qmmm" puts only the histidine side chain in the QM region and the
     # surroundings in as MM point charges. The side chain is neutral and closed

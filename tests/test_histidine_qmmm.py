@@ -188,16 +188,18 @@ def test_undeclared_cofactor_is_reported_rather_than_silently_zeroed(templates):
     assert reason is not None and "AKG" in reason
 
 
-def test_xcontrol_omits_the_embedding_block_when_there_is_nothing_to_embed():
-    path = Path("/tmp") / "xcontrol_no_embedding_check"
+def test_xcontrol_omits_the_embedding_block_when_there_is_nothing_to_embed(tmp_path):
+    path = tmp_path / "xcontrol_no_embedding_check"
     write_embedding_xcontrol(path, embedding=False)
     text = path.read_text(encoding="utf-8")
     assert "$embedding" not in text
     write_embedding_xcontrol(path, embedding=True, fixed_atom_indices=[1, 2])
     text = path.read_text(encoding="utf-8")
     assert "$embedding" in text and "input=pcharge" in text and "es=true" in text
-    assert "$fix" in text and "atoms: 1,2" in text
-    path.unlink()
+    # $constrain, not $fix: xTB does not hold a $fix atom through an
+    # approximate-normal-coordinate optimisation.
+    assert "$constrain" in text and "atoms: 1,2" in text
+    assert "$fix" not in text
 
 
 def test_open_shell_side_chain_is_refused(monkeypatch):
@@ -254,3 +256,38 @@ def test_the_missing_dependency_is_reported(monkeypatch):
     finally:
         monkeypatch.undo()
         residue_charge_templates.cache_clear()
+
+
+# --------------------------------------------------------------------------
+# Holding the heavy atoms still
+#
+# The side chain's heavy atoms come from the structure and are meant to stay
+# there; only the ring proton distinguishes the two tautomers. xTB's $fix is
+# the directive that says exactly that and does not do it -- it optimises in
+# approximate normal coordinates, so zeroing a Cartesian gradient leaves the
+# atom free to move. Measured against a real histidine, $fix let atoms it was
+# told to fix drift 2.5 A, collapsing the ring until the SCF failed, while
+# $constrain held the same atoms to 0.13 A.
+# --------------------------------------------------------------------------
+
+
+def test_the_optimisation_restrains_the_heavy_atoms_it_is_given():
+    from mdprep.protonation.histidine_geometry import format_constraint_block
+
+    block = format_constraint_block([4, 1, 4, 9], force_constant=2.5)
+
+    assert block.startswith("$constrain")
+    assert "force constant=2.5" in block
+    assert "atoms: 1,4,9" in block     # sorted and de-duplicated
+    assert "$fix" not in block
+
+
+def test_a_single_point_needs_no_constraint_block(tmp_path):
+    """Nothing moves in a single point, so there is nothing to hold."""
+
+    path = tmp_path / "xtb.inp"
+    write_embedding_xcontrol(path, embedding=True, fixed_atom_indices=None)
+
+    text = path.read_text(encoding="utf-8")
+    assert "$constrain" not in text
+    assert "$embedding" in text

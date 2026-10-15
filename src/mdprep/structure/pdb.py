@@ -170,10 +170,7 @@ def _parse_atom_line(line: str) -> AtomRecord:
     chain_id = line[21:22]
     if chain_id == " ":
         chain_id = ""
-    resid_text = line[22:26].strip()
-    if not resid_text:
-        raise PdbParseError(f"Missing residue number in line: {line}")
-    resid = int(resid_text)
+    resid = _parse_resid(line[22:26], line)
     icode = _blank_to_none(line[26:27])
     x = _parse_float_required(line[30:38], "x", line)
     y = _parse_float_required(line[38:46], "y", line)
@@ -181,7 +178,15 @@ def _parse_atom_line(line: str) -> AtomRecord:
     occupancy = _parse_float(line[54:60])
     bfactor = _parse_float(line[60:66])
     element = _blank_to_none(line[76:78] if len(line) >= 78 else "")
-    if element is None:
+    ion = monatomic_ion_element(name, resname=resname, record_name=record_name)
+    if ion is not None:
+        # A one-atom residue named after its element is the one case where
+        # the file cannot be telling us anything we do not already know, and
+        # where writers get it wrong: tleap gives Fe(II) the element field
+        # " F" with the "2+" spilling into the charge columns, so reading
+        # those two characters turns a structure's iron into fluorine.
+        element = ion
+    elif element is None:
         element = infer_element(
             name,
             resname=resname,
@@ -463,6 +468,32 @@ def infer_element(
     return upper[0]
 
 
+def monatomic_ion_element(
+    atom_name: str,
+    *,
+    resname: str | None,
+    record_name: str,
+) -> str | None:
+    """The element of a one-atom ion residue, read from its own names.
+
+    Amber names an ion residue after the element and its oxidation state --
+    FE2, CU1, ZN, EU3 -- and names the single atom after the element. When
+    those two agree there is nothing left to infer, and nothing a writer can
+    put in the element column that should overrule them. Returns None for
+    everything else, so this never competes with ordinary atoms: an alpha
+    carbon is named CA but its residue is not.
+    """
+
+    if record_name not in {"ATOM", "HETATM"}:
+        return None
+    stripped = atom_name.strip().lstrip("0123456789").upper()
+    if not stripped or stripped not in PERIODIC_ELEMENTS:
+        return None
+    if (resname or "").strip().upper().rstrip("0123456789+-") != stripped:
+        return None
+    return _canonical_element(stripped)
+
+
 def _canonical_element(symbol: str) -> str:
     upper = symbol.upper()
     return upper[0] + upper[1:].lower()
@@ -541,10 +572,18 @@ def _identity_display(identity: tuple[str, str, int, str | None, str]) -> str:
 HYBRID36_DIGITS_UPPER = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
 HYBRID36_DIGITS_LOWER = "0123456789abcdefghijklmnopqrstuvwxyz"
 SERIAL_FIELD_WIDTH = 5
+RESID_FIELD_WIDTH = 4
 # Hybrid-36 reserves the decimal range for 1..99999 and then continues with
 # "A0000"; see Brookhaven/cctbx hybrid-36 (Grosse-Kunstleve et al., 2006).
 HYBRID36_UPPER_OFFSET = 10 ** SERIAL_FIELD_WIDTH - 10 * 36 ** (SERIAL_FIELD_WIDTH - 1)
 HYBRID36_LOWER_OFFSET = HYBRID36_UPPER_OFFSET + 26 * 36 ** (SERIAL_FIELD_WIDTH - 1)
+# The residue-number field is four columns, so it overflows far sooner than
+# the serial does: a solvated box passes 9,999 residues long before it passes
+# 99,999 atoms. tleap then writes "A000" for residue 10,000.
+HYBRID36_RESID_UPPER_OFFSET = 10 ** RESID_FIELD_WIDTH - 10 * 36 ** (RESID_FIELD_WIDTH - 1)
+HYBRID36_RESID_LOWER_OFFSET = (
+    HYBRID36_RESID_UPPER_OFFSET + 26 * 36 ** (RESID_FIELD_WIDTH - 1)
+)
 
 
 def _decode_base36(text: str, digits: str) -> int:
@@ -584,6 +623,40 @@ def _parse_serial(line: str) -> int | None:
     if all(character in HYBRID36_DIGITS_LOWER for character in stripped):
         return _decode_base36(stripped, HYBRID36_DIGITS_LOWER) + HYBRID36_LOWER_OFFSET
     raise PdbParseError(f"Unparseable atom serial {field!r} in line: {line}")
+
+
+def decode_resid_field(field: str) -> int:
+    """Read columns 23-26, decimal or hybrid-36.
+
+    A solvated system runs past the four columns the format gives a residue
+    number, and tleap continues in hybrid-36 -- "A000" is residue 10,000.
+    Read as decimal that is an error, and the one place it surfaced was the
+    final parse of a finished system, after all the work.
+    """
+
+    stripped = field.strip()
+    if stripped.lstrip("-").isdigit():
+        return int(stripped)
+    if all(character in HYBRID36_DIGITS_UPPER for character in stripped):
+        return (
+            _decode_base36(stripped, HYBRID36_DIGITS_UPPER)
+            + HYBRID36_RESID_UPPER_OFFSET
+        )
+    if all(character in HYBRID36_DIGITS_LOWER for character in stripped):
+        return (
+            _decode_base36(stripped, HYBRID36_DIGITS_LOWER)
+            + HYBRID36_RESID_LOWER_OFFSET
+        )
+    raise PdbParseError(f"Unparseable residue number {field!r}")
+
+
+def _parse_resid(field: str, line: str) -> int:
+    if not field.strip():
+        raise PdbParseError(f"Missing residue number in line: {line}")
+    try:
+        return decode_resid_field(field)
+    except PdbParseError as exc:
+        raise PdbParseError(f"{exc} in line: {line}") from exc
 
 
 def _parse_int(text: str) -> int | None:

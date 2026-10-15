@@ -301,10 +301,17 @@ def test_the_run_cell_points_mdprep_at_that_build(metal_report):
     assert "MDPREP_GXTB_EXECUTABLE=" in metal_report["colabUpload"]
 
 
-def test_the_metal_setup_cell_installs_xtb_itself(metal_report):
-    """The ESP backend is xTB too, and that one does come from conda."""
+def test_the_metal_setup_cell_provides_exactly_one_xtb(metal_report):
+    """The ESP and the histidine tautomers need GFN2, and the g-xTB build
+    does GFN2 too, so conda's xtb would be a second copy of the same thing."""
 
-    assert " xtb" in metal_report["colabSetup"]
+    from mdprep.workflows.runtime import gxtb_bin_directory
+
+    setup = metal_report["colabSetup"]
+
+    assert f"export PATH={gxtb_bin_directory()}:$PATH" in setup
+    create = next(line for line in setup.splitlines() if "micromamba create" in line)
+    assert " xtb" not in create
 
 
 def test_the_note_explains_the_extra_download(metal_report):

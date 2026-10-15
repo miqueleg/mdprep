@@ -116,6 +116,12 @@ def conda_packages_for(manifest: Mapping[str, Any]) -> list[str]:
         }
         if backends & {"xtb", "gxtb"}:
             add("xtb")
+    # The g-xTB release is an ordinary xtb 6.7.1 with the g-xTB method added,
+    # and it gives GFN2 energies identical to the conda build. When it is
+    # being downloaded anyway there is no reason to install a second xtb; the
+    # setup cell puts it on PATH under the name every step already looks for.
+    if manifest_wants_gxtb(manifest)[0] and "xtb" in packages:
+        packages.remove("xtb")
 
     repair = (manifest.get("structure") or {}).get("repair") or {}
     if repair.get("backend") not in (None, "none"):
@@ -145,10 +151,16 @@ def conda_packages_for(manifest: Mapping[str, Any]) -> list[str]:
     return packages
 
 
+def gxtb_bin_directory(prefix: str = "/content") -> str:
+    """The directory gxtb_setup_commands unpacks the binaries into."""
+
+    return f"{prefix}/{GXTB_ARCHIVE_ROOT}/bin"
+
+
 def gxtb_executable_path(prefix: str = "/content") -> str:
     """Where gxtb_setup_commands leaves the binary."""
 
-    return f"{prefix}/{GXTB_ARCHIVE_ROOT}/bin/xtb"
+    return f"{gxtb_bin_directory(prefix)}/xtb"
 
 
 def gxtb_setup_commands(prefix: str = "/content") -> list[str]:
@@ -167,6 +179,9 @@ def gxtb_setup_commands(prefix: str = "/content") -> list[str]:
         f'echo "{GXTB_SHA256}  {archive}" | sha256sum -c -',
         f"tar -xJf {archive} -C {prefix}",
         f"export MDPREP_GXTB_EXECUTABLE={gxtb_executable_path(prefix)}",
+        # The same binary answers to plain `xtb` for the GFN2 steps -- the
+        # histidine tautomers, the ESP -- so no second xtb is installed.
+        f"export PATH={gxtb_bin_directory(prefix)}:$PATH",
     ]
 
 
@@ -189,6 +204,9 @@ def micromamba_run_command(
     settings = [f"MAMBA_ROOT_PREFIX={prefix}/mamba-root"]
     if wants_gxtb and configured is None:
         settings.append(f"MDPREP_GXTB_EXECUTABLE={gxtb_executable_path(prefix)}")
+        # The downloaded build is also the only xtb installed, so the GFN2
+        # steps have to be able to find it under its plain name.
+        settings.append(f"PATH={gxtb_bin_directory(prefix)}:$PATH")
     return (
         " ".join(settings)
         + f" {prefix}/bin/micromamba run -n {environment_name} "

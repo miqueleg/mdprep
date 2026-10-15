@@ -12,7 +12,8 @@ import numpy as np
 from mdprep.config.models import ManifestConfig, ResidueSelector
 from mdprep.structure.classify import is_standard_protein_residue
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord
-from mdprep.structure.pdb import read_pdb
+from mdprep.structure.pdb import _build_residues, read_pdb
+from mdprep.structure.reader import is_mmcif_path, read_structure
 from mdprep.structure.writer import write_pdb
 
 
@@ -247,9 +248,37 @@ def _write_repair_input(
     Filtering is done on the original lines rather than by rewriting the
     structure, so SEQRES and the rest of the header survive; PDBFixer needs
     them to know which residues were never resolved.
+
+    An mmCIF has no such lines to keep, so it is converted instead. PDBFixer
+    then sees only the residues that are present, which is what the default
+    `unresolved_residues: leave_absent` asks for anyway; it can still complete
+    a side chain, because that comes from its residue templates rather than
+    from the header.
     """
 
-    structure = read_pdb(source, altloc_policy=altloc_policy)  # type: ignore[arg-type]
+    structure = read_structure(source, altloc_policy=altloc_policy)  # type: ignore[arg-type]
+    if is_mmcif_path(source):
+        selected_chains = set(chains)
+        kept_atoms = [
+            atom
+            for atom in structure.atoms
+            if not selected_chains or atom.chain_id in selected_chains
+        ]
+        write_pdb(
+            PdbStructure(
+                path=destination,
+                atoms=kept_atoms,
+                residues=_build_residues(kept_atoms),
+                model_count=structure.model_count,
+                used_model=structure.used_model,
+                warnings=list(structure.warnings),
+                conect_bonds=structure.conect_bonds,
+                ter_after_serials=structure.ter_after_serials,
+            ),
+            destination,
+        )
+        return
+
     selected_serials = {
         atom.serial for atom in structure.atoms if atom.serial is not None
     }
