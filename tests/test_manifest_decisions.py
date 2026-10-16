@@ -823,3 +823,65 @@ def test_the_flag_reaches_a_front_end_through_the_plan():
 
     assert serialised["project.output_dir"]["needs_local_filesystem"] is True
     assert serialised["project.name"]["needs_local_filesystem"] is False
+
+
+# --------------------------------------------------------------------------
+# A titratable side chain on the metal
+#
+# Preparation refuses to build a bonded site whose ASP, GLU, CYS, LYS or ARG
+# donor has no stated protonation -- coordination does not distinguish a
+# carboxylate from a neutral acid, and the two differ by a unit of charge on
+# the capped model the parameters come from. That refusal is right. Nothing
+# asked the question, so the first a student heard of it was the run
+# stopping in Colab, after the install and most of the preparation.
+# --------------------------------------------------------------------------
+
+
+def test_a_titratable_metal_donor_is_asked_about():
+    plan = plan_decisions(DATA / "boltz_wide_names.cif")
+
+    asked = [d for d in plan.decisions if ".donor_state." in d.id]
+
+    assert len(asked) == 1, [d.id for d in asked]
+    decision = asked[0]
+    assert "ASP131" in decision.question
+    assert [choice.value for choice in decision.choices] == ["ASP", "ASH"]
+    # No default: the geometry shows the contact, not the proton.
+    assert decision.default is None
+    assert decision.requires_user_input
+
+
+def test_the_answer_reaches_the_structure_the_refusal_was_about():
+    """End to end: the question the builder asks becomes an override that
+    resolves to the residue preparation was refusing to guess."""
+
+    from mdprep.config.decisions import proposed_model_charge
+    from mdprep.config.models import ManifestConfig
+    from mdprep.protonation.overrides import resolve_manual_overrides
+    from mdprep.structure.reader import read_structure
+
+    plan = plan_decisions(DATA / "boltz_wide_names.cif")
+    answers = {
+        "project.name": "t",
+        "structure.remove_unknown_heterogens": False,
+        "structure.repair.add_missing_heavy_atoms": True,
+        "ligand.k_lg2_1.net_charge": 0,
+        "ligand.k_lg2_1.smiles": "OCC=O",
+        "metal.f_fe_1_site.charge": 2,
+        "metal.f_fe_1_site.confirm_donors": True,
+        "metal.f_fe_1_site.multiplicity": 5,
+        "molecular_dynamics.enabled": False,
+        "metal.f_fe_1_site.donor_state.a_asp_131": "ASH",
+    }
+    answers["metal.f_fe_1_site.model_charge"] = proposed_model_charge(
+        plan, answers, "f_fe_1_site"
+    )[0]
+
+    manifest = ManifestConfig.model_validate(build_manifest(plan, answers))
+    resolved = resolve_manual_overrides(
+        read_structure(DATA / "boltz_wide_names.cif"), manifest
+    )
+
+    assert [(item.residue.id.display(), item.requested_state) for item in resolved] == [
+        ("A:ASP131", "ASH")
+    ]

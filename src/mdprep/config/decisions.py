@@ -1408,6 +1408,93 @@ def _metal_decisions(
             ),
         ]
     )
+    decisions.extend(
+        _metal_donor_protonation_decisions(
+            site_id, donors, confirmed=confirmed, metal_display=display
+        )
+    )
+    return decisions
+
+
+# Which states a coordinating side chain can sensibly be in. Histidine is
+# absent on purpose: a bond through ND1 forces HIE and one through NE2 forces
+# HID, so the geometry settles it and nothing needs asking.
+COORDINATING_DONOR_STATES: dict[str, tuple[tuple[str, str], ...]] = {
+    "ASP": (("ASP", "Ionised carboxylate (-1)"), ("ASH", "Neutral, protonated (0)")),
+    "GLU": (("GLU", "Ionised carboxylate (-1)"), ("GLH", "Neutral, protonated (0)")),
+    "CYS": (
+        ("CYM", "Thiolate (-1)"),
+        ("CYS", "Neutral thiol (0)"),
+        ("CYX", "Disulfide-bonded"),
+    ),
+    "LYS": (("LYN", "Neutral amine (0)"), ("LYS", "Protonated (+1)")),
+    "ARG": (("ARG", "Protonated guanidinium (+1)"),),
+}
+
+
+def _metal_donor_protonation_decisions(
+    site_id: str,
+    donors: Sequence[tuple[ResidueRecord, Any, float]],
+    *,
+    confirmed: tuple[Condition, ...],
+    metal_display: str,
+) -> list[Decision]:
+    """Ask the protonation of each titratable side chain on the metal.
+
+    Preparation refuses to build a bonded site whose ASP, GLU, CYS, LYS or
+    ARG donor has no stated protonation, because coordination does not
+    distinguish a carboxylate from a neutral acid and the two differ by a
+    unit of charge on the model the parameters come from. That refusal is
+    right, and nothing asked the question -- so the first a student heard of
+    it was the run stopping in Colab, after the install and most of the
+    preparation. The answer belongs in the manifest, which means it belongs
+    in the plan.
+    """
+
+    decisions: list[Decision] = []
+    seen: set[str] = set()
+    for donor_residue, atom, distance in donors:
+        resname = donor_residue.id.resname.strip().upper()
+        states = COORDINATING_DONOR_STATES.get(resname)
+        if states is None:
+            continue
+        donor_id = _id_stem(donor_residue)
+        if donor_id in seen:
+            continue
+        seen.add(donor_id)
+        decisions.append(
+            Decision(
+                id=f"metal.{site_id}.donor_state.{donor_id}",
+                section="protonation",
+                question=(
+                    f"Protonation state of {donor_residue.id.display()}, "
+                    f"which coordinates {metal_display}"
+                ),
+                kind="choice",
+                choices=tuple(
+                    Choice(value, label) for value, label in states
+                ),
+                # No default. The deposited geometry shows the contact, not
+                # the proton, and the two states differ by a unit of charge
+                # on the QM model the force constants come from.
+                default=None,
+                requires_user_input=True,
+                why=(
+                    "A carboxylate and a neutral acid both sit this close to a "
+                    "metal, and they differ by one unit of charge on the capped "
+                    "model, so this changes the parameters rather than just the "
+                    "bookkeeping. mdprep will not guess it, and the build stops "
+                    "without it."
+                ),
+                evidence=(
+                    f"{donor_residue.id.display()} {atom.name} at "
+                    f"{distance:.2f} A from {metal_display}",
+                ),
+                targets=(_target_for(donor_residue),),
+                focus="targets",
+                when=confirmed,
+            )
+        )
     return decisions
 
 
@@ -1608,7 +1695,7 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
             "forcefield": resolved["protein.forcefield"],
             "water_model": resolved["protein.water_model"],
         },
-        "protonation": _protonation_block(resolved),
+        "protonation": _protonation_block(resolved, plan),
         "disulfides": {
             "auto_detect": get("disulfides.auto_detect", True),
             "detection_cutoff_angstrom": 2.2,
@@ -1633,12 +1720,54 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
     return manifest
 
 
-def _protonation_block(resolved: Mapping[str, Any]) -> dict[str, Any]:
+def _metal_donor_overrides(
+    resolved: Mapping[str, Any], plan: "DecisionPlan"
+) -> list[dict[str, Any]]:
+    """The stated protonation of each titratable side chain on a metal.
+
+    These travel as ordinary manual overrides, which is what preparation
+    looks for and what the rule about user overrides winning is written
+    about. Without them the build refuses the site -- correctly, since
+    coordination does not distinguish a carboxylate from a neutral acid --
+    and before this nothing put the question, so the refusal arrived in
+    Colab rather than in the builder.
+    """
+
+    overrides: list[dict[str, Any]] = []
+    for decision in plan.decisions:
+        if ".donor_state." not in decision.id:
+            continue
+        state = resolved.get(decision.id)
+        if not state:
+            continue
+        target = decision.subject
+        overrides.append(
+            {
+                "selector": {
+                    "chain": target.chain,
+                    "resname": target.resname,
+                    "resid": target.resid,
+                    "icode": target.icode,
+                },
+                "state": str(state),
+                "reason": (
+                    "Coordinates a metal modelled with bonded MCPB; stated by "
+                    "the user because coordination alone does not distinguish "
+                    "the neutral and ionised forms."
+                ),
+            }
+        )
+    return overrides
+
+
+def _protonation_block(
+    resolved: Mapping[str, Any], plan: "DecisionPlan"
+) -> dict[str, Any]:
     method = resolved["protonation.method"]
     block: dict[str, Any] = {
         "ph": resolved.get("protonation.ph", 7.0),
         "method": method,
-        "overrides": [],
+        "overrides": _metal_donor_overrides(resolved, plan),
     }
     if method == "propka_xtb_his":
         block["histidine"] = {
