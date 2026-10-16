@@ -414,6 +414,9 @@ def prepare_system(
             prmtop=tleap_result.final_outputs.prmtop,
             inpcrd=tleap_result.final_outputs.inpcrd,
             pdb=tleap_result.final_outputs.pdb,
+            # Everything parmchk2 and MCPB wrote for this run, so a guessed
+            # parameter in any of them is seen.
+            frcmod_paths=sorted(output_dir.rglob("*.frcmod")),
             **validation_extras,
         )
         write_validation_reports(

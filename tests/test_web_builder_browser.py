@@ -319,3 +319,17 @@ def test_the_note_explains_the_extra_download(metal_report):
 
     assert "g-xTB" in note
     assert "checksum" in note
+
+
+def test_every_highlighted_target_actually_highlights_something(metal_report):
+    """The viewer drew the uploaded file while the questions asked about the
+    names mdprep chose, so for a renamed ligand or metal the selectors
+    matched nothing -- including on "are these the atoms coordinating this
+    metal?", the one question that asks the student to confirm what they can
+    see. The caption said "Highlighted: ..." regardless."""
+
+    highlights = metal_report["highlights"]
+
+    assert highlights, "no question highlighted a target at all"
+    empty = [h for h in highlights if h["atoms"] == 0]
+    assert not empty, f"these highlighted nothing: {empty[:5]}"

@@ -83,6 +83,28 @@ try {
   }));
   report.canvas = await canvasSize(page);
 
+  // What the viewer actually highlights for each question that names
+  // targets. A renamed ligand or metal used to match nothing at all: the
+  // picture was of the names the file came with, the questions were about
+  // the names mdprep chose, and the caption claimed a highlight either way.
+  report.highlights = await page.evaluate(() => {
+    const out = [];
+    const st = window.mdprepState;
+    for (const decision of st.plan.decisions) {
+      if (decision.focus !== "targets" || !(decision.targets || []).length) continue;
+      for (const target of decision.targets) {
+        const selector = { resi: target.resid, resn: target.resname };
+        if (target.chain) selector.chain = target.chain;
+        out.push({
+          id: decision.id,
+          target: `${target.chain || "?"}:${target.resname}${target.resid}`,
+          atoms: st.viewer.getModel().selectedAtoms(selector).length,
+        });
+      }
+    }
+    return out;
+  });
+
   // Walk the questions, supplying a value only where the engine refuses to
   // default. Captions are recorded so the test can check what was framed.
   //

@@ -20,6 +20,18 @@ from mdprep.structure.pdb import (
 def write_pdb(structure: PdbStructure, path: str | Path) -> None:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(render_pdb(structure), encoding="utf-8")
+
+
+def render_pdb(structure: PdbStructure) -> str:
+    """The PDB text for this structure, without writing it anywhere.
+
+    The web builder draws the structure it is asking questions about. Giving
+    the viewer the uploaded file instead means the picture is of the names
+    the file came with, while the questions are about the names mdprep
+    chose -- so a renamed ligand or metal highlights nothing, on the one
+    question that asks the student to confirm what they can see.
+    """
 
     lines: list[str] = []
     previous_atom: AtomRecord | None = None
@@ -53,7 +65,7 @@ def write_pdb(structure: PdbStructure, path: str | Path) -> None:
 
     lines.extend(_format_conect_records(structure))
     lines.append("END\n")
-    output_path.write_text("".join(lines), encoding="utf-8")
+    return "".join(lines)
 
 
 def _needs_implicit_ter(previous: AtomRecord, current: AtomRecord) -> bool:
