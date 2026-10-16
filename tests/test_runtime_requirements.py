@@ -343,3 +343,53 @@ def test_the_setup_cell_can_actually_fail():
         if line.startswith("curl "):
             flags = line.split("curl ", 1)[1].split(" ", 1)[0]
             assert flags.startswith("-") and "f" in flags, line
+
+
+def test_the_manifest_the_builder_produces_installs_what_that_run_invokes():
+    """The package list is derived from manifest settings, and three times
+    now it has missed one: xtb for an MCPB Hessian, the g-xTB build, and
+    PDBFixer for the hydrogenated environment the histidine comparison
+    needs. Each omission surfaced as a run dying in Colab after the whole
+    conda solve, naming a tool the setup cell was never told to install.
+
+    This pins the defaults the web builder actually emits for a metal
+    protein with histidines, which is the path students take.
+    """
+
+    from pathlib import Path
+
+    from mdprep.config.decisions import (
+        build_manifest,
+        plan_decisions,
+        proposed_model_charge,
+    )
+
+    structure = Path("tests/data/boltz_far_donor.cif")
+    plan = plan_decisions(structure)
+    answers = {
+        "project.name": "coverage",
+        "structure.remove_unknown_heterogens": False,
+        "structure.repair.add_missing_heavy_atoms": True,
+        "ligand.k_lg2_1.net_charge": 0,
+        "ligand.k_lg2_1.smiles": "OCC=O",
+        "metal.f_fe_1_site.charge": 2,
+        "metal.f_fe_1_site.confirm_donors": True,
+        "metal.f_fe_1_site.multiplicity": 5,
+        "metal.f_fe_1_site.donor_state.a_asp_131": "ASP",
+        "molecular_dynamics.enabled": False,
+    }
+    answers["metal.f_fe_1_site.model_charge"] = proposed_model_charge(
+        plan, answers, "f_fe_1_site"
+    )[0]
+    packages = conda_packages_for(build_manifest(plan, answers))
+
+    for needed, why in [
+        ("ambertools", "tleap, antechamber, parmchk2, MCPB.py"),
+        ("propka", "the propka_xtb_his protonation method"),
+        ("rdkit", "placing ligand hydrogens from a SMILES"),
+        ("pyscf", "the bonded MCPB workflow"),
+        ("openmm", "MM point charges and the energy check"),
+        ("pdbfixer", "the hydrogenated environment for the tautomer comparison"),
+        ("parmed", "topology and charge validation"),
+    ]:
+        assert needed in packages, f"{needed} is missing, and this run needs it for {why}"

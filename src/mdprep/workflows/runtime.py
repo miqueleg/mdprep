@@ -91,6 +91,14 @@ def conda_packages_for(manifest: Mapping[str, Any]) -> list[str]:
             # The embedded QM/MM tautomer comparison reads its MM point
             # charges out of OpenMM's ff14SB and TIP3P files.
             add("openmm")
+        # The tautomer comparison needs a hydrogenated environment around the
+        # histidine, and builds one with PDBFixer unless told the input
+        # already has it. This defaults to on, and nothing here read it: a
+        # run whose structure needed no repair installed no PDBFixer and
+        # stopped at protonation, after the whole conda solve.
+        if histidine_xtb.get("add_missing_protein_hydrogens", True):
+            add("pdbfixer")
+            add("openmm")
 
     for ligand in manifest.get("ligands") or []:
         if ligand.get("charge_method") in QM_CHARGE_METHODS:
