@@ -21,14 +21,27 @@ from mdprep.refinement.openmm_minimizer import (
 
 
 
-def test_auto_prefers_accelerators_but_only_among_those_present():
+def test_auto_prefers_the_platform_that_gives_the_same_answer_twice():
+    """Not the fastest: the repeatable one.
+
+    A minimisation has no random numbers in it, but on CUDA two runs of the
+    same system landed on final energies 0.14 kJ/mol apart and the third
+    decimal of a few hundred coordinates with them. tleap then packs its
+    solvent around those coordinates, so the next run builds a system with a
+    different number of waters in it -- and replicates that should differ
+    only in their velocities differ in how many atoms they contain. On CPU
+    with a pinned thread count the same minimisation is bit-identical.
+    """
+
     assert platform_candidates("auto", ["Reference", "CPU", "CUDA", "OpenCL"]) == [
+        "CPU",
         "CUDA",
         "OpenCL",
-        "CPU",
         "Reference",
     ]
     assert platform_candidates("auto", ["Reference", "CPU"]) == ["CPU", "Reference"]
+    # A GPU is still reachable by name, for anyone who wants the speed.
+    assert platform_candidates("CUDA", ["CPU", "CUDA"]) == ["CUDA"]
 
 
 def test_an_explicit_platform_is_never_quietly_replaced():
@@ -72,10 +85,12 @@ def test_a_registered_but_unusable_platform_falls_through_to_the_next():
 
     attempted: list[str] = []
 
-    def fake_simulation(topology, system, integrator, platform):
+    def fake_simulation(topology, system, integrator, platform, properties=None):
         attempted.append(platform.getName())
-        if platform.getName() == "CUDA":
-            raise Exception("Error initializing CUDA: CUDA_ERROR_NO_DEVICE (100)")
+        if platform.getName() == "CPU":
+            # Whatever is tried first can fail at context creation; the point
+            # is that the next one is tried rather than the run dying.
+            raise Exception("Error initializing CPU platform")
         return f"simulation on {platform.getName()}"
 
     class _FakeUnit:
@@ -90,9 +105,9 @@ def test_a_registered_but_unusable_platform_falls_through_to_the_next():
         config=OpenmmRefinementConfig(),
     )
 
-    assert attempted == ["CUDA", "CPU"]
-    assert platform.getName() == "CPU"
-    assert simulation == "simulation on CPU"
+    assert attempted == ["CPU", "CUDA"]
+    assert platform.getName() == "CUDA"
+    assert simulation == "simulation on CUDA"
 
 
 def test_an_explicitly_requested_platform_that_fails_is_reported_not_replaced():

@@ -483,7 +483,21 @@ def _gfn2_residue_charges(
     cache_path = cache_dir / f"{label}.json"
     if cache_path.exists():
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
-        if cached.get("atom_count") == len(residue.atoms):
+        # Every input that changes the answer has to be in the key. The file
+        # already recorded the charge and the atom names; only the count was
+        # compared, so correcting a ligand's net_charge and rerunning
+        # silently reused the charges computed for the old one -- and
+        # --overwrite does not clear the directory, so there was nothing to
+        # notice. A manual correction losing to a stale cache is the exact
+        # reverse of "user overrides always win".
+        reusable = (
+            cached.get("atom_count") == len(residue.atoms)
+            and cached.get("net_charge") == net_charge
+            and cached.get("multiplicity", multiplicity) == multiplicity
+            and cached.get("atom_names", [])
+            == [atom.name.strip() for atom in residue.atoms]
+        )
+        if reusable:
             return [float(value) for value in cached["atom_charges"]]
 
     work = cache_dir / label
@@ -535,6 +549,7 @@ def _gfn2_residue_charges(
                 "residue": residue.id.display(),
                 "method": "gfn2",
                 "net_charge": net_charge,
+                "multiplicity": multiplicity,
                 "atom_count": len(residue.atoms),
                 "atom_names": [atom.name.strip() for atom in residue.atoms],
                 "atom_charges": values,

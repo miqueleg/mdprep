@@ -8,7 +8,7 @@ from tests.test_prepare_ligands_stage import write_ligand_manifest
 from tests.test_tleap_workflow_mocked import fake_tleap
 
 
-def fake_validation(*, manifest, prmtop, inpcrd, pdb):
+def fake_validation(*, manifest, prmtop, inpcrd, pdb, **_unused):
     return {
         "final_prmtop_path": str(prmtop),
         "final_inpcrd_path": str(inpcrd),

@@ -80,6 +80,8 @@ from mdprep.config.decisions import (
     proposed_answers,
     proposal_explanations,
 )
+from mdprep.structure.reader import read_structure
+from mdprep.structure.writer import render_pdb
 from mdprep.workflows.runtime import (
     conda_packages_for,
     manifest_wants_gxtb,
@@ -94,7 +96,15 @@ def mdprep_plan(text, name):
         handle.write(text)
     plan = plan_decisions(name)
     _PLAN["plan"] = plan
-    return json.dumps(plan.to_dict())
+    payload = plan.to_dict()
+    # The structure as mdprep read it, for the viewer to draw. Handing it the
+    # uploaded file instead draws the names the file came with, while the
+    # questions ask about the names mdprep chose -- so a renamed ligand or
+    # metal highlighted nothing at all, including on "are these the atoms
+    # coordinating this metal?", the one question asking the student to
+    # confirm what they can see.
+    payload["structure_pdb"] = render_pdb(read_structure(plan.structure_path))
+    return json.dumps(payload)
 
 def mdprep_proposals(answers_json):
     """Answers that follow from earlier ones, such as a capped model charge.
@@ -152,8 +162,9 @@ async function loadStructure(text, name, pdbId = null) {
     const planJson = planFn(text, name);
     planFn.destroy();
     state.plan = JSON.parse(planJson);
+    state.viewerText = state.plan.structure_pdb || null;
   } catch (error) {
-    setStatus(`mdprep could not read that structure: ${error.message}`, true);
+    setStatus(readableLoadError(error), true);
     return;
   }
   state.answers = {};
@@ -194,6 +205,22 @@ function renderFindings() {
       : "");
 }
 
+/*
+ * A Pyodide failure arrives as a whole Python traceback, twenty lines of it,
+ * with the one useful sentence last. A student cannot act on that, and it is
+ * what they get for a truncated file or an mmCIF saved as .pdb -- both
+ * ordinary mistakes. Show them the last line, which is the message mdprep
+ * actually wrote, and keep the rest in the console for whoever wants it.
+ */
+function readableLoadError(error) {
+  const text = String((error && error.message) || error || "").trimEnd();
+  console.error(text);
+  const lines = text.split("\n").filter((line) => line.trim());
+  const last = lines[lines.length - 1] || "the file could not be read";
+  const cleaned = last.replace(/^\w*(Error|Exception):\s*/, "");
+  return `mdprep could not read that structure: ${cleaned}`;
+}
+
 /* ----------------------------------------------------------------- viewer */
 
 function initViewer() {
@@ -202,7 +229,10 @@ function initViewer() {
   state.viewer = $3Dmol.createViewer(container, { backgroundColor: "white" });
   // 3Dmol parses the coordinates itself and needs to be told which format,
   // so this follows the same extension the Python side dispatched on.
-  state.viewer.addModel(state.structureText, structureFormat(state.structureName));
+  // Always PDB here: this is mdprep's own rendering of what it parsed, so
+  // the chain, resname and resid the selectors use are the ones on screen.
+  state.viewer.addModel(state.viewerText || state.structureText,
+                        state.viewerText ? "pdb" : structureFormat(state.structureName));
   state.viewer.setStyle({}, { cartoon: { color: "spectrum" } });
   state.viewer.zoomTo();
   state.viewer.render();
@@ -453,9 +483,19 @@ function buildManifest() {
   const result = JSON.parse(resultJson);
 
   if (!result.ok) {
-    el("answer-error").textContent = result.error;
-    state.index = Math.max(0, applicableDecisions().length - 1);
+    // renderCurrentQuestion clears answer-error on its way in, so setting it
+    // first meant the message was wiped before anything was painted: Finish
+    // did nothing at all, forever, with no text anywhere. Jump to the
+    // question the engine is complaining about rather than the last one --
+    // it can be twenty questions back -- and write the message after the
+    // render, not before.
+    const offending = applicableDecisions().findIndex((decision) =>
+      result.error.includes(decision.id),
+    );
+    state.index =
+      offending >= 0 ? offending : Math.max(0, applicableDecisions().length - 1);
     renderCurrentQuestion();
+    el("answer-error").textContent = result.error;
     return;
   }
 

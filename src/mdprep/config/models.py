@@ -985,7 +985,13 @@ class MolecularDynamicsConfig(StrictModel):
     device_index: int | None = Field(default=None, ge=0)
     precision: Literal["single", "mixed", "double"] = "mixed"
     cpu_threads: int | None = Field(default=None, ge=1)
-    random_seed: int = Field(default=20260817, ge=0)
+    # None means draw a fresh one for this run. Replicates of one system are
+    # meant to differ, and they differ through their starting velocities --
+    # a fixed seed gives every replicate the same velocities and so the same
+    # trajectory, which is the one thing a set of replicates must not be.
+    # The drawn value is recorded in the MD report, so a particular replicate
+    # can still be repeated by setting it here.
+    random_seed: int | None = Field(default=None, ge=0)
     step08_ensemble: Literal["NPT", "NVT"] = "NPT"
     density: RoeBrooksDensityConfig = Field(default_factory=RoeBrooksDensityConfig)
     production: ProductionMdConfig | None = None

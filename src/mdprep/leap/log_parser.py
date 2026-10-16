@@ -86,6 +86,21 @@ def parse_tleap_log_text(text: str, *, returncode: int = 0) -> LeapLogSummary:
             errors.append(line)
         if "created a new atom named" in lower:
             atoms_created.append(line)
+        # tleap rebuilds a truncated side chain from its residue template and
+        # says so in passing. The atoms it invents sit at template geometry
+        # and carry no experimental support, so a prepared system that claims
+        # to be the deposited structure is no longer quite that. Nothing here
+        # matched the message, so it reached nobody -- not the report, not
+        # fail_on_warnings. It is a warning in the sense that matters even
+        # though tleap does not spell the word.
+        if "added missing heavy atom" in lower or "missing atoms according to" in lower:
+            atoms_created.append(line)
+            warnings.append(line)
+        # The other half of the same silence: an atom tleap could not place in
+        # any template is an atom that is simply not in the system it built.
+        if "atoms not in residue templates" in lower:
+            atoms_created.append(line)
+            warnings.append(line)
         if lower.startswith("checking") or "unit is ok" in lower:
             check_output.append(line)
         for pattern in _CHARGE_PATTERNS:

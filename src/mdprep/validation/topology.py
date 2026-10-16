@@ -20,6 +20,31 @@ class FinalValidationError(ValueError):
     """Raised when final Amber outputs fail required validation."""
 
 
+def guessed_parameters(
+    frcmod_paths: Sequence[str | Path],
+) -> list[tuple[str, int]]:
+    """Which frcmod files carry parameters parmchk2 guessed, and how many.
+
+    parmchk2 writes "ATTN, need revision" beside any term it could not find
+    in the force field and had to estimate. Those are the parameters most
+    likely to be wrong, and they are the ones nobody looks at.
+    """
+
+    found: list[tuple[str, int]] = []
+    for path in frcmod_paths:
+        candidate = Path(path)
+        if not candidate.is_file():
+            continue
+        try:
+            text = candidate.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        count = sum(1 for line in text.splitlines() if "ATTN" in line.upper())
+        if count:
+            found.append((str(candidate), count))
+    return found
+
+
 def validate_final_outputs(
     *,
     manifest: ManifestConfig,
@@ -28,6 +53,7 @@ def validate_final_outputs(
     pdb: str | Path,
     metal_result: "MetalStageResult | None" = None,
     ligand_residue_renames: Sequence[dict[str, Any]] = (),
+    frcmod_paths: Sequence[str | Path] = (),
 ) -> dict[str, Any]:
     warnings: list[str] = []
     errors: list[str] = []
@@ -120,7 +146,35 @@ def validate_final_outputs(
     elif parmed.get("status") == "error":
         errors.append(f"ParmEd validation failed: {parmed.get('error')}")
     elif parmed.get("charge_near_integer") is False:
-        errors.append("ParmEd total charge is not near an integer.")
+        message = "ParmEd total charge is not near an integer."
+        if manifest.validation.fail_on_noninteger_ligand_charge:
+            errors.append(message)
+        else:
+            warnings.append(
+                message + " Allowed because validation."
+                "fail_on_noninteger_ligand_charge is false."
+            )
+
+    # parmchk2 marks a parameter it had to guess rather than look up with
+    # "ATTN, need revision". Nothing read the frcmod files it writes, so a
+    # ligand built on invented force-field terms was indistinguishable from
+    # one built on real ones -- while every generated manifest carried
+    # fail_on_missing_parameters: true, a promise nothing kept.
+    guessed = guessed_parameters(frcmod_paths)
+    if guessed:
+        summary = "; ".join(
+            f"{Path(path).name}: {count} parameter(s) parmchk2 had to guess"
+            for path, count in guessed
+        )
+        if manifest.validation.fail_on_missing_parameters:
+            errors.append(
+                "Force-field parameters were guessed rather than found: "
+                + summary
+                + ". Check them, or set validation.fail_on_missing_parameters "
+                "to false to accept them."
+            )
+        else:
+            warnings.append("Guessed force-field parameters accepted: " + summary)
 
     if manifest.validation.run_openmm_energy_check:
         openmm = run_openmm_energy_check(paths["prmtop"], paths["inpcrd"])

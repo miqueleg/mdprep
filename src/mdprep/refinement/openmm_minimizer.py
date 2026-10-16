@@ -211,7 +211,18 @@ def run_openmm_refinement(
 # OpenMM ships the CUDA plugin wherever it was built with CUDA, so a machine
 # with no GPU -- a CI runner, a cluster login node -- still lists it, and only
 # fails when a context is created on it.
-AUTO_PLATFORM_ORDER = ("CUDA", "HIP", "Metal", "OpenCL", "CPU", "Reference")
+# CPU first, which is not the fastest but is the one that gives the same
+# answer twice. Measured on the reference system: CPU with a pinned thread
+# count minimises to bit-identical positions across runs, while CUDA -- even
+# with DeterministicForces -- landed on final energies differing by 0.14
+# kJ/mol, and the third decimal of a few hundred coordinates with it. Those
+# coordinates are what tleap packs solvent around, so the run that follows
+# builds a different system.
+#
+# This is a preparation tool: the minimisation is a few seconds of a run
+# measured in tens, and a GPU is still there for anyone who asks for it by
+# name and would rather have the speed than the repeatability.
+AUTO_PLATFORM_ORDER = ("CPU", "CUDA", "HIP", "Metal", "OpenCL", "Reference")
 
 
 def platform_candidates(requested: str, available: Sequence[str]) -> list[str]:
@@ -229,6 +240,34 @@ def platform_candidates(requested: str, available: Sequence[str]) -> list[str]:
     if not candidates:
         raise OpenmmRefinementError("OpenMM reports no usable computational platforms")
     return candidates
+
+
+def deterministic_platform_properties(platform_name: str) -> dict[str, str]:
+    """Platform settings that make a minimisation repeatable.
+
+    A minimiser has no random numbers in it, so the same input should give
+    the same output -- and it did not. Two runs of one manifest differed in
+    the third decimal of a few hundred coordinates, which is the signature
+    of a floating-point sum taken in a different order, not of a different
+    calculation. Forces are accumulated per thread and then reduced, so the
+    order follows the thread count; on a GPU the reduction is unordered
+    unless asked otherwise.
+
+    Those coordinates are what tleap is handed, and tleap packs its solvent
+    around them deterministically -- so a last-decimal difference in the
+    solute comes out as a different number of waters, and the prepared
+    system is not the one the last run built. That is the whole reason to
+    pin this: AGENTS.md asks for a preparation that can be repeated.
+
+    One thread costs time on a large system. It is the price of the answer
+    being the same twice, and the minimisation is not the slow stage.
+    """
+
+    if platform_name == "CPU":
+        return {"Threads": "1"}
+    if platform_name in {"CUDA", "HIP", "OpenCL"}:
+        return {"DeterministicForces": "true"}
+    return {}
 
 
 def _build_simulation(
@@ -261,6 +300,7 @@ def _build_simulation(
                 system,
                 mm.VerletIntegrator(1.0 * unit.femtoseconds),
                 platform,
+                deterministic_platform_properties(candidate),
             )
         except Exception as exc:  # OpenMM plugins raise several exception types
             failures[candidate] = str(exc)

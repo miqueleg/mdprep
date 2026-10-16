@@ -20,17 +20,44 @@ from mdprep.structure.pdb import (
 def write_pdb(structure: PdbStructure, path: str | Path) -> None:
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(render_pdb(structure), encoding="utf-8")
+
+
+def render_pdb(structure: PdbStructure) -> str:
+    """The PDB text for this structure, without writing it anywhere.
+
+    The web builder draws the structure it is asking questions about. Giving
+    the viewer the uploaded file instead means the picture is of the names
+    the file came with, while the questions are about the names mdprep
+    chose -- so a renamed ligand or metal highlights nothing, on the one
+    question that asks the student to confirm what they can see.
+    """
 
     lines: list[str] = []
     previous_atom: AtomRecord | None = None
     ter_written_after: set[int] = set()
+    # An atom mdprep created -- a ligand hydrogen it placed -- carries no
+    # serial, and writing them all as 0 made every one of them the same
+    # atom. With CONECT records alongside, mdprep's own reader then refused
+    # the file it had just written, which is how the intermediate structures
+    # became unreadable. Existing serials are left alone so the CONECT
+    # records keep pointing at what they pointed at.
+    taken = {atom.serial for atom in structure.atoms if atom.serial is not None}
+    assigned: dict[int, int] = {}
+    next_serial = 1
+    for atom in structure.atoms:
+        if atom.serial is None:
+            while next_serial in taken:
+                next_serial += 1
+            taken.add(next_serial)
+            assigned[id(atom)] = next_serial
 
     for atom in structure.atoms:
         if previous_atom is not None and _needs_implicit_ter(previous_atom, atom):
             previous_serial = previous_atom.serial
             if previous_serial is None or previous_serial not in ter_written_after:
                 lines.append("TER\n")
-        lines.append(format_atom_record(atom))
+        lines.append(format_atom_record(atom, serial=assigned.get(id(atom))))
         if atom.serial is not None and atom.serial in structure.ter_after_serials:
             lines.append("TER\n")
             ter_written_after.add(atom.serial)
@@ -38,7 +65,7 @@ def write_pdb(structure: PdbStructure, path: str | Path) -> None:
 
     lines.extend(_format_conect_records(structure))
     lines.append("END\n")
-    output_path.write_text("".join(lines), encoding="utf-8")
+    return "".join(lines)
 
 
 def _needs_implicit_ter(previous: AtomRecord, current: AtomRecord) -> bool:
@@ -120,9 +147,10 @@ def format_resid_field(resid: int) -> str:
     raise ValueError(f"Residue number {resid} cannot be represented in a PDB file")
 
 
-def format_atom_record(atom: AtomRecord) -> str:
+def format_atom_record(atom: AtomRecord, *, serial: int | None = None) -> str:
     _check_fields_fit(atom)
-    serial = atom.serial if atom.serial is not None else 0
+    if serial is None:
+        serial = atom.serial if atom.serial is not None else 0
     atom_name = _atom_name_field(atom)
     altloc = atom.altloc or " "
     chain_id = atom.chain_id if atom.chain_id else " "
@@ -153,6 +181,8 @@ def _check_fields_fit(atom: AtomRecord) -> None:
 
     from mdprep.structure.pdb_fields import (
         CHAIN_ID_WIDTH,
+        COORDINATE_MAX,
+        COORDINATE_MIN,
         RESID_MAX,
         RESID_MIN,
         RESNAME_WIDTH,
@@ -171,6 +201,14 @@ def _check_fields_fit(atom: AtomRecord) -> None:
             f"PDB record has {CHAIN_ID_WIDTH} for it, so writing it would shift "
             "every later field out of place."
         )
+    for axis in ("x", "y", "z"):
+        value = getattr(atom, axis)
+        if not COORDINATE_MIN <= value <= COORDINATE_MAX:
+            raise PdbFieldError(
+                f"Coordinate {axis}={value} does not fit the eight columns a "
+                f"PDB record gives it ({COORDINATE_MIN} to {COORDINATE_MAX}); "
+                "writing it would shift the occupancy and everything after it."
+            )
     if atom.resid < RESID_MIN:
         raise PdbFieldError(
             f"Residue number {atom.resid} is below the smallest a PDB record "

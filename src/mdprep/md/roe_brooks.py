@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import json
+import secrets
 import math
 import re
 from dataclasses import dataclass
@@ -229,6 +230,19 @@ def _platform_properties(platform: Any, config: MolecularDynamicsConfig) -> dict
     return properties
 
 
+def resolve_random_seed(
+    config: MolecularDynamicsConfig,
+) -> MolecularDynamicsConfig:
+    """Give this run a seed, drawing one if the manifest did not fix it."""
+
+    if config.random_seed is not None:
+        return config
+    # Below OpenMM's 2^31 limit for an integrator seed, and far enough below
+    # it that the per-stage offsets cannot push a drawn value over.
+    drawn = secrets.randbelow(2**31 - 1000)
+    return config.model_copy(update={"random_seed": drawn})
+
+
 def run_roe_brooks(
     *,
     prmtop_path: str | Path,
@@ -240,6 +254,13 @@ def run_roe_brooks(
 
     if not config.enabled or config.production is None:
         raise RoeBrooksError("The molecular_dynamics stage is not enabled")
+    # Replicates of one system are meant to differ, and they differ through
+    # their starting velocities. A fixed seed gives every replicate the same
+    # velocities and so the same trajectory, which is the one thing a set of
+    # replicates must not be. Drawn once here so every stage of this run
+    # shares it, and written into the report, so a particular replicate can
+    # be repeated by putting that number back in the manifest.
+    config = resolve_random_seed(config)
     try:
         import openmm as mm
         from openmm import Platform, unit
