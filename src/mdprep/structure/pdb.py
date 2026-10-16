@@ -75,6 +75,16 @@ def read_pdb(
         )
 
     atoms = _apply_altloc_policy(raw_atoms, altloc_policy)
+    # A four-character residue name read out of column 21 cannot be written
+    # back into three, and everything downstream of here is fixed-column.
+    # Same treatment as an mmCIF's, so a name a predictor assigned by
+    # position becomes one the rest of the toolchain can carry: a lone iron
+    # called LIG1 becomes FE, and the cofactor beside it keeps a name of its
+    # own rather than colliding with it.
+    from mdprep.structure.pdb_fields import fit_atoms_to_pdb_fields
+
+    atoms, field_warnings, assigned_resnames = fit_atoms_to_pdb_fields(atoms)
+    warnings.extend(field_warnings)
     residues = _build_residues(atoms)
     present_serials = {atom.serial for atom in atoms if atom.serial is not None}
     retained = {id(atom) for atom in atoms}
@@ -96,6 +106,7 @@ def read_pdb(
         warnings=warnings,
         conect_bonds=conect_bonds,
         ter_after_serials=ter_after_serials,
+        assigned_resnames=assigned_resnames,
     )
 
 
@@ -166,7 +177,14 @@ def _parse_atom_line(line: str) -> AtomRecord:
     serial = _parse_serial(line)
     name = line[12:16].strip()
     altloc = _blank_to_none(line[16:17])
-    resname = line[17:20].strip()
+    # Columns 18-20 hold the residue name and column 21 is meant to be
+    # blank, but a four-character name has to go somewhere and writers put
+    # the fourth character there. Reading only three drops it, so a
+    # prediction naming its iron LIG1 and its cofactor LIG2 gives two
+    # different molecules the same name -- and if they also share a residue
+    # number, as they do when each is the first of its own chain, tleap
+    # merges them into one residue and the parameters stop making sense.
+    resname = line[17:21].rstrip() if len(line) > 20 and line[20] != " " else line[17:20].strip()
     chain_id = line[21:22]
     if chain_id == " ":
         chain_id = ""

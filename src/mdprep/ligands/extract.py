@@ -311,8 +311,27 @@ def _format_formula(counts: Counter[str]) -> str:
 
 
 def _ligand_conect_lines(input_path: Path, atoms: list) -> list[str]:
+    """CONECT records for this ligand, but only if they describe all of it.
+
+    They are copied from the input file, which was written before mdprep
+    added any hydrogens, so for a ligand that needed them the records cover
+    the heavy atoms and nothing else. Partial connectivity is worse than
+    none: antechamber believes it, decides the added hydrogens are bonded to
+    nothing and types them DU, and -- because a carbon that has lost its two
+    hydrogens looks like it has a triple bond -- types the carbons they
+    belonged to as sp. The run then stops on an element mismatch between the
+    PDB and the mol2, or, if it survives, carries invented atom types.
+
+    So: all of the ligand, or none of it. Dropped here, antechamber works
+    the bonds out from the coordinates, which it does correctly.
+    """
+
     serials = {atom.serial for atom in atoms if atom.serial is not None}
     if not serials or not input_path.exists():
+        return []
+    if len(serials) != len(atoms):
+        # An atom with no serial is one mdprep created, and nothing in the
+        # input file can be describing its bonds.
         return []
 
     lines: list[str] = []
@@ -332,6 +351,14 @@ def _ligand_conect_lines(input_path: Path, atoms: list) -> list[str]:
             if conect not in seen:
                 seen.add(conect)
                 lines.append(conect)
+    bonded = {
+        serial
+        for line in lines
+        for serial in _parse_conect_numbers(line)
+    }
+    if bonded != serials:
+        # Some atom of this ligand appears in no record. See above.
+        return []
     return lines
 
 

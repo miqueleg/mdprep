@@ -88,9 +88,9 @@ def fit_atoms_to_pdb_fields(
 
     assigned = frozenset(resname_map.values())
     if not chain_map and not resname_map:
-        return atoms, warnings, assigned
+        return settle_monatomic_ion_elements(atoms), warnings, assigned
 
-    return [
+    return settle_monatomic_ion_elements([
         replace(
             atom,
             chain_id=chain_map.get(atom.chain_id, atom.chain_id),
@@ -100,7 +100,7 @@ def fit_atoms_to_pdb_fields(
             original_line="",
         )
         for atom in atoms
-    ], warnings, assigned
+    ]), warnings, assigned
 
 
 def _chain_id_map(atoms: list[AtomRecord], warnings: list[str]) -> dict[str, str]:
@@ -173,6 +173,39 @@ def _resname_map(atoms: list[AtomRecord], warnings: list[str]) -> dict[str, str]
             f"Selectors in the manifest use {replacement!r}."
         )
     return mapping
+
+
+def settle_monatomic_ion_elements(atoms: list[AtomRecord]) -> list[AtomRecord]:
+    """Give a one-atom ion the element its residue name states.
+
+    The atom's own name is not enough. A residue FE holding an atom called
+    FE1 is iron, but by the column convention the name says fluorine, and
+    tleap writes the element column from the Amber type -- F2+ -- which
+    says fluorine too. Both halves agree on the wrong answer, so the iron
+    stopped matching itself across tleap and the refinement could not map
+    it. The residue name is the one place that still says Fe, and for a
+    residue holding a single atom it cannot be describing anything else.
+    """
+
+    counts: dict[tuple[str, str, int, str | None], int] = {}
+    for atom in atoms:
+        key = (atom.chain_id, atom.resname, atom.resid, atom.icode)
+        counts[key] = counts.get(key, 0) + 1
+    settled: list[AtomRecord] = []
+    for atom in atoms:
+        key = (atom.chain_id, atom.resname, atom.resid, atom.icode)
+        element = ion_element(atom.resname) if counts[key] == 1 else None
+        if element is not None:
+            # Always written in the canonical spelling, not only when it
+            # disagrees: the same ion arriving as FE from one reader and Fe
+            # from another is how two paths end up comparing unequal.
+            atom = replace(atom, element=_canonical(element))
+        settled.append(atom)
+    return settled
+
+
+def _canonical(symbol: str) -> str:
+    return symbol[0].upper() + symbol[1:].lower()
 
 
 def _monatomic_elements(atoms: list[AtomRecord]) -> dict[str, str]:
@@ -295,9 +328,14 @@ def _check_unmappable_fields(atoms: list[AtomRecord]) -> None:
                 "mdprep cannot shorten it, because atom names are matched against "
                 "force-field templates."
             )
-        if not RESID_MIN <= atom.resid <= RESID_MAX:
+        # Residue numbers are deliberately not checked here. Four columns do
+        # not hold a solvated box's residue count, and the writer continues
+        # in hybrid-36 past 9,999 exactly as tleap does -- so a number this
+        # once rejected is one the writer can represent and the reader can
+        # read back. It is the writer that refuses what it cannot spell.
+        if atom.resid < RESID_MIN:
             raise PdbFieldError(
-                f"Residue number {atom.resid} is outside the range a PDB file can "
-                f"hold ({RESID_MIN} to {RESID_MAX}). Renumber the residues in the "
-                "input structure."
+                f"Residue number {atom.resid} is below the smallest a PDB file "
+                f"can hold ({RESID_MIN}). Renumber the residues in the input "
+                "structure."
             )

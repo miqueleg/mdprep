@@ -664,7 +664,10 @@ def test_mcpb_renames_a_metal_ion_residue_and_atom_to_its_element():
 
     structure = read_pdb("tests/data/protein_histidine_zinc.pdb")
     zinc = next(r for r in structure.residues if r.id.resname == "ZN")
-    key = (zinc.id.chain_id, zinc.id.resid, zinc.id.icode)
+    # The whole residue identity, as ResidueId defines it: a prediction can
+    # put a ligand at residue 1 of the protein's own chain, so chain and
+    # number together do not name a residue.
+    key = (zinc.id.chain_id, zinc.id.resname, zinc.id.resid, zinc.id.icode)
 
     import tempfile
 
