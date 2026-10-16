@@ -67,7 +67,12 @@ class McpbNumberingMap:
     original_by_mcpb_atom_id: dict[int, AtomRecord]
     original_by_mcpb_resid: dict[int, ResidueRecord]
     mcpb_atom_id_by_original_identity: dict[tuple[str, str, int, str | None, str], int]
-    mcpb_resid_by_original_key: dict[tuple[str, int, str | None], int]
+    # Keyed by the whole residue identity, chain/resname/resid/icode, the
+    # same tuple ResidueId is. Keyed on chain and number alone, a ligand
+    # that a prediction numbered 1 inside the protein's own chain looked
+    # like the protein's first residue, and the build stopped calling
+    # them ambiguous -- which they were, but only to this key.
+    mcpb_resid_by_original_key: dict[tuple[str, str, int, str | None], int]
 
 
 @dataclass(frozen=True)
@@ -506,7 +511,7 @@ def write_mcpb_numbered_pdb(
     structure: PdbStructure,
     path: str | Path,
     *,
-    ion_names: dict[tuple[str, int, str | None], str] | None = None,
+    ion_names: dict[tuple[str, str, int, str | None], str] | None = None,
 ) -> McpbNumberingMap:
     """Renumber a structure into the contiguous form MCPB.py expects.
 
@@ -528,11 +533,16 @@ def write_mcpb_numbered_pdb(
     original_by_atom: dict[int, AtomRecord] = {}
     original_by_residue: dict[int, ResidueRecord] = {}
     atom_id_by_identity: dict[tuple[str, str, int, str | None, str], int] = {}
-    resid_by_key: dict[tuple[str, int, str | None], int] = {}
+    resid_by_key: dict[tuple[str, str, int, str | None], int] = {}
     atom_id = 0
     for residue_id, residue in enumerate(structure.residues, start=1):
         original_by_residue[residue_id] = residue
-        residue_key = (residue.id.chain_id, residue.id.resid, residue.id.icode)
+        residue_key = (
+            residue.id.chain_id,
+            residue.id.resname,
+            residue.id.resid,
+            residue.id.icode,
+        )
         if residue_key in resid_by_key:
             raise McpbWorkflowError(
                 f"Residue identity {residue.id.display()} is ambiguous before MCPB.py numbering."
@@ -591,7 +601,7 @@ def build_mcpb_input(
     ion_ids = [numbering.mcpb_atom_id_by_original_identity[ion.atom.atom_identity] for ion in site.ions]
     additional_resids = [
         numbering.mcpb_resid_by_original_key[
-            (residue.id.chain_id, residue.id.resid, residue.id.icode)
+            (residue.id.chain_id, residue.id.resname, residue.id.resid, residue.id.icode)
         ]
         for residue in site.additional_residues
     ]
@@ -809,7 +819,7 @@ def _write_mcpb_ion_mol2(
         )
         numbered_atom_id = numbering.mcpb_atom_id_by_original_identity[ion.atom.atom_identity]
         numbered_resid = numbering.mcpb_resid_by_original_key[
-            (ion.residue.id.chain_id, ion.residue.id.resid, ion.residue.id.icode)
+            (ion.residue.id.chain_id, ion.residue.id.resname, ion.residue.id.resid, ion.residue.id.icode)
         ]
         numbered_atom = replace(
             ion.atom,
@@ -867,7 +877,7 @@ def _stage_ligand_parameters(
 
 def _mcpb_ion_names(
     site: ResolvedMetalSite,
-) -> dict[tuple[str, int, str | None], str]:
+) -> dict[tuple[str, str, int, str | None], str]:
     """The name MCPB.py needs for each of the site's metal ions.
 
     One name for the residue and its atom alike, because MCPB.py reads the
@@ -876,7 +886,12 @@ def _mcpb_ion_names(
     """
 
     return {
-        (ion.residue.id.chain_id, ion.residue.id.resid, ion.residue.id.icode): (
+        (
+            ion.residue.id.chain_id,
+            ion.residue.id.resname,
+            ion.residue.id.resid,
+            ion.residue.id.icode,
+        ): (
             ion.element.strip().upper()
         )
         for ion in site.ions
@@ -911,7 +926,7 @@ def _write_mcpb_ion_charge_mol2(
             continue
         seen.add(name)
         numbered_resid = numbering.mcpb_resid_by_original_key[
-            (ion.residue.id.chain_id, ion.residue.id.resid, ion.residue.id.icode)
+            (ion.residue.id.chain_id, ion.residue.id.resname, ion.residue.id.resid, ion.residue.id.icode)
         ]
         numbered_atom = replace(
             ion.atom,
@@ -1065,6 +1080,7 @@ def _write_mcpb_coordinating_ion_mol2(
     coordinator_by_key = {
         (
             bond.coordinator_residue.id.chain_id,
+            bond.coordinator_residue.id.resname,
             bond.coordinator_residue.id.resid,
             bond.coordinator_residue.id.icode,
         ): bond.coordinator_residue
@@ -1074,7 +1090,7 @@ def _write_mcpb_coordinating_ion_mol2(
     seen_resnames: set[str] = set()
     for ion_config in site.config.coordinating_ions:
         selector = ion_config.selector
-        key = (selector.chain, selector.resid, selector.icode)
+        key = (selector.chain, selector.resname, selector.resid, selector.icode)
         residue = coordinator_by_key.get(key)
         if residue is None:
             raise McpbWorkflowError(

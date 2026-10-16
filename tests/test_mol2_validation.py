@@ -135,3 +135,42 @@ def test_gaff_aromatic_nitrogen_type_na_is_nitrogen_not_sodium(tmp_path):
         validate(tmp_path, mol2)
 
     assert "['C', 'O'] != ['C', 'N']" in str(excinfo.value)
+
+
+def test_an_untyped_atom_is_reported_as_antechamber_failing_to_type_it():
+    """antechamber writes DU for an atom it could not assign a type to.
+
+    Read as an element that is deuterium, so a run whose four hydrogens
+    antechamber could not perceive reported "H,H,H,H against D,D,D,D" and
+    sent the reader looking for isotopes. The message now says what
+    happened, and which atoms.
+    """
+
+    from mdprep.ambertools.mol2 import Mol2Atom, _validate_element_order
+    from mdprep.structure.models import AtomRecord
+
+    def pdb_atom(name, element):
+        return AtomRecord(
+            serial=1, name=name, altloc="", resname="LIG", chain_id="A", resid=1,
+            icode="", x=0.0, y=0.0, z=0.0, occupancy=1.0, bfactor=0.0,
+            element=element, record_name="HETATM", original_line="",
+        )
+
+    def mol2_atom(name, atom_type):
+        return Mol2Atom(
+            atom_id=1, name=name, x=0.0, y=0.0, z=0.0,
+            atom_type=atom_type, subst_id=1, subst_name="LIG", charge=0.0,
+        )
+
+    with pytest.raises(Mol2Error) as caught:
+        _validate_element_order(
+            [mol2_atom("C1", "c3"), mol2_atom("H1", "DU")],
+            [pdb_atom("C1", "C"), pdb_atom("H1", "H")],
+            "a_lig_1",
+        )
+
+    message = str(caught.value)
+    assert "could not assign an atom type" in message
+    assert "H1" in message
+    # And it no longer claims the elements simply disagree.
+    assert "element-order mismatch" not in message

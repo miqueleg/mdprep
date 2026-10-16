@@ -277,14 +277,52 @@ def _molecule_name(lines: list[str]) -> str | None:
     return None
 
 
+# antechamber writes this type for an atom it could not assign one to. It
+# is not an element, and reading it as one turns "antechamber failed to type
+# four hydrogens" into "the elements are H,H,H,H against D,D,D,D", which
+# sends the reader looking for deuterium.
+ANTECHAMBER_UNTYPED = {"du", "DU", "Du"}
+
+
 def _validate_element_order(mol2_atoms: list[Mol2Atom], pdb_atoms: list[AtomRecord], ligand_id: str) -> None:
     mol2_elements = [_element_from_mol2(atom) for atom in mol2_atoms]
     pdb_elements = [_element_from_pdb_atom(atom) for atom in pdb_atoms]
-    if mol2_elements != pdb_elements:
+    if mol2_elements == pdb_elements:
+        return
+
+    # Report the atoms, not just the element letters. The letters are what
+    # the comparison is made of, but the names and the types are what says
+    # which atom and why -- and without them the message is a puzzle rather
+    # than a diagnosis.
+    differing = [
+        (index, pdb, mol2)
+        for index, (pdb, mol2) in enumerate(zip(pdb_atoms, mol2_atoms), start=1)
+        if _element_from_pdb_atom(pdb) != _element_from_mol2(mol2)
+    ]
+    detail = "; ".join(
+        f"atom {index}: PDB {pdb.name.strip()} ({_element_from_pdb_atom(pdb)}) "
+        f"against mol2 {mol2.name.strip()} type {mol2.atom_type!r}"
+        for index, pdb, mol2 in differing[:8]
+    )
+    untyped = [
+        mol2.name.strip()
+        for _, _, mol2 in differing
+        if mol2.atom_type.split(".", 1)[0].strip() in ANTECHAMBER_UNTYPED
+    ]
+    if untyped:
         raise Mol2Error(
-            f"Ligand {ligand_id} element-order mismatch between extracted PDB and mol2: "
-            f"{pdb_elements} != {mol2_elements}."
+            f"Ligand {ligand_id}: antechamber could not assign an atom type to "
+            f"{len(untyped)} atom(s) and marked them dummies "
+            f"({', '.join(untyped[:8])}). That is antechamber failing to "
+            "perceive the molecule rather than a disagreement about elements: "
+            "it happens when the bonds it works out from the coordinates are "
+            "not the ones the SMILES implies. Check the ligand's geometry and "
+            f"that its SMILES matches it. {detail}"
         )
+    raise Mol2Error(
+        f"Ligand {ligand_id} element-order mismatch between extracted PDB and mol2: "
+        f"{pdb_elements} != {mol2_elements}. {detail}"
+    )
 
 
 def _element_from_mol2(atom: Mol2Atom) -> str:
