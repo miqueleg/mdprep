@@ -175,7 +175,7 @@ def gxtb_setup_commands(prefix: str = "/content") -> list[str]:
 
     archive = f"{prefix}/{GXTB_ARCHIVE}"
     return [
-        f"curl -Ls -o {archive} {GXTB_RELEASE_URL}/{GXTB_ARCHIVE}",
+        f"curl -fLs -o {archive} {GXTB_RELEASE_URL}/{GXTB_ARCHIVE}",
         f'echo "{GXTB_SHA256}  {archive}" | sha256sum -c -',
         f"tar -xJf {archive} -C {prefix}",
         f"export MDPREP_GXTB_EXECUTABLE={gxtb_executable_path(prefix)}",
@@ -231,9 +231,16 @@ def micromamba_setup_commands(
 
     packages = " ".join([f"python={python_version}", *conda_packages_for(manifest)])
     commands = [
+        # Without this the cell cannot fail. It is %%bash, so every line runs
+        # whatever the one before it did: a 404 from the release URL pipes
+        # "Not Found" into tar, a failed checksum is followed by the unpack
+        # anyway, and a conda solve that died still ends on a green tick --
+        # the student finds out in the next cell, or not at all. The checksum
+        # the note promises only means something with this line present.
+        "set -euo pipefail",
         f"mkdir -p {prefix}/bin",
         (
-            f"curl -Ls https://micro.mamba.pm/api/micromamba/linux-64/latest "
+            f"curl -fLs https://micro.mamba.pm/api/micromamba/linux-64/latest "
             f"| tar -xj -C {prefix}/bin --strip-components=1 bin/micromamba"
         ),
         f"export MAMBA_ROOT_PREFIX={prefix}/mamba-root",

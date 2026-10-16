@@ -324,3 +324,22 @@ def test_the_run_command_stays_plain_when_no_metal_needs_gxtb():
     from mdprep.workflows.runtime import micromamba_run_command
 
     assert "GXTB" not in micromamba_run_command(manifest(), "system.yaml")
+
+
+def test_the_setup_cell_can_actually_fail():
+    """Without `set -e` the cell runs every line whatever the last one did.
+
+    A 404 pipes "Not Found" into tar, a failed checksum is followed by the
+    unpack anyway, and a dead conda solve still ends on a green tick. The
+    checksum this cell advertises means nothing without this.
+    """
+
+    commands = micromamba_setup_commands(manifest(metals=[mcpb_site()]))
+
+    assert commands[0] == "set -euo pipefail"
+    # And curl has to treat an HTTP error as an error rather than writing the
+    # error page into the file it was told to save.
+    for line in commands:
+        if line.startswith("curl "):
+            flags = line.split("curl ", 1)[1].split(" ", 1)[0]
+            assert flags.startswith("-") and "f" in flags, line

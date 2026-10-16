@@ -13,10 +13,18 @@ class PropkaParseError(ValueError):
     """Raised when parsed PropKa records cannot be mapped safely."""
 
 
+# PropKa builds this label with "{residue_type:<3s}{res_num:>4d}{chain:>2s}",
+# so the gap between name and number is padding, not a separator: a 3-letter
+# name and a 4-digit number meet with nothing between them ("ASP1000 A").
+# Requiring whitespace there dropped every titratable residue numbered 1000
+# or above, and a dropped record falls through to a conservative default --
+# so for a protein numbered from 1000, PropKa ran and changed nothing, and
+# the run still succeeded.
 _PKA_LINE = re.compile(
-    r"^\s*(?P<resname>ASP|GLU|HIS|LYS|CYS|ARG)\s+"
-    r"(?P<resid>-?\d+)\s+"
-    r"(?P<chain>\S)\s+"
+    r"^\s*(?P<resname>ASP|GLU|HIS|LYS|CYS|ARG)\s*"
+    r"(?P<resid>-?\d+)\s*"
+    # A single chain character, or "-" where PropKa has no chain to name.
+    r"(?P<chain>[A-Za-z0-9_-])\s+"
     r"(?P<pka>-?\d+(?:\.\d+)?)\b"
 )
 

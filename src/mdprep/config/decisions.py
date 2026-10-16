@@ -409,7 +409,13 @@ def plan_decisions(
             )
         )
     for residue in summary.metal_ions:
-        decisions.extend(_metal_decisions(residue, summary.structure.residues))
+        decisions.extend(
+            _metal_decisions(
+                residue,
+                summary.structure.residues,
+                getattr(summary.structure, "assigned_resnames", frozenset()),
+            )
+        )
     decisions.extend(_solvation_decisions())
     decisions.extend(_md_decisions())
 
@@ -1060,11 +1066,27 @@ OXIDATION_STATE_BY_ELEMENT = {
 }
 
 
-def proposed_oxidation_state(resname: str, element: str | None) -> tuple[int | None, str]:
-    """An oxidation state the evidence settles, and why -- or no proposal."""
+def proposed_oxidation_state(
+    resname: str,
+    element: str | None,
+    *,
+    name_was_assigned: bool = False,
+) -> tuple[int | None, str]:
+    """An oxidation state the evidence settles, and why -- or no proposal.
+
+    ``name_was_assigned`` marks a residue name mdprep chose itself, because
+    the input's would not fit a PDB column. Those carry no chemistry. A
+    prediction calls its iron LIG1, mdprep renames it FE so the rest of the
+    toolchain can recognise a metal, and FE in the chemical component
+    dictionary means Fe(III) -- so reading the state back out of the name
+    would propose +3, with a citation, for an iron whose input said nothing
+    at all about its oxidation state. The element table deliberately omits
+    Fe, Cu, Mn and Co for exactly this reason; coming at it through an
+    invented name must not be a way around that.
+    """
 
     name = (resname or "").strip().upper()
-    if name in OXIDATION_STATE_BY_RESNAME:
+    if name in OXIDATION_STATE_BY_RESNAME and not name_was_assigned:
         return (
             OXIDATION_STATE_BY_RESNAME[name],
             f"the residue name {name} is that oxidation state in the PDB "
@@ -1075,6 +1097,14 @@ def proposed_oxidation_state(resname: str, element: str | None) -> tuple[int | N
         return (
             OXIDATION_STATE_BY_ELEMENT[symbol],
             f"{symbol.capitalize()} has one common biological oxidation state",
+        )
+    if name_was_assigned and name in OXIDATION_STATE_BY_RESNAME:
+        return (
+            None,
+            f"the name {name} was assigned by mdprep because the input's did "
+            "not fit a PDB residue field, so it says nothing about the "
+            f"oxidation state, and {symbol.capitalize() or 'this element'} "
+            "has more than one common state",
         )
     return (
         None,
@@ -1123,11 +1153,18 @@ def model_charge_arithmetic(
 
 
 def _metal_decisions(
-    residue: ResidueRecord, all_residues: Sequence[ResidueRecord]
+    residue: ResidueRecord,
+    all_residues: Sequence[ResidueRecord],
+    assigned_resnames: frozenset[str] = frozenset(),
 ) -> list[Decision]:
     site_id = metal_site_id_for(residue)
     display = residue.id.display()
     element = _residue_element(residue)
+    # A name mdprep chose cannot also be evidence for what mdprep should
+    # infer. See proposed_oxidation_state.
+    name_assigned = residue.id.resname.strip().upper() in {
+        name.strip().upper() for name in assigned_resnames
+    }
     donors = metal_donor_atoms(all_residues, residue)
     donor_residues: list[ResidueRecord] = []
     for donor_residue, _, _ in donors:
@@ -1210,7 +1247,7 @@ def _metal_decisions(
             default=(
                 str(_proposed_state)
                 if (_proposed_state := proposed_oxidation_state(
-                    residue.id.resname, element
+                    residue.id.resname, element, name_was_assigned=name_assigned
                 )[0]) is not None
                 else None
             ),
@@ -1220,11 +1257,11 @@ def _metal_decisions(
                 "what the quantum calculation is solving. "
                 + (
                     f"Proposed as {_proposed_state:+d} because "
-                    f"{proposed_oxidation_state(residue.id.resname, element)[1]}; "
+                    f"{proposed_oxidation_state(residue.id.resname, element, name_was_assigned=name_assigned)[1]}; "
                     "change it if that is not this site."
                     if _proposed_state is not None
                     else "No value is proposed here because "
-                    f"{proposed_oxidation_state(residue.id.resname, element)[1]}. "
+                    f"{proposed_oxidation_state(residue.id.resname, element, name_was_assigned=name_assigned)[1]}. "
                     "Guessing would give a converged calculation with the wrong "
                     "parameters."
                 )

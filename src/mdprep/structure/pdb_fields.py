@@ -73,7 +73,7 @@ def looks_like_ion_resname(name: str) -> bool:
 
 def fit_atoms_to_pdb_fields(
     atoms: list[AtomRecord],
-) -> tuple[list[AtomRecord], list[str]]:
+) -> tuple[list[AtomRecord], list[str], frozenset[str]]:
     """Rename whatever is too wide for a PDB record, and say what was renamed.
 
     Residue numbers and atom names are not renamed: a number has no spare
@@ -86,8 +86,9 @@ def fit_atoms_to_pdb_fields(
     resname_map = _resname_map(atoms, warnings)
     _check_unmappable_fields(atoms)
 
+    assigned = frozenset(resname_map.values())
     if not chain_map and not resname_map:
-        return atoms, warnings
+        return atoms, warnings, assigned
 
     return [
         replace(
@@ -99,7 +100,7 @@ def fit_atoms_to_pdb_fields(
             original_line="",
         )
         for atom in atoms
-    ], warnings
+    ], warnings, assigned
 
 
 def _chain_id_map(atoms: list[AtomRecord], warnings: list[str]) -> dict[str, str]:

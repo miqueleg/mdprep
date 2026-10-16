@@ -84,3 +84,9 @@ class PdbStructure:
     # the last atom before each explicit input TER so writers cannot
     # accidentally reconnect an unresolved chain break or a heterogen.
     ter_after_serials: set[int] = field(default_factory=set)
+    # Residue names mdprep assigned rather than read, because the input used
+    # one that could not be written to a PDB column. The name is as good as
+    # any for building with, but it carries none of the meaning a deposited
+    # name would: nothing may be inferred from it that was not already known
+    # from the atoms.
+    assigned_resnames: frozenset[str] = frozenset()

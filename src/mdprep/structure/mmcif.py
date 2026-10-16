@@ -222,7 +222,7 @@ def read_mmcif(
     # mmCIF puts no width on a name and a PDB record does, and everything
     # downstream of here is fixed-column. Fit the names now, while this is
     # still the only code that has seen them.
-    atoms, field_warnings = fit_atoms_to_pdb_fields(atoms)
+    atoms, field_warnings, assigned_resnames = fit_atoms_to_pdb_fields(atoms)
     warnings.extend(field_warnings)
     return PdbStructure(
         path=source,
@@ -230,6 +230,7 @@ def read_mmcif(
         residues=_build_residues(atoms),
         model_count=len(models),
         warnings=warnings,
+        assigned_resnames=assigned_resnames,
     )
 
 
