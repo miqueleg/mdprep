@@ -178,6 +178,14 @@ def _parse_atom_line(line: str) -> AtomRecord:
     occupancy = _parse_float(line[54:60])
     bfactor = _parse_float(line[60:66])
     element = _blank_to_none(line[76:78] if len(line) >= 78 else "")
+    if element is not None and not element_matches_atom_name(element, name):
+        # The element column is the field writers get wrong. tleap fills it
+        # from the Amber atom type rather than the element, so a histidine
+        # NE2 coordinating a metal -- MCPB types those Y1..Y5 -- comes back
+        # as yttrium, and an oxygen of the cofactor beside it does too. An
+        # element that is not even the start of the atom name is a writer's
+        # mistake, not chemistry, so the name decides instead.
+        element = None
     ion = monatomic_ion_element(name, resname=resname, record_name=record_name)
     if ion is not None:
         # A one-atom residue named after its element is the one case where
@@ -447,7 +455,7 @@ def infer_element(
         and residue_upper.rstrip("0123456789+-") == upper
         and upper in PERIODIC_ELEMENTS
     ):
-        return _canonical_element(upper)
+        return canonical_element(upper)
     if resname in STANDARD_PROTEIN_RESNAMES:
         if upper.startswith("H"):
             return "H"
@@ -458,14 +466,34 @@ def infer_element(
     if atom_field:
         aligned = atom_field.rstrip()
         if aligned.startswith(" ") and upper[0] in PERIODIC_ELEMENTS:
-            return _canonical_element(upper[0])
+            return canonical_element(upper[0])
         if not aligned.startswith(" ") and len(upper) >= 2 and upper[:2] in PERIODIC_ELEMENTS:
-            return _canonical_element(upper[:2])
+            return canonical_element(upper[:2])
     if len(upper) >= 2 and upper[:2] in PERIODIC_ELEMENTS:
-        return _canonical_element(upper[:2])
+        return canonical_element(upper[:2])
     if upper[0] in PERIODIC_ELEMENTS:
-        return _canonical_element(upper[0])
+        return canonical_element(upper[0])
     return upper[0]
+
+
+def element_matches_atom_name(element: str, atom_name: str) -> bool:
+    """Whether this element could be the one the atom name names.
+
+    An atom name begins with its element -- NE2 is a nitrogen, O5 an oxygen,
+    1HB a hydrogen once the leading digit is dropped. That is the convention
+    the format is built on, and it is what makes a mismatch meaningful: a
+    column saying Y against a name saying NE2 is not an unusual element, it
+    is a field filled from something that was never an element.
+
+    Deliberately permissive. It answers "could this be right", not "is this
+    right", so anything it passes is left alone.
+    """
+
+    symbol = (element or "").strip().upper()
+    stripped = (atom_name or "").strip().upper().lstrip("0123456789")
+    if not symbol or not stripped:
+        return True
+    return stripped.startswith(symbol)
 
 
 def monatomic_ion_element(
@@ -491,10 +519,10 @@ def monatomic_ion_element(
         return None
     if (resname or "").strip().upper().rstrip("0123456789+-") != stripped:
         return None
-    return _canonical_element(stripped)
+    return canonical_element(stripped)
 
 
-def _canonical_element(symbol: str) -> str:
+def canonical_element(symbol: str) -> str:
     upper = symbol.upper()
     return upper[0] + upper[1:].lower()
 

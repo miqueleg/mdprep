@@ -24,13 +24,28 @@ def write_pdb(structure: PdbStructure, path: str | Path) -> None:
     lines: list[str] = []
     previous_atom: AtomRecord | None = None
     ter_written_after: set[int] = set()
+    # An atom mdprep created -- a ligand hydrogen it placed -- carries no
+    # serial, and writing them all as 0 made every one of them the same
+    # atom. With CONECT records alongside, mdprep's own reader then refused
+    # the file it had just written, which is how the intermediate structures
+    # became unreadable. Existing serials are left alone so the CONECT
+    # records keep pointing at what they pointed at.
+    taken = {atom.serial for atom in structure.atoms if atom.serial is not None}
+    assigned: dict[int, int] = {}
+    next_serial = 1
+    for atom in structure.atoms:
+        if atom.serial is None:
+            while next_serial in taken:
+                next_serial += 1
+            taken.add(next_serial)
+            assigned[id(atom)] = next_serial
 
     for atom in structure.atoms:
         if previous_atom is not None and _needs_implicit_ter(previous_atom, atom):
             previous_serial = previous_atom.serial
             if previous_serial is None or previous_serial not in ter_written_after:
                 lines.append("TER\n")
-        lines.append(format_atom_record(atom))
+        lines.append(format_atom_record(atom, serial=assigned.get(id(atom))))
         if atom.serial is not None and atom.serial in structure.ter_after_serials:
             lines.append("TER\n")
             ter_written_after.add(atom.serial)
@@ -120,9 +135,10 @@ def format_resid_field(resid: int) -> str:
     raise ValueError(f"Residue number {resid} cannot be represented in a PDB file")
 
 
-def format_atom_record(atom: AtomRecord) -> str:
+def format_atom_record(atom: AtomRecord, *, serial: int | None = None) -> str:
     _check_fields_fit(atom)
-    serial = atom.serial if atom.serial is not None else 0
+    if serial is None:
+        serial = atom.serial if atom.serial is not None else 0
     atom_name = _atom_name_field(atom)
     altloc = atom.altloc or " "
     chain_id = atom.chain_id if atom.chain_id else " "

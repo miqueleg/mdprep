@@ -24,6 +24,7 @@ from mdprep.structure.models import AtomRecord, PdbStructure
 from mdprep.structure.pdb_fields import fit_atoms_to_pdb_fields
 from mdprep.structure.pdb import (
     VALID_ALTLOC_POLICIES,
+    canonical_element,
     monatomic_ion_element,
     AltlocPolicy,
     PdbParseError,
@@ -195,6 +196,11 @@ def read_mmcif(
         # Same rule the PDB reader applies: a one-atom residue named after
         # its element settles its own identity, and both readers have to
         # agree or the same structure in two formats behaves differently.
+        # mmCIF states the element, but not its spelling: a file written
+        # from PDB columns carries "FE" where another carries "Fe". The two
+        # formats have to hand back the same structure, so the symbol is
+        # canonicalised here the way the PDB reader does it.
+        element = canonical_element(element) if element else element
         ion = monatomic_ion_element(name, resname=resname, record_name=record)
         atoms.append(
             AtomRecord(
