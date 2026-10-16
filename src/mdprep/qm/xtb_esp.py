@@ -38,6 +38,26 @@ class XtbEspError(ValueError):
 
 # An MM site is a point charge, not an atom. xTB would otherwise give it the
 # chemical hardness of some default element and let it screen the QM density.
+# One retry is enough in practice: the grids that crash xTB stop crashing it
+# with a single point removed, and a second failure means something else.
+XTB_ESP_GRID_RETRIES = 1
+
+
+def _died_by_signal(result: object) -> bool:
+    """Whether xTB was killed rather than finishing and reporting a problem.
+
+    Keyed on the return code alone. A half-written xtb_esp.dat is not
+    evidence of progress: the crash happens while that file is being filled,
+    and it is left behind at nearly full size with the rest of it missing.
+    A chemistry complaint -- a charge that cannot hold that spin, an SCF that
+    will not converge -- exits normally and must not be retried with a
+    different grid, because the grid is not what it is objecting to.
+    """
+
+    code = getattr(result, "returncode", 0)
+    return code < 0 or code in {134, 136, 139}
+
+
 POINT_CHARGE_HARDNESS = 1.0e16
 
 
@@ -49,6 +69,10 @@ class XtbEspResult:
     energy_hartree: float
     metadata: dict
     warnings: list[str]
+    # The grid these values are for, which is the one that was asked for
+    # unless xTB had to be retried on a shorter one. Callers fit against this
+    # rather than against what they passed in, because the two can differ.
+    grid_coordinates_angstrom: np.ndarray | None = None
 
 
 def write_embedding(
@@ -182,8 +206,6 @@ def run_xtb_esp(
         ),
         encoding="utf-8",
     )
-    np.savetxt(work / "esp_coord", grid * BOHR_PER_ANGSTROM, fmt="%.16g")
-
     control = "$write\n esp=true\n gridfile=esp_coord\n$end\n"
     embedded = mm_charges is not None and len(mm_charges) > 0
     mm_count = 0 if mm_charges is None else len(mm_charges)
@@ -219,14 +241,51 @@ def run_xtb_esp(
             "OMP_STACKSIZE": omp_stacksize,
         }
     )
-    result = run_command(command, cwd=work, env=environment)
-    (work / "xtb_stdout.txt").write_text(result.stdout, encoding="utf-8")
-    (work / "xtb_stderr.txt").write_text(result.stderr, encoding="utf-8")
-    (work / "command.json").write_text(json.dumps(asdict(result), indent=2), encoding="utf-8")
+    # xTB's ESP routine can die on a particular grid -- SIGSEGV or SIGABRT
+    # inside its Fortran reader, before it computes anything. It is the file
+    # and not the molecule: swapping a grid that crashes for one that does
+    # not, on the same geometry, runs to completion, and so does the crashing
+    # grid with its last point removed. Which grid comes out depends on
+    # coordinates that move slightly between runs, so the same system can
+    # prepare one day and abort the next, 40 seconds in, with a Fortran
+    # backtrace naming nothing.
+    #
+    # A sampling grid of some thousands of points does not depend on any one
+    # of them, so dropping the last and trying again is a fair trade for a
+    # run that finishes. It is recorded rather than hidden.
+    grid_used = grid
+    dropped = 0
+    for attempt in range(XTB_ESP_GRID_RETRIES + 1):
+        np.savetxt(work / "esp_coord", grid_used * BOHR_PER_ANGSTROM, fmt="%.16g")
+        result = run_command(command, cwd=work, env=environment)
+        (work / "xtb_stdout.txt").write_text(result.stdout, encoding="utf-8")
+        (work / "xtb_stderr.txt").write_text(result.stderr, encoding="utf-8")
+        (work / "command.json").write_text(
+            json.dumps(asdict(result), indent=2), encoding="utf-8"
+        )
+        if not _died_by_signal(result) or attempt == XTB_ESP_GRID_RETRIES:
+            break
+        # The crash happens mid-write, so the partial ESP has to go with it.
+        (work / "xtb_esp.dat").unlink(missing_ok=True)
+        dropped += 1
+        grid_used = grid_used[:-1]
+        if len(grid_used) < len(elements) + 1:
+            break
+    if _died_by_signal(result):
+        raise XtbEspError(
+            f"xTB was killed (exit {result.returncode}) while evaluating the "
+            f"ESP, and again on a grid one point shorter. This is xTB dying "
+            f"on the grid file rather than on the chemistry -- the same "
+            f"geometry computes fine on a different grid -- so retrying the "
+            f"run may well pick one it survives. To stop depending on that, "
+            f"set mcpb.pyscf.esp_backend: pyscf. See "
+            f"{work / 'xtb_stderr.txt'}."
+        )
     if result.returncode != 0 or (work / "NOT_CONVERGED").exists():
         raise XtbEspError(
             f"The GFN2 ESP calculation failed; see {work / 'xtb_stdout.txt'}."
         )
+    grid = grid_used
     if embedded and not re.search(r"PC potential\s+true", result.stdout, re.I):
         raise XtbEspError(
             "xTB did not report applying the point charges, so the density is "
@@ -255,6 +314,7 @@ def run_xtb_esp(
         ) from exc
 
     return XtbEspResult(
+        grid_coordinates_angstrom=grid,
         esp_hartree_per_e=esp,
         atomic_esp_hartree_per_e=_atomic_esp_excluding_self(xyz, atomic_charges),
         atomic_charges=atomic_charges,
@@ -269,6 +329,7 @@ def run_xtb_esp(
             "electron_count": electrons,
             "energy_hartree": energy,
             "grid_point_count": int(len(grid)),
+            "grid_points_dropped_after_xtb_crash": dropped,
             "mm_point_charge_count": int(mm_count),
             "electrostatic_embedding_applied": bool(embedded),
             "solvent": solvent,
@@ -282,5 +343,15 @@ def run_xtb_esp(
             "Charges were fitted to a GFN2 semi-empirical valence density, not "
             "to an HF/6-31G* density. They are not RESP charges in the usual "
             "sense; use esp_backend: pyscf when that matters."
-        ],
+        ]
+        + (
+            [
+                f"xTB was killed on the ESP grid it was given and ran on "
+                f"{dropped} point(s) fewer. A sampling grid of "
+                f"{len(grid) + dropped} points does not depend on any one of "
+                f"them, but the fit is to {len(grid)}."
+            ]
+            if dropped
+            else []
+        ),
     )

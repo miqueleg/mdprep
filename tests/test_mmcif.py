@@ -321,3 +321,86 @@ def test_the_repair_input_keeps_only_the_chosen_chains(tmp_path):
     )
 
     assert {atom.chain_id for atom in read_pdb(destination).atoms} == {"A"}
+
+
+# --------------------------------------------------------------------------
+# What a prediction calls its non-polymers
+#
+# Boltz names them by position, not by chemistry: the iron is LIG1 and the
+# cofactor beside it is LIG2. Neither fits the three characters a PDB record
+# gives a residue name, and shortening them to LIG and L01 would hand the
+# metal a generic ligand name -- which is exactly the thing tleap, MCPB and
+# mdprep's own charge arithmetic all read the metal out of.
+# --------------------------------------------------------------------------
+
+
+def boltz_like(tmp_path, rows):
+    header = (
+        "data_model\n_entry.id model\n#\nloop_\n"
+        "_atom_site.group_PDB\n_atom_site.id\n_atom_site.type_symbol\n"
+        "_atom_site.label_atom_id\n_atom_site.label_alt_id\n"
+        "_atom_site.label_comp_id\n_atom_site.auth_seq_id\n"
+        "_atom_site.pdbx_PDB_ins_code\n_atom_site.Cartn_x\n_atom_site.Cartn_y\n"
+        "_atom_site.Cartn_z\n_atom_site.occupancy\n_atom_site.auth_asym_id\n"
+        "_atom_site.B_iso_or_equiv\n_atom_site.pdbx_PDB_model_num\n"
+    )
+    path = tmp_path / "prediction.cif"
+    path.write_text(header + "\n".join(rows) + "\n#\n", encoding="utf-8")
+    return path
+
+
+def test_a_single_atom_residue_is_named_after_its_element(tmp_path):
+    """LIG1 holding one iron is the iron, whatever the predictor called it."""
+
+    path = boltz_like(
+        tmp_path,
+        [
+            "HETATM 1 Fe FE1 . LIG1 1 ? 0.0 0.0 0.0 1 FE 80.0 1",
+            "HETATM 2 Cl CL1 . LIG4 1 ? 5.0 0.0 0.0 1 CL 80.0 1",
+        ],
+    )
+
+    names = {residue.id.resname for residue in read_mmcif(path).residues}
+
+    assert names == {"FE", "CL"}
+
+
+def test_a_multi_atom_prediction_ligand_keeps_a_distinguishable_name(tmp_path):
+    """LIG2 and LIG3 must not both collapse onto LIG, and the digit that
+    tells them apart is the part worth keeping."""
+
+    path = boltz_like(
+        tmp_path,
+        [
+            "HETATM 1 C C1 . LIG2 1 ? 0.0 0.0 0.0 1 K 80.0 1",
+            "HETATM 2 O O1 . LIG2 1 ? 1.4 0.0 0.0 1 K 80.0 1",
+            "HETATM 3 C C1 . LIG3 1 ? 8.0 0.0 0.0 1 S 80.0 1",
+            "HETATM 4 O O1 . LIG3 1 ? 9.4 0.0 0.0 1 S 80.0 1",
+        ],
+    )
+
+    names = [residue.id.resname for residue in read_mmcif(path).residues]
+
+    assert len(set(names)) == 2, names
+    assert all(len(name) <= 3 for name in names)
+    # The trailing number survives, so a reader can follow which is which.
+    assert {name[-1] for name in names} == {"2", "3"}
+
+
+def test_the_metal_is_not_given_the_generic_ligand_name(tmp_path):
+    """The case reported from a real prediction: the iron came out as LIG
+    while the cofactor beside it took L01."""
+
+    path = boltz_like(
+        tmp_path,
+        [
+            "HETATM 1 Fe FE1 . LIG1 1 ? 0.0 0.0 0.0 1 FE 80.0 1",
+            "HETATM 2 C C1 . LIG2 1 ? 5.0 0.0 0.0 1 K 80.0 1",
+            "HETATM 3 O O1 . LIG2 1 ? 6.4 0.0 0.0 1 K 80.0 1",
+        ],
+    )
+    structure = read_mmcif(path)
+
+    iron = next(r for r in structure.residues if r.atoms[0].element == "Fe")
+    assert iron.id.resname == "FE"
+    assert "element of its only atom" in " ".join(structure.warnings)

@@ -848,6 +848,12 @@ def _run_large_model(
         atomic_esp_values = _evaluate_atomic_esp_without_self(scf_result)
     except Exception as exc:
         raise McpbPySCFError(f"PySCF large-model ESP evaluation failed: {exc}") from exc
+    # xTB can be retried on a shorter grid when it is killed by the one it
+    # was given, so the fit goes against the grid that came back rather than
+    # the one that went in.
+    fit_points = esp_result.grid_coordinates_angstrom
+    if fit_points is None:
+        fit_points = grid.points
     grid_path = work_dir / "large_model_esp_grid.xyz"
     values_path = work_dir / "large_model_esp_values.txt"
     write_grid_xyz(grid, grid_path)
@@ -865,7 +871,7 @@ def _run_large_model(
     _validate_mk_adapter(
         output_mk_log,
         atom_count=len(elements),
-        fit_count=len(grid.points),
+        fit_count=len(fit_points),
     )
     stdout_path = work_dir / "large_embedded_scf.stdout.txt"
     stderr_path = work_dir / "large_embedded_scf.stderr.txt"
@@ -967,6 +973,12 @@ def _run_large_model_with_xtb(
     except XtbEspError as exc:
         raise McpbPySCFError(f"GFN2 large-model ESP failed: {exc}") from exc
 
+    # xTB can be retried on a shorter grid when it is killed by the one it
+    # was given, so the fit goes against the grid that came back rather than
+    # the one that went in.
+    fit_points = esp_result.grid_coordinates_angstrom
+    if fit_points is None:
+        fit_points = grid.points
     grid_path = work_dir / "large_model_esp_grid.xyz"
     values_path = work_dir / "large_model_esp_values.txt"
     write_grid_xyz(grid, grid_path)
@@ -978,13 +990,13 @@ def _run_large_model_with_xtb(
         output_mk_log,
         atomic_coordinates_angstrom=coordinates,
         atomic_esp_values=esp_result.atomic_esp_hartree_per_e,
-        fit_coordinates_angstrom=grid.points,
+        fit_coordinates_angstrom=fit_points,
         fit_esp_values=esp_result.esp_hartree_per_e,
     )
     _validate_mk_adapter(
         output_mk_log,
         atom_count=len(elements),
-        fit_count=len(grid.points),
+        fit_count=len(fit_points),
     )
     (work_dir / "gfn2_esp_report.json").write_text(
         json.dumps(
