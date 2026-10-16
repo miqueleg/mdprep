@@ -310,3 +310,30 @@ def test_qmmesp_rejects_inconsistent_scf_state(updates, expected):
         ManifestConfig.model_validate(data)
 
     assert expected in str(excinfo.value)
+
+
+def test_the_md_seed_is_drawn_per_run_unless_the_manifest_fixes_it():
+    """Replicates differ through their starting velocities.
+
+    A fixed default gave every replicate of a system the same velocities and
+    so the same trajectory, which is the one thing a set of replicates must
+    not be. The drawn value goes into the MD report, so a particular
+    replicate can be repeated by putting that number back in the manifest.
+    """
+
+    from mdprep.config.models import MolecularDynamicsConfig, ProductionMdConfig
+    from mdprep.md.roe_brooks import resolve_random_seed
+
+    base = MolecularDynamicsConfig(
+        enabled=True, production=ProductionMdConfig(steps=500000)
+    )
+    assert base.random_seed is None
+
+    drawn = {resolve_random_seed(base).random_seed for _ in range(8)}
+    assert len(drawn) > 1, "every run drew the same seed"
+    assert all(0 <= seed < 2**31 for seed in drawn)
+
+    pinned = MolecularDynamicsConfig(
+        enabled=True, production=ProductionMdConfig(steps=500000), random_seed=7
+    )
+    assert resolve_random_seed(pinned).random_seed == 7
