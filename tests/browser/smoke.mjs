@@ -114,6 +114,7 @@ try {
   // it hit the loop limit, which is why no metal structure was ever driven
   // here.
   let lastIndex = await page.evaluate(() => window.mdprepState.index);
+  const seenCounts = {};
   for (let i = 0; i < 80; i += 1) {
     const done = await page.evaluate(
       () => !document.getElementById("result-panel").classList.contains("hidden"),
@@ -156,6 +157,18 @@ try {
     await new Promise((resolve) => setTimeout(resolve, 150));
     // A rejected answer leaves the page where it was. Stop and say which
     // question, rather than spinning to the loop limit with nothing to show.
+    // Watching the index alone is not enough any more: a rejected answer
+    // now sends the page to the question the engine is objecting to, so the
+    // index keeps changing while the same two questions trade places.
+    seenCounts[question.id] = (seenCounts[question.id] || 0) + 1;
+    if (seenCounts[question.id] > 3) {
+      const error = await page
+        .$eval("#answer-error", (n) => n.textContent)
+        .catch(() => "");
+      throw new Error(
+        `looping on ${question.id || question.text}: ${error || "no value accepted"}`,
+      );
+    }
     const moved = await page.evaluate(() => window.mdprepState.index);
     if (moved === lastIndex) {
       const error = await page
