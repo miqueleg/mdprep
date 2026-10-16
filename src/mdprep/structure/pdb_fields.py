@@ -36,6 +36,10 @@ CHAIN_ID_WIDTH = 1
 ATOM_NAME_WIDTH = 4
 RESID_MIN = -999
 RESID_MAX = 9999
+# Columns 31-54 give each coordinate eight characters at three decimals, so
+# the sign costs a digit: -999.999 fits and -1000.0 does not.
+COORDINATE_MIN = -999.999
+COORDINATE_MAX = 9999.999
 
 # Chain ids a PDB file can hold, in the order they are handed out.
 CHAIN_ID_ALPHABET = (

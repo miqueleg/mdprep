@@ -153,6 +153,8 @@ def _check_fields_fit(atom: AtomRecord) -> None:
 
     from mdprep.structure.pdb_fields import (
         CHAIN_ID_WIDTH,
+        COORDINATE_MAX,
+        COORDINATE_MIN,
         RESID_MAX,
         RESID_MIN,
         RESNAME_WIDTH,
@@ -171,6 +173,14 @@ def _check_fields_fit(atom: AtomRecord) -> None:
             f"PDB record has {CHAIN_ID_WIDTH} for it, so writing it would shift "
             "every later field out of place."
         )
+    for axis in ("x", "y", "z"):
+        value = getattr(atom, axis)
+        if not COORDINATE_MIN <= value <= COORDINATE_MAX:
+            raise PdbFieldError(
+                f"Coordinate {axis}={value} does not fit the eight columns a "
+                f"PDB record gives it ({COORDINATE_MIN} to {COORDINATE_MAX}); "
+                "writing it would shift the occupancy and everything after it."
+            )
     if atom.resid < RESID_MIN:
         raise PdbFieldError(
             f"Residue number {atom.resid} is below the smallest a PDB record "
