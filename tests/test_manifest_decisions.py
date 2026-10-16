@@ -885,3 +885,59 @@ def test_the_answer_reaches_the_structure_the_refusal_was_about():
     assert [(item.residue.id.display(), item.requested_state) for item in resolved] == [
         ("A:ASP131", "ASH")
     ]
+
+
+def test_every_titratable_residue_that_becomes_a_bond_is_asked_about():
+    """The list the questions come from must be the list the bonds come from.
+
+    They were two different lists with two different radii: bonds are built
+    from the confirmed shell at 3.0 A, while the questions were generated
+    from the 2.6 A donor list. A side chain between the two was written into
+    the manifest as a bond and never asked about, so preparation refused it
+    in Colab exactly as before. boltz_far_donor.cif holds an aspartate at
+    2.8 A, which is in the gap.
+    """
+
+    from mdprep.config.decisions import COORDINATING_DONOR_STATES
+
+    for name in (
+        "boltz_far_donor.cif",
+        "boltz_wide_names.cif",
+        "boltz_smiles_ligands.cif",
+        "protein_histidine_zinc.pdb",
+    ):
+        plan = plan_decisions(DATA / name)
+        asked = {
+            decision.id.split(".donor_state.")[1]
+            for decision in plan.decisions
+            if ".donor_state." in decision.id
+        }
+        for decision in plan.decisions:
+            if not decision.id.endswith(".confirm_donors"):
+                continue
+            for target in decision.targets[1:]:  # exactly what becomes a bond
+                resname = target.resname.strip().upper()
+                if resname not in COORDINATING_DONOR_STATES:
+                    continue
+                key = "_".join(
+                    part
+                    for part in (
+                        target.chain.strip().lower(),
+                        resname.lower(),
+                        str(target.resid),
+                    )
+                    if part
+                )
+                assert key in asked, (
+                    f"{name}: {target.chain}:{resname}{target.resid} is bonded "
+                    "to the metal but nothing asks its protonation"
+                )
+
+
+def test_the_aspartate_in_the_radius_gap_is_asked_about():
+    plan = plan_decisions(DATA / "boltz_far_donor.cif")
+
+    asked = [d for d in plan.decisions if ".donor_state." in d.id]
+
+    assert [d.id for d in asked] == ["metal.f_fe_1_site.donor_state.a_asp_131"]
+    assert [c.value for c in asked[0].choices] == ["ASP", "ASH"]
