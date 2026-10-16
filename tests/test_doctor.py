@@ -58,26 +58,31 @@ def test_the_embedded_histidine_comparison_needs_openmm_and_xtb():
 
 def test_the_cluster_histidine_comparison_does_not_need_openmm():
     """The OpenMM energy check is on by default and would mask this, so it is
-    turned off here to isolate what the tautomer comparison itself needs."""
+    turned off here to isolate what the tautomer comparison itself needs.
+
+    So is building the hydrogenated environment, which both embeddings do
+    and which brings PDBFixer and OpenMM with it whichever one is chosen.
+    This is about the difference between them.
+    """
 
     without_check = {"run_openmm_energy_check": False}
-    cluster = required_packages(
-        _manifest(
-            validation=without_check,
-            protonation={
-                "method": "propka_xtb_his",
-                "histidine": {"xtb": {"embedding": "cluster"}},
+
+    def histidine(embedding: str) -> dict[str, object]:
+        return {
+            "method": "propka_xtb_his",
+            "histidine": {
+                "xtb": {
+                    "embedding": embedding,
+                    "add_missing_protein_hydrogens": False,
+                }
             },
-        )
+        }
+
+    cluster = required_packages(
+        _manifest(validation=without_check, protonation=histidine("cluster"))
     )
     embedded = required_packages(
-        _manifest(
-            validation=without_check,
-            protonation={
-                "method": "propka_xtb_his",
-                "histidine": {"xtb": {"embedding": "qmmm"}},
-            },
-        )
+        _manifest(validation=without_check, protonation=histidine("qmmm"))
     )
 
     assert "xtb" in cluster and "openmm" not in cluster
@@ -204,3 +209,34 @@ def test_a_site_that_asked_for_gfn2_or_dft_raises_no_gxtb_note(monkeypatch):
     assert doctor.gxtb_note(_metal_manifest(xtb={"model": "gfn2"})) is None
     assert doctor.gxtb_note(_metal_manifest(hessian_backend="pyscf")) is None
     assert doctor.gxtb_note(_manifest()) is None
+
+
+def test_the_hydrogenated_environment_brings_pdbfixer_whichever_embedding():
+    """The tautomer comparison needs hydrogens on the residues around the
+    histidine, and builds them with PDBFixer unless told the input already
+    has them. The setting defaults to on and nothing read it, so a run whose
+    structure needed no repair installed no PDBFixer and stopped at
+    protonation -- after the whole conda solve."""
+
+    for embedding in ("cluster", "qmmm"):
+        packages = required_packages(
+            _manifest(
+                protonation={
+                    "method": "propka_xtb_his",
+                    "histidine": {"xtb": {"embedding": embedding}},
+                }
+            )
+        )
+        assert "pdbfixer" in packages, embedding
+
+    off = required_packages(
+        _manifest(
+            protonation={
+                "method": "propka_xtb_his",
+                "histidine": {
+                    "xtb": {"add_missing_protein_hydrogens": False},
+                },
+            }
+        )
+    )
+    assert "pdbfixer" not in off
