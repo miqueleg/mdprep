@@ -1410,7 +1410,19 @@ def _metal_decisions(
     )
     decisions.extend(
         _metal_donor_protonation_decisions(
-            site_id, donors, confirmed=confirmed, metal_display=display
+            site_id,
+            # The residues that become bonds, which is what the build
+            # refuses over -- not the shorter donor list. The two use
+            # different radii (3.0 A against 2.6 A), so asking about donors
+            # left a side chain between them bonded and unasked about,
+            # which is the gap that sent the refusal to Colab.
+            neighbours,
+            distances={
+                donor_residue.id.display(): (atom.name, distance)
+                for donor_residue, atom, distance in donors
+            },
+            confirmed=confirmed,
+            metal_display=display,
         )
     )
     return decisions
@@ -1434,8 +1446,9 @@ COORDINATING_DONOR_STATES: dict[str, tuple[tuple[str, str], ...]] = {
 
 def _metal_donor_protonation_decisions(
     site_id: str,
-    donors: Sequence[tuple[ResidueRecord, Any, float]],
+    coordinators: Sequence[ResidueRecord],
     *,
+    distances: Mapping[str, tuple[str, float]],
     confirmed: tuple[Condition, ...],
     metal_display: str,
 ) -> list[Decision]:
@@ -1453,7 +1466,7 @@ def _metal_donor_protonation_decisions(
 
     decisions: list[Decision] = []
     seen: set[str] = set()
-    for donor_residue, atom, distance in donors:
+    for donor_residue in coordinators:
         resname = donor_residue.id.resname.strip().upper()
         states = COORDINATING_DONOR_STATES.get(resname)
         if states is None:
@@ -1462,6 +1475,7 @@ def _metal_donor_protonation_decisions(
         if donor_id in seen:
             continue
         seen.add(donor_id)
+        atom_name, distance = distances.get(donor_residue.id.display(), ("", 0.0))
         decisions.append(
             Decision(
                 id=f"metal.{site_id}.donor_state.{donor_id}",
@@ -1487,8 +1501,15 @@ def _metal_donor_protonation_decisions(
                     "without it."
                 ),
                 evidence=(
-                    f"{donor_residue.id.display()} {atom.name} at "
-                    f"{distance:.2f} A from {metal_display}",
+                    (
+                        f"{donor_residue.id.display()} {atom_name} at "
+                        f"{distance:.2f} A from {metal_display}"
+                    )
+                    if atom_name
+                    else (
+                        f"{donor_residue.id.display()} is bonded to "
+                        f"{metal_display} in the confirmed shell"
+                    ),
                 ),
                 targets=(_target_for(donor_residue),),
                 focus="targets",
