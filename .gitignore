@@ -24,3 +24,5 @@ package-lock.json
 
 # Tutorial structures downloaded on demand.
 tutorials/
+web/vendor/
+*.zip
