@@ -1124,34 +1124,6 @@ STANDARD_DONOR_FORMAL_CHARGE = {
 }
 
 
-def model_charge_arithmetic(
-    metal_charge: int,
-    donor_residues: Sequence[ResidueRecord],
-) -> tuple[int | None, list[str]]:
-    """Capped-model charge implied by standard donor states, and its terms.
-
-    Returns ``None`` when a donor's formal charge is not something that can be
-    read off a residue name -- an organic cofactor, for instance -- because the
-    sum is then incomplete and must not be presented as an answer.
-    """
-
-    terms = [f"metal {metal_charge:+d}"]
-    total = metal_charge
-    complete = True
-    for residue in donor_residues:
-        name = residue.id.resname.strip().upper()
-        charge = STANDARD_DONOR_FORMAL_CHARGE.get(_normalise_ion_resname(name))
-        if charge is None:
-            charge = STANDARD_DONOR_FORMAL_CHARGE.get(name)
-        if charge is None:
-            terms.append(f"{residue.id.display()} ?")
-            complete = False
-            continue
-        terms.append(f"{residue.id.display()} {charge:+d}")
-        total += charge
-    return (total if complete else None), terms
-
-
 def _metal_decisions(
     residue: ResidueRecord,
     all_residues: Sequence[ResidueRecord],

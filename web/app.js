@@ -120,6 +120,22 @@ def mdprep_proposals(answers_json):
                        for key, value in values.items()})
 
 
+def _readable_build_error(exc):
+    """One line a student can act on, out of whatever was raised."""
+
+    name = type(exc).__name__
+    if name == "ValidationError":
+        # pydantic prints a block per failure; the message is the useful part.
+        parts = []
+        for error in getattr(exc, "errors", lambda: [])():
+            location = ".".join(str(piece) for piece in error.get("loc", ()))
+            message = str(error.get("msg", "")).removeprefix("Value error, ")
+            parts.append(f"{location}: {message}" if location else message)
+        if parts:
+            return "This combination of answers is not a valid manifest. " + "; ".join(parts[:3])
+    return f"{name}: {exc}"
+
+
 def mdprep_build(answers_json, mdprep_spec):
     plan = _PLAN["plan"]
     answers = json.loads(answers_json)
@@ -130,6 +146,17 @@ def mdprep_build(answers_json, mdprep_spec):
         manifest = build_manifest(plan, answers)
     except DecisionError as exc:
         return json.dumps({"ok": False, "error": str(exc)})
+    except Exception as exc:
+        # Anything else, and there is plenty: the manifest is validated by
+        # pydantic on the way out, and a ValidationError is not a
+        # DecisionError. Three charge methods and two metal answers reach
+        # one, and catching only DecisionError meant it escaped Python,
+        # escaped onNext, and left Finish doing nothing at all -- no
+        # message, no manifest, the same question forever.
+        return json.dumps({
+            "ok": False,
+            "error": _readable_build_error(exc),
+        })
     return json.dumps({
         "ok": True,
         "yaml": text,
@@ -154,19 +181,52 @@ async function loadStructure(text, name, pdbId = null) {
     return;
   }
   setStatus("Reading the structure…");
-  state.structureText = text;
-  state.structureName = name;
-  state.pdbId = pdbId;
+  // The file is not adopted until it has been read. Setting it first and
+  // returning on failure left the rejected file's name on a plan built from
+  // the previous one, and the bundle went out holding one structure while
+  // its manifest named the other -- which Colab cannot run, and which looks
+  // like nothing went wrong, because the red status is on a panel the
+  // student has already scrolled past.
+  const previous = {
+    text: state.structureText,
+    name: state.structureName,
+    pdbId: state.pdbId,
+  };
+  let plan;
   try {
     const planFn = state.pyodide.globals.get("mdprep_plan");
     const planJson = planFn(text, name);
     planFn.destroy();
-    state.plan = JSON.parse(planJson);
-    state.viewerText = state.plan.structure_pdb || null;
+    plan = JSON.parse(planJson);
   } catch (error) {
+    state.structureText = previous.text;
+    state.structureName = previous.name;
+    state.pdbId = previous.pdbId;
     setStatus(readableLoadError(error), true);
     return;
   }
+  const atoms = ((plan.findings || {}).total_atoms) || 0;
+  if (!atoms) {
+    // A text file named .pdb parses to nothing and used to go all the way
+    // to a manifest and a set of Colab cells.
+    state.structureText = previous.text;
+    state.structureName = previous.name;
+    state.pdbId = previous.pdbId;
+    setStatus(
+      `${name} contains no atoms. If it is an mmCIF, give it a .cif name; ` +
+        "otherwise check that the file is a structure.",
+      true,
+    );
+    return;
+  }
+  state.structureText = text;
+  state.structureName = name;
+  state.pdbId = pdbId;
+  state.plan = plan;
+  state.viewerText = plan.structure_pdb || null;
+  // A new structure is a new session: nothing from the last one may leak
+  // into this bundle, including whether it was already downloaded.
+  state.downloaded = false;
   state.answers = {};
   state.order = [];
   state.index = 0;
@@ -478,9 +538,20 @@ function buildManifest() {
     if (given !== undefined && given !== "") payload[decision.id] = given;
   });
   const buildFn = state.pyodide.globals.get("mdprep_build");
-  const resultJson = buildFn(JSON.stringify(payload), MDPREP_INSTALL);
-  buildFn.destroy();
-  const result = JSON.parse(resultJson);
+  let result;
+  try {
+    const resultJson = buildFn(JSON.stringify(payload), MDPREP_INSTALL);
+    result = JSON.parse(resultJson);
+  } catch (error) {
+    // Belt and braces for the Python side's own catch-all: whatever goes
+    // wrong, the student gets a sentence rather than a button that stopped
+    // responding.
+    console.error(error);
+    result = { ok: false, error: readableLoadError(error).replace(
+      "mdprep could not read that structure: ", "") };
+  } finally {
+    buildFn.destroy();
+  }
 
   if (!result.ok) {
     // renderCurrentQuestion clears answer-error on its way in, so setting it
@@ -548,7 +619,9 @@ function renderColabCell(result) {
       "import pathlib, urllib.request",
       "",
       "urllib.request.urlretrieve(",
-      `    "https://files.rcsb.org/download/${state.pdbId}.pdb", "${state.structureName}"`,
+      // The suffix that worked here, not an assumed .pdb: a large entry is
+      // mmCIF only, and the cell would otherwise fetch a URL that 404s.
+      `    "https://files.rcsb.org/download/${state.structureName}", "${state.structureName}"`,
       ")",
       `pathlib.Path("${manifestName}").write_text("""`,
       manifestYaml.trimEnd(),
@@ -658,9 +731,25 @@ function wire() {
     }
     setStatus(`Downloading ${id} from RCSB…`);
     try {
-      const response = await fetch(`https://files.rcsb.org/download/${id}.pdb`);
-      if (!response.ok) throw new Error(`RCSB returned ${response.status}`);
-      await loadStructure(await response.text(), `${id}.pdb`, id);
+      // Large entries -- ribosomes, capsids -- are mmCIF only, and the PDB
+      // download 404s for them. That is indistinguishable from a wrong ID,
+      // and this page reads mmCIF perfectly well, so ask for it before
+      // giving up. Colab re-fetches by the same name, so the suffix that
+      // worked here is the one recorded.
+      let response = await fetch(`https://files.rcsb.org/download/${id}.pdb`);
+      let suffix = "pdb";
+      if (!response.ok) {
+        response = await fetch(`https://files.rcsb.org/download/${id}.cif`);
+        suffix = "cif";
+      }
+      if (!response.ok) {
+        throw new Error(
+          response.status === 404
+            ? `RCSB has no entry ${id}`
+            : `RCSB returned ${response.status}`,
+        );
+      }
+      await loadStructure(await response.text(), `${id}.${suffix}`, id);
     } catch (error) {
       setStatus(`Could not download ${id}: ${error.message}`, true);
     }
@@ -675,7 +764,14 @@ function wire() {
   el("next").addEventListener("click", onNext);
   el("back").addEventListener("click", onBack);
   el("restart").addEventListener("click", () => {
+    // Going back to question one with every answer still held is not
+    // starting over: a student who clicks this to try different chemistry
+    // has to press Next through twenty stale answers, and the project name
+    // still says the last structure. Keep the structure, drop the answers.
+    state.answers = {};
+    state.order = [];
     state.index = 0;
+    state.downloaded = false;
     hide("result-panel");
     show("question-panel");
     renderCurrentQuestion();
@@ -692,7 +788,17 @@ function wire() {
   el("download-bundle").addEventListener("click", downloadBundle);
 
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Enter" && !el("question-panel").classList.contains("hidden")) {
+    if (event.key !== "Enter") return;
+    // Enter in the PDB-ID box fetches that entry. The handler is on the
+    // document, so without this it answered whatever chemistry question was
+    // on screen behind the box, accepting its default, and the ID was never
+    // fetched at all.
+    if (event.target && event.target.id === "pdb-id") {
+      event.preventDefault();
+      el("fetch-pdb").click();
+      return;
+    }
+    if (!el("question-panel").classList.contains("hidden")) {
       event.preventDefault();
       onNext();
     }

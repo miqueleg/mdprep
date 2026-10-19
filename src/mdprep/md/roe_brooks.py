@@ -111,9 +111,16 @@ def restrained_atom_indices(
     indices: list[int] = []
     for atom in topology.atoms():
         name = atom.name.strip()
+        # The element decides when the topology states one. Falling through
+        # to the name whenever it is present makes a mercury or cadmium ion
+        # a hydrogen -- HG1, CD1 -- and a metal counted as a hydrogen is one
+        # that is left free to move where the heavy atoms are pinned, and
+        # that no heavy-atom displacement check can see.
         is_hydrogen = (
-            atom.element is not None and atom.element.symbol == "H"
-        ) or name.startswith("H")
+            atom.element.symbol == "H"
+            if atom.element is not None
+            else name.startswith("H")
+        )
         residue_name = atom.residue.name.strip().upper()
         if (
             is_hydrogen

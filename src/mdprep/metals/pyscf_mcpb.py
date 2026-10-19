@@ -848,12 +848,9 @@ def _run_large_model(
         atomic_esp_values = _evaluate_atomic_esp_without_self(scf_result)
     except Exception as exc:
         raise McpbPySCFError(f"PySCF large-model ESP evaluation failed: {exc}") from exc
-    # xTB can be retried on a shorter grid when it is killed by the one it
-    # was given, so the fit goes against the grid that came back rather than
-    # the one that went in.
-    fit_points = esp_result.grid_coordinates_angstrom
-    if fit_points is None:
-        fit_points = grid.points
+    # PySCF evaluates the grid it was given, all of it. Only the xTB branch
+    # can come back with a shorter one.
+    fit_points = grid.points
     grid_path = work_dir / "large_model_esp_grid.xyz"
     values_path = work_dir / "large_model_esp_values.txt"
     write_grid_xyz(grid, grid_path)
@@ -925,6 +922,18 @@ def _run_large_model(
     )
 
 
+def _write_points_xyz(points, path) -> None:
+    """The grid these ESP values belong to, which after an xTB retry is the
+    shortened one. Writing the grid that went in left the recorded grid and
+    the recorded values different lengths, describing no single calculation.
+    """
+
+    lines = [str(len(points)), "mdprep ESP grid"]
+    for point in points:
+        lines.append(f"X {point[0]:.8f} {point[1]:.8f} {point[2]:.8f}")
+    Path(path).write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def _run_large_model_with_xtb(
     *,
     input_pdb: Path,
@@ -981,7 +990,11 @@ def _run_large_model_with_xtb(
         fit_points = grid.points
     grid_path = work_dir / "large_model_esp_grid.xyz"
     values_path = work_dir / "large_model_esp_values.txt"
-    write_grid_xyz(grid, grid_path)
+    # The grid these values are for, which is the shortened one when xTB had
+    # to be retried. Writing the original left the recorded grid and the
+    # recorded values different lengths, so the pair no longer described one
+    # calculation and nothing noticed.
+    _write_points_xyz(fit_points, grid_path)
     values_path.write_text(
         "".join(f"{float(value):.12e}\n" for value in esp_result.esp_hartree_per_e),
         encoding="utf-8",

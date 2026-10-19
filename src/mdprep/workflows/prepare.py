@@ -414,9 +414,11 @@ def prepare_system(
             prmtop=tleap_result.final_outputs.prmtop,
             inpcrd=tleap_result.final_outputs.inpcrd,
             pdb=tleap_result.final_outputs.pdb,
-            # Everything parmchk2 and MCPB wrote for this run, so a guessed
-            # parameter in any of them is seen.
-            frcmod_paths=sorted(output_dir.rglob("*.frcmod")),
+            # The frcmod files the final topology is built from. Sweeping
+            # the whole tree also picks up the provisional AM1-BCC ones and
+            # MCPB's pre-refit intermediate, so a guessed parameter in a
+            # file that never reaches the build could fail the run.
+            frcmod_paths=final_frcmod_paths(output_dir),
             **validation_extras,
         )
         write_validation_reports(
@@ -476,6 +478,24 @@ def prepare_system(
         metal_result=metal_result,
         tleap_result=tleap_result,
         md_result=md_result,
+    )
+
+
+def final_frcmod_paths(output_dir: Path) -> list[Path]:
+    """The frcmod files the final topology is actually built from.
+
+    Not every frcmod under the output directory: the provisional AM1-BCC
+    pass writes its own for ligands whose charges are later refitted, and
+    MCPB writes a pre-refit intermediate beside its final one. A parameter
+    parmchk2 had to guess in one of those is not in the built system, and
+    failing the run on it would be failing on a file that was thrown away.
+    """
+
+    discarded = ("provisional", "_pre.frcmod")
+    return sorted(
+        path
+        for path in output_dir.rglob("*.frcmod")
+        if not any(mark in str(path.relative_to(output_dir)) for mark in discarded)
     )
 
 

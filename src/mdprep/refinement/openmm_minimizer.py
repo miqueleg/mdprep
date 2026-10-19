@@ -113,9 +113,16 @@ def run_openmm_refinement(
     hydrogens: list[int] = []
     heavy: list[int] = []
     for atom in topology.atoms():
+        # The element decides when the topology states one. Falling through
+        # to the name whenever it is present makes a mercury or cadmium ion
+        # a hydrogen -- HG1, CD1 -- and a metal counted as a hydrogen is one
+        # that is left free to move where the heavy atoms are pinned, and
+        # that no heavy-atom displacement check can see.
         is_hydrogen = (
-            atom.element is not None and atom.element.symbol == "H"
-        ) or atom.name.strip().startswith("H")
+            atom.element.symbol == "H"
+            if atom.element is not None
+            else atom.name.strip().startswith("H")
+        )
         (hydrogens if is_hydrogen else heavy).append(atom.index)
     if not hydrogens:
         raise OpenmmRefinementError(
