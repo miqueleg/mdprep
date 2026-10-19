@@ -24,7 +24,7 @@ from mdprep.leap.residues import (
     LeapResidueError,
     append_disulfide_conect_records,
     disulfide_bond_commands,
-    plan_ligand_residue_renames,
+    check_ligand_residue_names,
     prepare_leap_input_pdb,
     validate_ligand_parameter_files,
 )
@@ -636,10 +636,12 @@ def _build_qmmesp_provisional_system(
     work_dir = output / "qmmesp" / "provisional_leap"
     input_dir = work_dir / "input"
     work_dir.mkdir(parents=True, exist_ok=True)
-    ligand_residue_renames = plan_ligand_residue_renames(
-        manifest=manifest,
-        structure=structure,
-    )
+    check_ligand_residue_names(manifest=manifest, structure=structure)
+    # No renames: a ligand whose residue name a force field already defines
+    # is refused above, so this is always empty. The parameter survives
+    # because removing it reaches into the MCPB builder and the topology
+    # validator, whose tests need tleap and MCPB.py to run.
+    ligand_residue_renames = ()
     leap_input = prepare_leap_input_pdb(
         structure,
         input_dir / "provisional_input.pdb",

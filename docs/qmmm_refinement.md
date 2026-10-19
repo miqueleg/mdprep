@@ -130,12 +130,27 @@ The total QM charge is derived and reported as:
 - formal charges of the protonated coordinating protein residues, including
   recognized charged termini.
 
-Multiplicity is assigned as follows:
+Multiplicity is **not** assigned. The QM region is one quantum system with one
+spin state, and that state is the user's to state:
 
-- all components singlet: total multiplicity 1;
-- exactly one open-shell component: that component's multiplicity;
-- multiple open-shell components: `total_qm_multiplicity` is mandatory because
-  the spin coupling cannot be inferred safely.
+- all components singlet: total multiplicity 1, which is the only value it can
+  take, so nothing is asked;
+- any open-shell component: `total_qm_multiplicity` is mandatory.
+
+One open-shell component used to be enough for mdprep to take that component's
+own multiplicity as the region's. For a lone high-spin Fe(II) that is the
+right answer, and it was right by accident: it holds only while the ion is the
+single unpaired centre and nothing couples to it, and nothing in a manifest
+can check either. Put an Fe(III) and a substrate radical in one region and the
+total is 5 or 7 depending on how the spins align -- a fact about the chemistry,
+not a function of the parts. A wrong spin state gives a converged, wrong
+answer, silently, which is the failure mode worth paying a question for.
+
+The web builder asks it as `refinement.total_qm_multiplicity`, once, with the
+usual value filled in and the term it came from shown beside it (`site = 5,
+and nothing else in the region is open shell`), so it can be checked rather
+than trusted. Where two components are open-shell it proposes nothing, because
+there is nothing to propose.
 
 ## Manifest example
 

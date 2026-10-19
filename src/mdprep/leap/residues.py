@@ -16,10 +16,8 @@ from mdprep.ambertools.mol2 import (
 from mdprep.config.models import ManifestConfig
 from mdprep.protonation.apply import ProtonationRecord, ProtonationResult
 from mdprep.structure.classify import (
-    BULK_ION_ELEMENTS,
-    COORDINATING_METAL_ELEMENTS,
-    STANDARD_PROTEIN_RESIDUES,
-    WATER_RESIDUES,
+    LEAP_RESERVED_RESIDUE_NAMES,
+    describe_reserved_residue_names,
 )
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord
 from mdprep.structure.pdb import read_pdb
@@ -97,37 +95,6 @@ class DisulfideBondCommand:
         }
 
 
-# Residue names tleap already answers to once the protein, water and ion force
-# fields are sourced.  `loadpdb` resolves every residue by name against those
-# templates, and for an amino-acid name it maps the name to its terminal form
-# first -- a lysine that opens a chain becomes NLYS -- which nothing a manifest
-# loads can intercept.  So a free amino acid declared as a ligand is built as a
-# piece of protein: tleap stops on the first ligand-named hydrogen it cannot
-# type, and `LYS = <ligand unit>` would meanwhile point every real lysine in
-# the protein at the ligand.
-_NUCLEIC_RESIDUES = (
-    {f"D{base}{end}" for base in "ACGT" for end in ("", "3", "5", "N")}
-    | {f"R{base}{end}" for base in "ACGU" for end in ("", "3", "5", "N")}
-    | set("ACGTU")
-)
-
-_AMBER_ION_RESIDUES = (
-    COORDINATING_METAL_ELEMENTS
-    | BULK_ION_ELEMENTS
-    | {f"{element}{charge}" for element in COORDINATING_METAL_ELEMENTS for charge in ("1", "2", "3")}
-    | {f"{element}+" for element in BULK_ION_ELEMENTS}
-    | {f"{element}-" for element in BULK_ION_ELEMENTS}
-)
-
-LEAP_RESERVED_RESIDUE_NAMES = frozenset(
-    STANDARD_PROTEIN_RESIDUES
-    | {f"{end}{name}" for end in ("N", "C") for name in STANDARD_PROTEIN_RESIDUES}
-    | WATER_RESIDUES
-    | _NUCLEIC_RESIDUES
-    | _AMBER_ION_RESIDUES
-)
-
-
 @dataclass(frozen=True)
 class LigandResidueRename:
     """A ligand renamed for tleap because its own name was already taken."""
@@ -156,47 +123,52 @@ class LigandResidueRename:
         }
 
 
-def plan_ligand_residue_renames(
+def reserved_ligand_residue_names(
     *,
     manifest: ManifestConfig,
     structure: PdbStructure,
-) -> list[LigandResidueRename]:
-    """Give every declared ligand a residue name tleap has not already claimed.
+) -> list[tuple[str, str]]:
+    """Declared ligands whose residue name an Amber force field already owns.
 
-    Only a ligand whose name collides is renamed; the rest keep the name the
-    deposition gave them, which is what a reader of the prepared system
-    expects to see.
+    Returns ``(ligand_id, resname)`` pairs, in manifest order.
     """
 
-    taken = set(LEAP_RESERVED_RESIDUE_NAMES)
-    taken.update(residue.id.resname for residue in structure.residues)
-    renames: list[LigandResidueRename] = []
+    collisions: list[tuple[str, str]] = []
     for ligand in manifest.ligands:
         try:
             residue = resolve_residue_selector(structure, ligand.selector.model_dump())
         except SelectorError:
             # The ligand stage reports an unresolvable selector in full.
             continue
-        if residue.id.resname not in LEAP_RESERVED_RESIDUE_NAMES:
-            continue
-        tleap_resname = _available_residue_name(residue.id.resname, taken)
-        taken.add(tleap_resname)
-        renames.append(
-            LigandResidueRename(
-                ligand_id=ligand.id,
-                chain_id=residue.id.chain_id,
-                resid=residue.id.resid,
-                icode=residue.id.icode,
-                original_resname=residue.id.resname,
-                tleap_resname=tleap_resname,
-                reason=(
-                    f"{residue.id.resname} is a residue the Amber force fields already "
-                    "define, so tleap would build this ligand from the protein template "
-                    "instead of its own parameters."
-                ),
-            )
-        )
-    return renames
+        if residue.id.resname in LEAP_RESERVED_RESIDUE_NAMES:
+            collisions.append((ligand.id, residue.id.resname))
+    return collisions
+
+
+def check_ligand_residue_names(
+    *,
+    manifest: ManifestConfig,
+    structure: PdbStructure,
+) -> None:
+    """Refuse a ligand whose residue name tleap has already claimed.
+
+    mdprep used to rename such a ligand for the build -- LYS became LY1 --
+    which kept tleap happy but left the prepared system describing a residue
+    under a name the input never used. Everything downstream that reads a
+    residue by name then had to know about the substitution: the MCPB site
+    builder, the QM/MM point-charge reader, the refinement selection. Each of
+    those was a place the rename could be missed, silently, and some of them
+    missed it.
+
+    The honest answer is that nobody can tell what a residue called LYS is
+    meant to be. Say so and stop, so the fix happens once, in the input,
+    rather than being guessed at in six places afterwards.
+    """
+
+    collisions = reserved_ligand_residue_names(manifest=manifest, structure=structure)
+    if not collisions:
+        return
+    raise LeapResidueError(describe_reserved_residue_names(collisions))
 
 
 def ligand_rename_candidates(original: str) -> list[str]:

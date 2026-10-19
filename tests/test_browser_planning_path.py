@@ -95,3 +95,26 @@ def test_planning_path_does_not_import_the_cli_stack():
 def test_browser_safe_packages_are_actually_installed(package):
     """Guards the allowlist itself against naming something that is not used."""
     __import__(package)
+
+
+def test_a_manifest_the_engine_rejects_is_reported_not_swallowed():
+    """The page catches DecisionError; the manifest is validated by pydantic
+    on the way out and a ValidationError is not one. Three charge methods
+    and two metal answers reach one, and it escaped Python, escaped the
+    click handler, and left Finish doing nothing at all -- no message, no
+    manifest, the same question forever."""
+
+    import json
+    import re
+    from pathlib import Path
+
+    source = Path("web/app.js").read_text(encoding="utf-8")
+    python_block = source[source.index("def mdprep_build") :]
+    # Everything, not just the one exception type it used to name.
+    assert "except Exception as exc:" in python_block
+    assert "_readable_build_error" in python_block
+    # And the JavaScript side guards the call as well, so a failure that
+    # never reaches Python still reaches the student.
+    assert re.search(r"try\s*\{[^}]*mdprep_build|buildFn\(", source)
+    build = source[source.index("function buildManifest") :]
+    assert "catch (error)" in build, "the Pyodide call must be guarded"

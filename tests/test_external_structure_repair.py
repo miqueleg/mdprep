@@ -165,7 +165,7 @@ def test_temporary_hydrogenation_leaves_an_already_hydrogenated_residue_alone(tm
         work_dir=tmp_path / "temporary_hydrogenation",
     )
 
-    assert result.preserved_residues == ("A:LYS301",)
+    assert result.preserved_residues == ("A:LIG301",)
     rebuilt = next(
         residue for residue in result.structure.residues if residue.id.resid == 301
     )

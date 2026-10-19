@@ -307,3 +307,17 @@ footer code {
     height: 320px;
   }
 }
+
+/* ------------------------------------------------- reserved residue names */
+
+/* The refusal the page shows for a ligand whose residue name an Amber force
+   field already defines, with the rename offered as an action. */
+.muted {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 10px 0 0;
+}
+
+#rename-apply {
+  margin-top: 14px;
+}

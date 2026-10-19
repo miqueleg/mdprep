@@ -52,7 +52,9 @@ def answer_blocking(plan: DecisionPlan, **overrides: object) -> dict[str, object
             answers[decision.id] = "all"
         elif decision.id.endswith(".confirm_donors"):
             answers[decision.id] = False
-        elif decision.id.endswith(".multiplicity"):
+        elif decision.id.endswith("multiplicity"):
+            # Covers the per-ion question and the QM region total, which
+            # mdprep asks rather than deriving from the ions.
             answers[decision.id] = 1
         elif decision.id.endswith(".model_charge"):
             answers[decision.id] = 0
@@ -294,6 +296,7 @@ def test_a_confirmed_coordination_shell_is_generated():
         "metal.z_zn_500_site.charge": 2,
         "metal.z_zn_500_site.confirm_donors": True,
         "metal.z_zn_500_site.multiplicity": 1,
+        "refinement.total_qm_multiplicity": 1,
         "metal.z_zn_500_site.model_charge": 2,
     }
 
@@ -659,7 +662,7 @@ def test_a_ligand_that_already_has_hydrogens_is_neither_asked_nor_reported():
     assert plan.findings["ligands_without_hydrogens"] == []
 
 
-def test_the_capped_model_charge_is_summed_from_answers_already_given():
+def test_the_capped_model_charge_is_summed_from_answers_already_given(besd_structure):
     """mdprep asks for the metal's oxidation state and each ligand's net
     charge, so by the time it asks for the model charge it has the terms.
     Making the user add them up again invites an arithmetic slip that gives
@@ -667,9 +670,7 @@ def test_the_capped_model_charge_is_summed_from_answers_already_given():
 
     from mdprep.config.decisions import proposed_model_charge
 
-    plan = plan_decisions(BESD) if (BESD := Path("examples/tutorials/besd_6nie/6NIE.pdb")).is_file() else None
-    if plan is None:
-        pytest.skip("the vendored reference structure is missing")
+    plan = plan_decisions(besd_structure)
 
     value, terms = proposed_model_charge(
         plan,
@@ -685,16 +686,13 @@ def test_the_capped_model_charge_is_summed_from_answers_already_given():
     assert " ".join(terms) == "FE2 +2 AKG304 -2 HIS204 +0 HIS137 +0 CL303 -1"
 
 
-def test_a_bidentate_cofactor_is_counted_once():
+def test_a_bidentate_cofactor_is_counted_once(besd_structure):
     """alpha-ketoglutarate donates two oxygens and appears twice among the
     donors; counting its charge twice would be off by its whole charge."""
 
     from mdprep.config.decisions import proposed_model_charge
 
-    structure = Path("examples/tutorials/besd_6nie/6NIE.pdb")
-    if not structure.is_file():
-        pytest.skip("the vendored reference structure is missing")
-    plan = plan_decisions(structure)
+    plan = plan_decisions(besd_structure)
     confirm = plan.by_id("metal.a_fe2_302_site.confirm_donors")
 
     donating_atoms = [t for t in confirm.targets[1:] if t.resname == "AKG"]
@@ -708,15 +706,12 @@ def test_a_bidentate_cofactor_is_counted_once():
     assert len([term for term in terms if term.startswith("AKG")]) == 1
 
 
-def test_no_charge_is_proposed_while_a_term_is_still_unknown():
+def test_no_charge_is_proposed_while_a_term_is_still_unknown(besd_structure):
     """Half a sum is worse than no suggestion: it looks like an answer."""
 
     from mdprep.config.decisions import proposed_answers, proposed_model_charge
 
-    structure = Path("examples/tutorials/besd_6nie/6NIE.pdb")
-    if not structure.is_file():
-        pytest.skip("the vendored reference structure is missing")
-    plan = plan_decisions(structure)
+    plan = plan_decisions(besd_structure)
 
     # The cofactor's charge has not been given yet.
     value, terms = proposed_model_charge(
@@ -870,6 +865,7 @@ def test_the_answer_reaches_the_structure_the_refusal_was_about():
         "metal.f_fe_1_site.charge": 2,
         "metal.f_fe_1_site.confirm_donors": True,
         "metal.f_fe_1_site.multiplicity": 5,
+        "refinement.total_qm_multiplicity": 5,
         "molecular_dynamics.enabled": False,
         "metal.f_fe_1_site.donor_state.a_asp_131": "ASH",
     }

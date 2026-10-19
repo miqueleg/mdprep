@@ -17,6 +17,7 @@ from mdprep.config.loader import load_manifest
 from mdprep.external.runner import run_command
 from mdprep.leap.builder import TLeapBuildError, TLeapStageResult, run_tleap_stage
 from mdprep.leap.report import write_tleap_reports
+from mdprep.leap.residues import LeapResidueError, check_ligand_residue_names
 from mdprep.ligands.report import write_ligand_reports
 from mdprep.ligands.workflow import LigandStageResult, LigandWorkflowError, run_ligand_stage
 from mdprep.metals.report import write_metal_reports
@@ -151,6 +152,18 @@ def prepare_system(
     result = normalize_structure_stage(manifest, output_path=normalized_pdb)
     write_pdb(result.normalized_structure, normalized_pdb)
     result.output_path = normalized_pdb
+
+    # Before anything expensive: a ligand named after a force field residue
+    # cannot be built, and the three builders that would notice are all on
+    # the far side of protonation, ligand parameterisation and the metal
+    # site. Say so now, against the normalized structure, so the user is not
+    # told after an hour of quantum chemistry.
+    try:
+        check_ligand_residue_names(
+            manifest=manifest, structure=result.normalized_structure
+        )
+    except LeapResidueError as exc:
+        raise PrepareWorkflowError(str(exc)) from exc
 
     report = write_structure_reports(
         result,
@@ -414,9 +427,11 @@ def prepare_system(
             prmtop=tleap_result.final_outputs.prmtop,
             inpcrd=tleap_result.final_outputs.inpcrd,
             pdb=tleap_result.final_outputs.pdb,
-            # Everything parmchk2 and MCPB wrote for this run, so a guessed
-            # parameter in any of them is seen.
-            frcmod_paths=sorted(output_dir.rglob("*.frcmod")),
+            # The frcmod files the final topology is built from. Sweeping
+            # the whole tree also picks up the provisional AM1-BCC ones and
+            # MCPB's pre-refit intermediate, so a guessed parameter in a
+            # file that never reaches the build could fail the run.
+            frcmod_paths=final_frcmod_paths(output_dir),
             **validation_extras,
         )
         write_validation_reports(
@@ -476,6 +491,24 @@ def prepare_system(
         metal_result=metal_result,
         tleap_result=tleap_result,
         md_result=md_result,
+    )
+
+
+def final_frcmod_paths(output_dir: Path) -> list[Path]:
+    """The frcmod files the final topology is actually built from.
+
+    Not every frcmod under the output directory: the provisional AM1-BCC
+    pass writes its own for ligands whose charges are later refitted, and
+    MCPB writes a pre-refit intermediate beside its final one. A parameter
+    parmchk2 had to guess in one of those is not in the built system, and
+    failing the run on it would be failing on a file that was thrown away.
+    """
+
+    discarded = ("provisional", "_pre.frcmod")
+    return sorted(
+        path
+        for path in output_dir.rglob("*.frcmod")
+        if not any(mark in str(path.relative_to(output_dir)) for mark in discarded)
     )
 
 
