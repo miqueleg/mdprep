@@ -4,6 +4,34 @@
 
 ### Added
 
+- The official Colab notebook, `examples/mdprep_colab.ipynb`: takes a bundle
+  from the web builder (or runs the SyrB2 example), prepares and equilibrates
+  the system, and shows every step -- the structure after each stage, the
+  protonation states, the charge on every atom in tables and in 3D, the metal
+  site's MCPB force constants, how temperature, density and volume
+  equilibrated, the structure after each Roe-Brooks step, and the trajectory
+  with its RMSD, RMSF and metal-site distances. The web builder links to it.
+- `mdprep closest-xray`: the X-ray structures closest to a predicted model,
+  from the RCSB sequence search, with resolution, waters and bound ligands;
+  those holding the model's metal come first.
+- `mdprep transplant-waters`: a reference structure's crystal waters on a
+  predicted model. PyMOL pairs the residues (by sequence, or by structure for a
+  distant homologue); each model chain takes its best reference chain; a water
+  bound to a metal moves with it onto the model's metal; clashing and bulk
+  waters are dropped; a reference of another fold is refused. Every decision
+  is in a JSON report.
+- `mdprep.analysis`: reads a prmtop, inpcrd and OpenMM DCD with numpy alone,
+  and provides charge tables, the metal site's force constants, imaged and
+  superposed trajectories, RMSD, RMSF and distances, and the equilibration and
+  production logs.
+- `equilibration.csv` in every Roe-Brooks run: every stage on one time axis,
+  with temperature, density, box volume and energies every 0.5 ps.
+- `docs/predicted_structures.md`: from a Boltz or AlphaFold3 prediction to a
+  model with its crystal waters, with the worked SyrB2 example.
+- `examples/17_syrb2_bound_water_mcpb.yaml` and the vendored 2FCT deposition.
+- When a structure with a metal has no waters at all, the metal question says
+  so and points to `mdprep transplant-waters`.
+
 - Waters bound to a bonded metal site, as the resting iron of an
   alpha-ketoglutarate enzyme carries (SyrB2, PDB 2FCT). The decision engine
   proposes the water as a donor; mdprep writes the TIP3P template MCPB.py
@@ -15,6 +43,16 @@
 
 ### Fixed
 
+- A residue name mdprep assigned (a predicted iron called `LIG1` read as `FE`)
+  lost that record when the structure was written and read back, and `FE` read
+  cold is the CCD code for Fe(III): the planner then proposed +3 for an Fe(II)
+  site. mdprep's PDB writer records assigned names in a remark its reader
+  honours.
+- The model-charge proposal ignored an oxidation state accepted as proposed,
+  so a student added the terms up by hand.
+- The old Colab run notebook ran the MD twice: `mdprep prepare` already runs it
+  when the manifest enables it. It now points to the official notebook, which
+  stops `prepare` before the MD.
 - A free crystal chloride was offered as a ligand and then refused as a
   reserved residue name, telling the user to rename it. tleap builds it from
   its ion library like any counterion; it is no longer a ligand candidate, and

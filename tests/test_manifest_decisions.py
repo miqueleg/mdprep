@@ -741,8 +741,15 @@ def test_no_charge_is_proposed_while_a_term_is_still_unknown(besd_structure):
         plan, {"metal.a_fe2_302_site.charge": 2}
     )
 
-    # And none at all before the metal's own oxidation state is known.
-    assert proposed_model_charge(plan, {}, "a_fe2_302_site") == (None, [])
+    # An oxidation state left at its proposal (FE2 is +2) counts as known, as
+    # the GUI sends it; the cofactor's missing charge still blocks the sum.
+    value, terms = proposed_model_charge(plan, {}, "a_fe2_302_site")
+    assert value is None and terms[0] == "FE2 +2"
+
+    # And none at all once the metal's own oxidation state has been cleared.
+    assert proposed_model_charge(
+        plan, {"metal.a_fe2_302_site.charge": ""}, "a_fe2_302_site"
+    ) == (None, [])
 
 
 def test_an_oxidation_state_the_residue_name_settles_is_proposed():

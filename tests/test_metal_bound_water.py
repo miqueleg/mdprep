@@ -160,6 +160,28 @@ def test_the_spin_proposal_counts_a_model_accepted_by_default():
     assert proposed_answers(plan, typed)["refinement.total_qm_multiplicity"] == "5"
 
 
+def test_the_model_charge_is_proposed_from_an_accepted_oxidation_state():
+    """The zinc's charge was left at its proposed +2. The model-charge sum
+    then had no metal term and proposed nothing, so the student added the
+    six terms up by hand -- on the one question where mdprep has them all."""
+
+    from mdprep.config.decisions import proposal_explanations
+
+    plan = plan_decisions(DATA / "protein_zinc_aqua.pdb")
+    typed = {
+        key: value
+        for key, value in BONDED_AQUA.items()
+        if not key.endswith((".charge", ".model_charge"))
+    }
+
+    proposed = proposed_answers(plan, typed)
+
+    # Zn +2, His 0, the bound water 0.
+    assert proposed["metal.z_zn_500_site.model_charge"] == "2"
+    why = proposal_explanations(plan, typed)["metal.z_zn_500_site.model_charge"]
+    assert why == "ZN +2 HIS2 +0 HOH601 +0 = +2"
+
+
 # --------------------------------------------------------------------------
 # The QM/MM refinement's charge bookkeeping
 # --------------------------------------------------------------------------

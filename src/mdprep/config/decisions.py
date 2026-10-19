@@ -26,6 +26,7 @@ from mdprep.structure.classify import (
     describe_reserved_residue_names,
     free_residue_name,
     is_metal_ion_residue,
+    is_water_residue,
 )
 from mdprep.structure.completeness import chain_breaks, incomplete_residues
 from mdprep.structure.coordination import (
@@ -1234,6 +1235,15 @@ def _metal_decisions(
         if neighbours
         else f"nothing within {CONTACT_CUTOFF_ANGSTROM:.1f} A",
     )
+    # A predicted model has no waters at all, so a water the crystal has on
+    # this metal is simply absent -- and the shell then looks complete with
+    # one ligand missing. Say so where the shell is decided.
+    if donors and not any(is_water_residue(other) for other in all_residues):
+        evidence += (
+            "This structure has no waters at all, as a predicted model has none. "
+            "If the closest crystal structure has a water on this metal, bring it in "
+            "before going on: mdprep transplant-waters (docs/predicted_structures.md).",
+        )
     targets = (_target_for(residue, element=element),) + contacts
     model_id = f"metal.{site_id}.model"
     bonded = (Condition(model_id, ("bonded_mcpb",)),)
@@ -2230,6 +2240,10 @@ def proposed_model_charge(
     if confirm is None or not confirm.targets:
         return None, []
 
+    # An oxidation state accepted as proposed is as much an answer as one
+    # typed in; the GUI happens to send both, the wizard and other front ends
+    # need not.
+    answers = _answers_with_defaults(plan, answers)
     raw_metal = answers.get(f"metal.{site_id}.charge")
     if raw_metal is None or str(raw_metal) == "":
         return None, []

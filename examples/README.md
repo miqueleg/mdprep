@@ -22,6 +22,7 @@ to real systems.
 | `13_qmmm_refinement_gxtb_mechanical.yaml` | Method-specific g-xTB/OpenMM mechanical-embedding refinement | Requires AmberTools, ASH, OpenMM, geomeTRIC, and a g-xTB-enabled xTB binary |
 | `14_qmmm_refinement_mace_polar1_mechanical.yaml` | Method-specific MACE-POLAR-1/OpenMM mechanical-embedding refinement | Requires AmberTools and an ASH environment containing OpenMM, geomeTRIC, and licensed MACE-POLAR-1 dependencies |
 | `15_roe_brooks_openmm.yaml` | Roe--Brooks equilibration and a manifest-sized OpenMM production run | Uses a GPU when available and falls back to CPU |
+| `17_syrb2_bound_water_mcpb.yaml` | SyrB2 (PDB 2FCT): bonded Fe(II) with a water and a chloride on the iron, a free crystal chloride, a missing loop | Requires the example 11 tools; the official Colab notebook runs it as its example |
 
 The `tutorials/minimal_user_mol2/` directory contains a tiny toy example with
 input PDB, ligand mol2, frcmod, and manifest. It is intended only for checking
@@ -77,11 +78,27 @@ Standard conda-forge xTB is not treated as proof that g-xTB is available.
 
 ## Colab notebooks
 
-`mdprep_colab_run.ipynb` **runs** a manifest. Build one in the browser with the
-[input builder](../web/README.md), or answer the questions in the notebook with
-`mdprep init --interactive`; either way the notebook installs only the external
-programs that manifest will actually invoke, prepares the system, validates it,
-and optionally equilibrates it.
+`mdprep_colab.ipynb` is the **official notebook**
+([open in Colab](https://colab.research.google.com/github/miqueleg/mdprep/blob/master/examples/mdprep_colab.ipynb)).
+Build a manifest in the browser with the [input builder](../web/README.md) and
+upload the bundle, or run the SyrB2 example without any input. The notebook:
+
+- *(optionally)* takes a predicted model, finds the closest X-ray structure and
+  transplants its crystal waters (`mdprep closest-xray`, `mdprep transplant-waters`);
+- installs only the external programs the manifest will invoke, prepares the
+  system, and validates it;
+- shows every stage: the reports, the structure after each stage, the
+  protonation states, the charge on every atom (in tables and in 3D), the
+  metal site's MCPB force constants, the solvated box;
+- runs the Roe-Brooks equilibration and a short production, and plots how
+  temperature, density, volume and energy equilibrated;
+- shows the structure after each equilibration step, and animates the
+  trajectory with its RMSD, RMSF and metal-site distances.
+
+Its analysis is `mdprep.analysis`, which reads the outputs with numpy alone.
+
+`mdprep_colab_run.ipynb` used to run a manifest; it now points to the official
+notebook.
 
 `mdprep_interactive_colab.ipynb` is the older all-in-one builder. It carries
 its own copy of structure inspection, coordination detection and manifest

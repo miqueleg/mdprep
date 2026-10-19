@@ -20,6 +20,7 @@ from mdprep.metals.parameter_comparison import (
     compare_mcpb_parameter_files,
 )
 from mdprep.md.roe_brooks import RoeBrooksError, run_roe_brooks
+from mdprep.structure.classify import COORDINATING_METAL_ELEMENTS
 from mdprep.structure.inspect import InspectionSummary
 from mdprep.structure.normalize import StructureNormalizationError
 from mdprep.structure.pdb import PdbParseError, VALID_ALTLOC_POLICIES
@@ -599,6 +600,195 @@ def doctor_command(
     for note in notes:
         console.print(f"[yellow]{escape(note)}[/yellow]")
     raise typer.Exit(0 if report.ok else 1)
+
+
+@app.command("closest-xray")
+def closest_xray_command(
+    model: Path = typer.Argument(..., help="Predicted model (PDB or mmCIF)."),
+    chain: str | None = typer.Option(
+        None, "--chain", help="Protein chain to search with. Default: the longest."
+    ),
+    identity: float = typer.Option(
+        0.3, "--identity", help="Lowest sequence identity to list, 0-1."
+    ),
+    rows: int = typer.Option(10, "--rows", help="How many structures to list."),
+    json_output: bool = typer.Option(False, "--json", help="Print the hits as JSON."),
+) -> None:
+    """List the X-ray structures closest to a model, for transplant-waters.
+
+    Sends the chain's sequence to the RCSB search service; nothing else
+    leaves the machine.
+    """
+
+    from mdprep.structure.closest_xray import (
+        ClosestXrayError,
+        chain_sequences,
+        recommended,
+        search_closest_xray,
+    )
+    from mdprep.structure.reader import read_structure
+
+    try:
+        structure = read_structure(model)
+        sequences = chain_sequences(structure)
+        if not sequences:
+            raise ValueError(f"{model.name} has no protein chain")
+        if chain is None:
+            chain = max(sequences, key=lambda name: len(sequences[name]))
+        if chain not in sequences:
+            raise ValueError(
+                f"{model.name} has no protein chain {chain!r}; it has {', '.join(sequences)}"
+            )
+        metals = frozenset(
+            (atom.element or "").strip().upper()
+            for atom in structure.atoms
+            if (atom.element or "").strip().upper() in COORDINATING_METAL_ELEMENTS
+        )
+        hits = search_closest_xray(
+            sequences[chain], identity_cutoff=identity, rows=rows, metal_elements=metals
+        )
+    except (FileNotFoundError, PdbParseError, ValueError, ClosestXrayError) as exc:
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+    best = recommended(hits, metals)
+    if json_output:
+        _print_json(
+            {
+                "chain": chain,
+                "sequence_length": len(sequences[chain]),
+                "model_metals": sorted(metals),
+                "hits": [hit.to_dict() for hit in hits],
+                "recommended": best.entry if best else None,
+            }
+        )
+        return
+    if not hits:
+        console.print(
+            f"No X-ray structure has a chain at {identity:.0%} identity or more to chain "
+            f"{escape(chain)}. Lower --identity, but expect fewer conserved waters."
+        )
+        raise typer.Exit(1)
+    table = Table(title=f"X-ray structures closest to chain {escape(chain)} of {escape(model.name)}")
+    for column in ("PDB", "Chains", "Identity", "Coverage", "Resolution", "Waters", "Ligands", "Title"):
+        table.add_column(column)
+    for hit in hits:
+        table.add_row(
+            hit.entry,
+            escape(",".join(hit.chains)),
+            f"{hit.identity:.0%}",
+            f"{hit.coverage:.0%}",
+            f"{hit.resolution:.2f} A" if hit.resolution else "-",
+            str(hit.waters if hit.waters is not None else "-"),
+            escape(" ".join(hit.ligands)),
+            escape(hit.title[:60]),
+        )
+    console.print(table)
+    if best is not None:
+        console.print(
+            f"Closest with waters{' and ' + '/'.join(sorted(metals)) if metals else ''}: "
+            f"[bold]{best.entry}[/bold]. Check its ligands match your model's state "
+            "(substrate bound or not) before using it:\n"
+            f"  mdprep transplant-waters {escape(str(model))} --reference {best.entry}"
+        )
+
+
+@app.command("transplant-waters")
+def transplant_waters_command(
+    model: Path = typer.Argument(..., help="Predicted model (PDB or mmCIF)."),
+    reference: str = typer.Option(
+        ..., "--reference", "-r", help="Reference X-ray structure: a file or a PDB ID."
+    ),
+    output: Path | None = typer.Option(
+        None, "--output", "-o", help="Output PDB. Default: <model>_waters.pdb."
+    ),
+    reference_chain: str | None = typer.Option(
+        None,
+        "--reference-chain",
+        help="Take waters from this reference chain. Default: the best-fitting one.",
+    ),
+    around_metal: float | None = typer.Option(
+        None,
+        "--around-metal",
+        help="Keep only waters within this many angstrom of a metal.",
+    ),
+    within: float = typer.Option(
+        6.0, "--within", help="Drop waters farther than this from every model atom."
+    ),
+    clash_polar: float = typer.Option(
+        2.5, "--clash-polar", help="Closest a water may come to N, O or a halide."
+    ),
+    clash_apolar: float = typer.Option(
+        2.9, "--clash-apolar", help="Closest a water may come to C, S or other atoms."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Print the report as JSON."),
+) -> None:
+    """Copy crystal waters onto a predicted model, superposed with PyMOL.
+
+    Waters bound to a metal move with it onto the model's metal. Writes the
+    model plus the waters that fit as PDB, and a JSON report beside it.
+    """
+
+    from mdprep.structure.waters import WaterTransplantError, fetch_reference, transplant_waters
+
+    target = output or model.with_name(f"{model.stem}_waters.pdb")
+    try:
+        reference_path = Path(reference)
+        if not reference_path.is_file():
+            if len(reference) == 4 and reference.isalnum():
+                reference_path = fetch_reference(reference, target.parent)
+            else:
+                raise FileNotFoundError(f"{reference} is neither a file nor a PDB ID")
+        result = transplant_waters(
+            model,
+            reference_path,
+            target,
+            reference_chain=reference_chain,
+            clash_polar=clash_polar,
+            clash_apolar=clash_apolar,
+            within=within,
+            around_metal=around_metal,
+        )
+    except (FileNotFoundError, PdbParseError, ValueError, WaterTransplantError) as exc:
+        console.print(f"[red]Error:[/red] {escape(str(exc))}")
+        raise typer.Exit(1) from exc
+
+    report = result.to_dict()
+    report_path = target.with_suffix(".json")
+    report_path.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    if json_output:
+        _print_json(report)
+        return
+    for chain_fit in report["chains"]:
+        console.print(
+            f"Chain {escape(chain_fit['model_chain'])} <- reference chain "
+            f"{escape(chain_fit['reference_chain'])} ({chain_fit['pairing']}): TM-score "
+            f"{chain_fit['tm_score']:.2f}, RMSD {chain_fit['rmsd_angstrom']:.2f} A over "
+            f"{chain_fit['aligned_ca']} CA, identity "
+            + (
+                f"{chain_fit['sequence_identity']:.0%}"
+                if chain_fit["sequence_identity"] is not None
+                else "-"
+            )
+        )
+    console.print(
+        f"Transplanted [bold]{report['transplanted']}[/bold] of "
+        f"{report['candidate_waters']} waters near the model "
+        f"({len(report['rejected_clashing'])} clashed, {report['rejected_distant']} too far)."
+    )
+    for bound in report["metal_bound_waters"]:
+        console.print(
+            f"  Bound to {escape(bound['metal'])}: {escape(bound['water'])} at "
+            f"{bound['distance_angstrom']:.2f} A"
+        )
+    for moved in report["moved_with_metal"]:
+        console.print(
+            f"  {escape(moved['water'])} moved {moved['shift_angstrom']:.2f} A with "
+            f"{escape(moved['reference_metal'])} onto {escape(moved['model_metal'])}"
+        )
+    for warning in report["warnings"]:
+        console.print(f"[yellow]Warning:[/yellow] {escape(warning)}")
+    console.print(f"Wrote {escape(str(target))} and {escape(str(report_path))}")
 
 
 def main() -> None:
