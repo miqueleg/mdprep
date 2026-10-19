@@ -56,3 +56,35 @@ pytest -q -m "external or ambertools or tleap or propka or xtb or pyscf or qmmes
 New user-facing features need docs, tests, examples when practical, and clear
 failure behavior for unsupported chemistry. Keep changes local to the relevant
 workflow stage and avoid broad rewrites unless there is a tested reason.
+
+## Releasing
+
+Publishing is automatic and tokenless. `.github/workflows/release.yml` fires
+on a `v*` tag and uploads to PyPI through Trusted Publishing, so no API token
+exists to leak or rotate. PyPI is configured to trust this repository, this
+workflow file by name, and the `pypi` environment; renaming either breaks
+publishing until the publisher at
+<https://pypi.org/manage/project/mdprep/settings/publishing/> is updated.
+
+To cut a release:
+
+1. Bump the version in `pyproject.toml` and `src/mdprep/__init__.py`, and in
+   the README's two mentions of it. `tests/test_packaging_metadata.py` fails
+   if the first two disagree.
+2. Retitle the changelog's `## Unreleased` section to `## <version> - <date>`.
+   The workflow refuses a tag with no such heading.
+3. Update the `mdprep[md,qm]==` pin in `examples/*.ipynb` and the assertion in
+   `tests/test_colab_smoke_notebook.py`. The web builder installs from git
+   master and needs no bump.
+4. Merge, then `git tag -a vX.Y.Z` and push the tag.
+
+The workflow then refuses a tag that does not match the version in the tree,
+builds, checks that the sdist carries the project and nothing that was lying
+in the working tree, installs the wheel and runs `mdprep selftest --quick`
+from it, publishes to PyPI, and attaches the same two files to the GitHub
+release -- creating one from the changelog section if you have not written
+one by hand.
+
+Use semantic versioning against the *manifest*, not just the API: a change
+that makes an existing manifest stop validating is breaking, whatever it did
+to the Python surface.
