@@ -91,6 +91,43 @@ length from its reference. Only the per-step PDBs and the DCD trajectory are
 wrapped, because those are read by humans and viewers rather than fed back into
 a restrained stage.
 
+## What the per-step PDBs are imaged into
+
+A truncated octahedron is stored as a triclinic cell, and OpenMM's
+`enforcePeriodicBox` wraps molecules into the parallelepiped spanned by that
+cell's three vectors, with a corner at the origin. That is the same lattice,
+but it is not the shape the manifest asked for: the solvent fills a sheared
+prism, the solute sits wherever it happened to be rather than in the middle,
+and water that was beside the protein is wrapped to the far corner. On a real
+run, water reached 54 A from the solute in tleap's octahedron and 70 A in the
+snapshot written after the MD.
+
+So each per-step PDB is imaged the way `cpptraj`'s `autoimage` images one:
+the solute is put at the origin and every other molecule is given the
+periodic image nearest to it (`mdprep.md.imaging`). For a truncated
+octahedron that is the octahedron back, and it is the convention tleap
+already wrote `final/system.pdb` in, so the system looks the same before and
+after the MD. The solute is everything that is not water or a monatomic ion
+tleap added.
+
+Each PDB also carries the box **as it was at that stage**. The cell shrinks
+through the NPT steps -- 83.4 A to 79.9 A on the run above -- and a snapshot
+whose `CRYST1` still claimed the starting cell made anything that rebuilt
+periodic images from the header get them wrong.
+
+`production.dcd` is left as OpenMM writes it: whole molecules wrapped into
+the parallelepiped, with the correct box stored per frame. Trajectories are
+conventionally imaged by whatever analyses them, and doing it at write time
+would both cost wall-clock on every frame and take the choice away. With
+cpptraj:
+
+```
+parm final/system.prmtop
+trajin md/roe_brooks_2020/production.dcd
+autoimage
+trajout production.imaged.nc
+```
+
 The protocol checks numerical stability and completion, but a short smoke test
 does not establish scientific convergence. Select production length and
 analysis requirements appropriate for the system.

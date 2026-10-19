@@ -20,6 +20,7 @@ from typing import Any, Sequence
 import numpy as np
 
 from mdprep.config.models import MolecularDynamicsConfig
+from mdprep.md.imaging import solute_atom_indices, write_imaged_pdb
 
 
 class RoeBrooksError(ValueError):
@@ -277,7 +278,6 @@ def run_roe_brooks(
             CheckpointReporter,
             DCDReporter,
             HBonds,
-            PDBFile,
             PME,
             Simulation,
             StateDataReporter,
@@ -419,12 +419,23 @@ def run_roe_brooks(
             )
         return simulation
 
+    molecule_cache: list[list[int]] = []
+    solute_atoms = solute_atom_indices(topology)
+
     def write_pdb(simulation: Any, name: str) -> Path:
-        path = output / name
-        state = periodic_output_state(simulation.context)
-        with path.open("w", encoding="utf-8") as handle:
-            PDBFile.writeFile(topology, state.getPositions(), handle, keepIds=True)
-        return path
+        """A snapshot a human or a viewer reads, in the box that was asked for."""
+
+        if not molecule_cache:
+            # A partition of the System, not of the state, so once is enough
+            # however many snapshots a protocol writes.
+            molecule_cache.extend(simulation.context.getMolecules())
+        return write_imaged_pdb(
+            output / name,
+            topology,
+            periodic_output_state(simulation.context),
+            molecule_cache,
+            solute_atoms,
+        )
 
     def record_stage(simulation: Any, label: str) -> Any:
         state = stage_handoff_state(simulation.context)
