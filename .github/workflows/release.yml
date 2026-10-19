@@ -1,0 +1,153 @@
+# Publishes a tagged release to PyPI through Trusted Publishing, so no API
+# token is stored anywhere. PyPI is configured to trust this repository and
+# this workflow file by name, and mints a short-lived credential for the run.
+#
+# Configure it once, at
+# https://pypi.org/manage/project/mdprep/settings/publishing/:
+#
+#   Owner            miqueleg
+#   Repository name  mdprep
+#   Workflow name    release.yml
+#   Environment      pypi
+#
+# Renaming this file or the environment breaks publishing until the
+# publisher on PyPI is updated to match.
+
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  # A tag that disagrees with the version in the tree would publish
+  # something other than what the tag names, and a release cannot be taken
+  # back off PyPI. Check before anything is built.
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Tag must match the version in the tree
+        run: |
+          python - <<'PY'
+          import os, pathlib, tomllib
+          tag = os.environ["GITHUB_REF_NAME"]
+          declared = tomllib.loads(
+              pathlib.Path("pyproject.toml").read_text(encoding="utf-8")
+          )["project"]["version"]
+          if tag != f"v{declared}":
+              raise SystemExit(
+                  f"tag {tag} does not name version {declared} from pyproject.toml"
+              )
+          print(f"{tag} matches {declared}")
+          PY
+      - name: The changelog must have an entry for it
+        run: |
+          grep -q "^## ${GITHUB_REF_NAME#v} - " CHANGELOG.md \
+            || { echo "CHANGELOG.md has no '## ${GITHUB_REF_NAME#v} - <date>' heading"; exit 1; }
+
+  build:
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Build distributions
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+          python -m build
+          python -m twine check dist/*
+      - name: The sdist carries the project and nothing that was lying around
+        run: |
+          python - <<'PY'
+          import pathlib, tarfile
+          sdist = next(pathlib.Path("dist").glob("*.tar.gz"))
+          names = [
+              n.split("/", 1)[1]
+              for n in tarfile.open(sdist).getnames()
+              if "/" in n
+          ]
+          stray = [n for n in names if n.startswith("web/vendor/") or n.endswith(".zip")]
+          if stray:
+              raise SystemExit(f"{sdist.name} carries files it should not: {stray}")
+          for required in ("pyproject.toml", "README.md", "src/mdprep/__init__.py"):
+              if required not in names:
+                  raise SystemExit(f"{sdist.name} is missing {required}")
+          size_mb = sdist.stat().st_size / 1e6
+          print(f"{sdist.name}: {len(names)} files, {size_mb:.1f} MB")
+          if size_mb > 5:
+              raise SystemExit("sdist is far larger than the project; check the file list")
+          PY
+      - name: The wheel installs and runs on its own
+        run: |
+          python -m pip install --force-reinstall dist/*.whl
+          cd /tmp
+          mdprep --version
+          mdprep selftest --quick
+      - uses: actions/upload-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    # The environment is half of what PyPI matches on, and is also where a
+    # required reviewer can be added if a release should need approval.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/mdprep
+    permissions:
+      # Mints the OIDC token Trusted Publishing exchanges for an upload
+      # credential. This is the whole reason no secret is stored.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: distributions
+          path: dist/
+      - name: Attach the same files to the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The release is normally written by hand with its own notes, so
+          # this adds the artifacts to it rather than replacing it. If no
+          # release exists yet, make one from the changelog section.
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            python - <<'PY' > notes.md
+          import os, pathlib
+          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          text = pathlib.Path("CHANGELOG.md").read_text(encoding="utf-8")
+          start = text.index(f"## {version} - ")
+          rest = text[start:]
+          end = rest.index("\n## ", 1) if "\n## " in rest[1:] else len(rest)
+          print(rest[:end].split("\n", 1)[1].strip())
+          PY
+            gh release create "$GITHUB_REF_NAME" \
+              --title "mdprep ${GITHUB_REF_NAME#v}" \
+              --notes-file notes.md dist/*
+          fi
