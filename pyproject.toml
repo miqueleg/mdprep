@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mdprep"
-version = "0.2.1"
+version = "0.3.0"
 description = "Reproducible Amber preparation for proteins, ligands, metal centers, and OpenMM MD."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -80,6 +80,35 @@ mdprep = "mdprep.cli:app"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/mdprep"]
+
+# Hatchling ignores MANIFEST.in, which is a setuptools file, and otherwise
+# packs whatever is in the working tree. That made the sdist depend on what a
+# developer happened to have lying around: a structure dropped in the root
+# once put 82 MB of it into the distribution, and web/vendor/ -- a build
+# artifact that is deliberately not committed -- carried a stale wheel of the
+# previous release. Say what the project is instead.
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+  "/docs",
+  "/examples",
+  "/web",
+  "/README.md",
+  "/CHANGELOG.md",
+  "/CONTRIBUTING.md",
+  "/AGENTS.md",
+  "/CITATION.cff",
+  "/LICENSE",
+  "/pyproject.toml",
+  "/environment.yml",
+  "/environment-dev.yml",
+  "/environment-minimal.yml",
+]
+exclude = [
+  "/web/vendor",
+  "**/__pycache__",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

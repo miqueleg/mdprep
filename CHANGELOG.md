@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 - 2026-10-19
 
 ### Added
 
@@ -17,6 +17,22 @@
 - `mdprep.workflows.runtime.conda_packages_for` derives the external toolchain a
   given manifest needs, so a generated setup cell installs PropKa, xTB or PySCF
   only when the run will actually invoke them.
+
+- `mdprep doctor` checks that the external tools a given manifest will invoke
+  are installed, and names the one command that installs what is missing.
+- mmCIF and ModelCIF input: a structure predicted by Boltz or AlphaFold is read
+  directly, with no conversion step and no loss of the chain and residue
+  identifiers the manifest selects on.
+- Four-character residue names, hybrid-36 serial and residue numbers, and
+  residues whose name does not fit a PDB column, which a predicted structure
+  written to PDB reaches routinely. A name mdprep has to assign is recorded as
+  assigned, so nothing downstream reads chemistry into a name it invented.
+- `metals[].coordinating_ions` declares a non-metal ion bound in a metal site,
+  such as a coordinating halide, which previously had nowhere to live: it is
+  not a metal, and antechamber cannot treat a single atom.
+- The setup cell downloads the g-xTB build of xtb from the Grimme group's
+  releases and checks it against the published checksum, because conda-forge
+  carries only the GFN-only build.
 
 - `structure.keep_chains` restricts a build to named chains, which a bonded
   MCPB site requires and a multi-copy crystal structure needs.
@@ -48,6 +64,56 @@
 - Dropped the unused `scipy` and `pandas` runtime dependencies.
 - A ligand that coordinates a bonded metal site now defaults to taking its
   charges from that site's MCPB fit instead of AM1-BCC.
+- A metal site's Hessian defaults to g-xTB rather than GFN2. GFN2 has no
+  parameters for most transition metals, and said so only after the run had
+  got as far as the Hessian.
+- **A ligand whose residue name an Amber force field already defines is now
+  refused, where it used to be renamed for the build.** `LYS` became `LY1`,
+  which satisfied tleap and moved the problem: the prepared system then
+  described a residue under a name the input never used, and every later
+  reader had to know about the substitution. A manifest that declares such a
+  ligand now fails, in the GUI before it asks anything and on the command line
+  before any quantum chemistry, and says which residue to rename. The web
+  builder offers to make the change in the input.
+- **`refinement.total_qm_multiplicity` is now required whenever any component
+  of the QM region is open-shell**, where it used to be taken from the first
+  open-shell component found. For a lone high-spin Fe(II) that is the right
+  answer and it was right by accident: it holds only while the ion is the
+  single unpaired centre and nothing couples to it, which nothing in a
+  manifest can check. Existing manifests that leave it out of an open-shell
+  region will fail validation and need the value added.
+- Preparing the same system the same way twice now yields the same atom count.
+  MD starting velocities stay random and the seed drawn for each run is
+  recorded, so a replicate can be repeated by putting that number back.
+
+### Fixed
+
+- Per-step MD snapshots are written in the box the manifest asked for. They
+  carried the pre-NPT cell, because `PDBFile` takes CRYST1 from the topology
+  and the topology was the one loaded at the start, and they were wrapped into
+  the parallelepiped OpenMM spans rather than imaged about the solute -- so a
+  truncated octahedron came back as a sheared prism with the protein off to
+  one side and its water drawn 70 A away instead of 54 A.
+- The ESP grid survives an xTB crash on its last point, and the fit uses the
+  grid that was actually evaluated rather than the one that was requested.
+- A metal in a predicted structure is named after its element, so a site is
+  not identified by a name the prediction never meant as one.
+- CONECT records that cover only part of a ligand are ignored rather than
+  treated as its whole connectivity.
+- tleap writes its own atom types into the element column of the PDB it
+  outputs; the reader no longer believes them.
+- The setup cell installs PDBFixer whenever a run will need it, not only when
+  structure repair happens to pull it in, and the resolver is checked against
+  every combination of options rather than the one that was reported.
+- A titratable side chain coordinating a metal is asked about, from the same
+  contact list the bonds come from, instead of refusing the run later.
+- Guessed force-field parameters (`ATTN, need revision`) and the OpenMM energy
+  check are both checked when the manifest asks for them.
+- Many GUI fixes: the Finish button reports what went wrong instead of doing
+  nothing, re-uploading a structure cannot leave the bundle describing the
+  previous one, a file that parses to no atoms is rejected, Start over clears
+  the answers, Enter fetches a PDB id, and an entry that is mmCIF-only is
+  fetched as `.cif`.
 
 ## 0.2.1 - 2026-10-01
 
