@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from dataclasses import dataclass, replace
 from math import dist
 from pathlib import Path
@@ -26,7 +25,7 @@ from mdprep.metals.nonbonded import (
     write_single_ion_mol2,
 )
 from mdprep.structure.classify import is_standard_protein_residue, is_water_residue
-from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord
+from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord, build_residues
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.writer import write_pdb
 
@@ -570,7 +569,7 @@ def write_mcpb_numbered_pdb(
     numbered = PdbStructure(
         path=Path(path),
         atoms=atoms,
-        residues=_build_residues(atoms),
+        residues=build_residues(atoms),
         model_count=1,
         used_model=1,
         warnings=list(structure.warnings),
@@ -696,7 +695,7 @@ def restore_mcpb_residue_identities(
     restored = PdbStructure(
         path=Path(output_path),
         atoms=atoms,
-        residues=_build_residues(atoms),
+        residues=build_residues(atoms),
         model_count=1,
         used_model=1,
     )
@@ -1269,18 +1268,3 @@ def _safe_group_name(value: str) -> str:
 
 def _generated_files(work_dir: Path) -> list[Path]:
     return sorted((path for path in work_dir.iterdir() if path.is_file()), key=lambda path: path.name)
-
-
-def _build_residues(atoms: list[AtomRecord]) -> list[ResidueRecord]:
-    grouped: "OrderedDict[tuple[str, str, int, str | None], list[AtomRecord]]" = OrderedDict()
-    for atom in atoms:
-        grouped.setdefault(atom.residue_key, []).append(atom)
-    return [
-        ResidueRecord(
-            id=ResidueId(chain_id=key[0], resname=key[1], resid=key[2], icode=key[3]),
-            atoms=residue_atoms,
-            record_names={atom.record_name for atom in residue_atoms},
-            original_index=index,
-        )
-        for index, (key, residue_atoms) in enumerate(grouped.items())
-    ]

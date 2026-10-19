@@ -20,7 +20,7 @@ from __future__ import annotations
 from math import isfinite
 from pathlib import Path
 
-from mdprep.structure.models import AtomRecord, PdbStructure
+from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 from mdprep.structure.pdb_fields import fit_atoms_to_pdb_fields
 from mdprep.structure.pdb import (
     VALID_ALTLOC_POLICIES,
@@ -29,7 +29,6 @@ from mdprep.structure.pdb import (
     AltlocPolicy,
     PdbParseError,
     _apply_altloc_policy,
-    _build_residues,
 )
 
 # CIF spells an absent value these two ways, and neither means the string.
@@ -233,7 +232,7 @@ def read_mmcif(
     return PdbStructure(
         path=source,
         atoms=atoms,
-        residues=_build_residues(atoms),
+        residues=build_residues(atoms),
         model_count=len(models),
         warnings=warnings,
         assigned_resnames=assigned_resnames,

@@ -18,8 +18,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Iterable, Mapping
 
-from mdprep.structure.models import AtomRecord, PdbStructure
-from mdprep.structure.pdb import _build_residues
+from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 
 
 class ResidueRenameError(ValueError):
@@ -99,7 +98,7 @@ def rename_residues(
     return PdbStructure(
         path=structure.path,
         atoms=atoms,
-        residues=_build_residues(atoms),
+        residues=build_residues(atoms),
         model_count=structure.model_count,
         used_model=structure.used_model,
         warnings=list(structure.warnings),

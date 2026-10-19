@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -13,7 +12,7 @@ from mdprep.refinement.mapping import (
     is_virtual_site,
     map_residues_by_coordinates,
 )
-from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord
+from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 
 
 class CoordinateTransferError(ValueError):
@@ -180,7 +179,7 @@ def transfer_optimized_coordinates(
     structure = PdbStructure(
         path=output,
         atoms=new_atoms,
-        residues=_build_residues(new_atoms),
+        residues=build_residues(new_atoms),
         model_count=1,
         used_model=1,
         warnings=list(reference_structure.warnings),
@@ -193,18 +192,3 @@ def transfer_optimized_coordinates(
         generated_hydrogen_count=generated_hydrogens,
         excluded_virtual_site_count=excluded_virtual_sites,
     )
-
-
-def _build_residues(atoms: list[AtomRecord]) -> list[ResidueRecord]:
-    grouped: "OrderedDict[tuple[str, str, int, str | None], list[AtomRecord]]" = OrderedDict()
-    for atom in atoms:
-        grouped.setdefault(atom.residue_key, []).append(atom)
-    return [
-        ResidueRecord(
-            id=ResidueId(chain_id=chain, resname=resname, resid=resid, icode=icode),
-            atoms=residue_atoms,
-            record_names={atom.record_name for atom in residue_atoms},
-            original_index=index,
-        )
-        for index, ((chain, resname, resid, icode), residue_atoms) in enumerate(grouped.items())
-    ]

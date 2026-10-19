@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from dataclasses import dataclass, replace
 from math import dist
 from pathlib import Path
-from typing import Sequence
 
 from mdprep.config.models import ManifestConfig
 from mdprep.leap.forcefields import forcefield_sources
 from mdprep.leap.log_parser import assert_tleap_success
 from mdprep.leap.residues import (
-    LigandResidueRename,
     append_disulfide_conect_records,
     disulfide_bond_commands,
     check_ligand_residue_names,
@@ -25,7 +22,7 @@ from mdprep.ligands.workflow import LigandStageResult
 from mdprep.metals.coordination import resolve_metal_sites
 from mdprep.protonation.apply import ProtonationResult, is_hydrogen_atom
 from mdprep.structure.classify import WATER_RESIDUES
-from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord
+from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord, build_residues
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.writer import write_pdb
 
@@ -80,17 +77,11 @@ def hydrogenate_for_mcpb(
     input_dir = work / "input"
     work.mkdir(parents=True, exist_ok=True)
     check_ligand_residue_names(manifest=manifest, structure=structure)
-    # No renames: a ligand whose residue name a force field already defines
-    # is refused above, so this is always empty. The parameter survives
-    # because removing it reaches into the MCPB builder and the topology
-    # validator, whose tests need tleap and MCPB.py to run.
-    ligand_residue_renames = ()
     leap_input = prepare_leap_input_pdb(
         structure,
         input_dir / "system.pre_mcpb.pdb",
         manifest=manifest,
         ligand_result=ligand_result,
-        ligand_residue_renames=ligand_residue_renames,
     )
     sources = forcefield_sources(
         protein_forcefield=manifest.protein.forcefield,
@@ -101,7 +92,6 @@ def hydrogenate_for_mcpb(
         manifest=manifest,
         structure=leap_input.structure,
         ligand_result=ligand_result,
-        residue_renames=ligand_residue_renames,
     )
     disulfides = disulfide_bond_commands(
         structure=leap_input.structure,
@@ -145,7 +135,6 @@ def hydrogenate_for_mcpb(
     maximum_coordinate_deviation = _validate_preserved_input_coordinates(
         structure,
         restored,
-        residue_renames=ligand_residue_renames,
     )
     validate_tleap_ligand_coordinates(
         manifest=manifest,
@@ -175,20 +164,13 @@ def _validate_preserved_input_coordinates(
     observed: PdbStructure,
     *,
     tolerance_angstrom: float = 0.002,
-    residue_renames: Sequence[LigandResidueRename] = (),
 ) -> float:
-    renamed_to_original = {
-        rename.residue_key: rename.original_resname for rename in residue_renames
-    }
     observed_by_identity = {
-        _preservation_identity(atom, renamed_to_original=renamed_to_original): atom
-        for atom in observed.atoms
+        _preservation_identity(atom): atom for atom in observed.atoms
     }
     maximum = 0.0
     for atom in reference.atoms:
-        candidate = observed_by_identity.get(
-            _preservation_identity(atom, renamed_to_original=renamed_to_original)
-        )
+        candidate = observed_by_identity.get(_preservation_identity(atom))
         if candidate is None:
             raise MetalHydrogenationError(
                 "Pre-MCPB tleap removed an input atom before MCPB.py: "
@@ -210,22 +192,16 @@ def _validate_preserved_input_coordinates(
 
 def _preservation_identity(
     atom: AtomRecord,
-    *,
-    renamed_to_original: dict[tuple[str, int, str | None], str] | None = None,
 ) -> tuple[str, str, int, str | None, str]:
     # tleap standardizes retained HOH/H2O/TIP3/OPC input residues to WAT.
     # This is a representation rename, not atom loss, so compare waters using
     # one canonical residue name while preserving chain/residue/atom identity.
+    #
+    # Water is the only such rename left. A ligand named after a force field
+    # residue used to be another -- a free lysine went through tleap as LY1
+    # and came back as LY1 while the input still called it LYS -- and that one
+    # is gone, because mdprep refuses the name instead of substituting it.
     resname = "WAT" if atom.resname in WATER_RESIDUES else atom.resname
-    # A ligand whose deposited name is one the force fields already define is
-    # built under a substitute, so a free lysine goes through tleap as LY1 and
-    # comes back as LY1 while the input still calls it LYS. That is the same
-    # kind of representation rename, and comparing the two spellings would
-    # report every one of its atoms as deleted.
-    if renamed_to_original is not None:
-        original = renamed_to_original.get((atom.chain_id, atom.resid, atom.icode))
-        if original is not None and resname != original:
-            resname = original
     return (atom.chain_id, resname, atom.resid, atom.icode, atom.name)
 
 
@@ -294,7 +270,7 @@ def _restore_residue_identities(
     structure = PdbStructure(
         path=output_path,
         atoms=atoms,
-        residues=_build_residues(atoms),
+        residues=build_residues(atoms),
         model_count=1,
         used_model=1,
         warnings=list(reference.warnings),
@@ -357,18 +333,3 @@ def _nearby_hydrogens(atom: AtomRecord, residue: ResidueRecord) -> int:
         if is_hydrogen_atom(candidate)
         and dist((atom.x, atom.y, atom.z), (candidate.x, candidate.y, candidate.z)) <= 1.25
     )
-
-
-def _build_residues(atoms: list[AtomRecord]) -> list[ResidueRecord]:
-    grouped: "OrderedDict[tuple[str, str, int, str | None], list[AtomRecord]]" = OrderedDict()
-    for atom in atoms:
-        grouped.setdefault(atom.residue_key, []).append(atom)
-    return [
-        ResidueRecord(
-            id=ResidueId(chain_id=key[0], resname=key[1], resid=key[2], icode=key[3]),
-            atoms=residue_atoms,
-            record_names={atom.record_name for atom in residue_atoms},
-            original_index=index,
-        )
-        for index, (key, residue_atoms) in enumerate(grouped.items())
-    ]

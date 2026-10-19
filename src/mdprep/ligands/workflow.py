@@ -637,17 +637,11 @@ def _build_qmmesp_provisional_system(
     input_dir = work_dir / "input"
     work_dir.mkdir(parents=True, exist_ok=True)
     check_ligand_residue_names(manifest=manifest, structure=structure)
-    # No renames: a ligand whose residue name a force field already defines
-    # is refused above, so this is always empty. The parameter survives
-    # because removing it reaches into the MCPB builder and the topology
-    # validator, whose tests need tleap and MCPB.py to run.
-    ligand_residue_renames = ()
     leap_input = prepare_leap_input_pdb(
         structure,
         input_dir / "provisional_input.pdb",
         manifest=manifest,
         ligand_result=ligand_result,
-        ligand_residue_renames=ligand_residue_renames,
     )
     sources = forcefield_sources(
         protein_forcefield=manifest.protein.forcefield,
@@ -658,7 +652,6 @@ def _build_qmmesp_provisional_system(
         manifest=manifest,
         structure=leap_input.structure,
         ligand_result=ligand_result,
-        residue_renames=ligand_residue_renames,
     )
     disulfides = (
         disulfide_bond_commands(structure=leap_input.structure, protonation_result=protonation_result)

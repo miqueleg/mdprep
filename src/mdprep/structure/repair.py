@@ -11,8 +11,8 @@ import numpy as np
 
 from mdprep.config.models import ManifestConfig, ResidueSelector
 from mdprep.structure.classify import is_standard_protein_residue
-from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord
-from mdprep.structure.pdb import _build_residues, read_pdb
+from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord, build_residues
+from mdprep.structure.pdb import read_pdb
 from mdprep.structure.reader import is_mmcif_path, read_structure
 from mdprep.structure.writer import write_pdb
 
@@ -268,7 +268,7 @@ def _write_repair_input(
             PdbStructure(
                 path=destination,
                 atoms=kept_atoms,
-                residues=_build_residues(kept_atoms),
+                residues=build_residues(kept_atoms),
                 model_count=structure.model_count,
                 used_model=structure.used_model,
                 warnings=list(structure.warnings),

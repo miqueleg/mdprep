@@ -418,10 +418,6 @@ def prepare_system(
         validation_extras: dict[str, object] = {}
         if manifest.metals:
             validation_extras["metal_result"] = metal_result
-        if tleap_result.leap_input.ligand_residue_renames:
-            validation_extras["ligand_residue_renames"] = (
-                tleap_result.leap_input.ligand_residue_renames
-            )
         validation_report = validate_final_outputs(
             manifest=manifest,
             prmtop=tleap_result.final_outputs.prmtop,
