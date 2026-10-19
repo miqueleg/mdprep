@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -90,3 +91,33 @@ class PdbStructure:
     # name would: nothing may be inferred from it that was not already known
     # from the atoms.
     assigned_resnames: frozenset[str] = frozenset()
+
+
+def build_residues(atoms: list[AtomRecord]) -> list[ResidueRecord]:
+    """Group atoms into residues, in the order they first appear.
+
+    Seven modules had a private copy of this, in three spellings and all
+    doing the same thing: group by ``atom.residue_key`` preserving order,
+    carry the record names, number them from zero. Every stage that rewrites
+    a structure's atoms has to rebuild its residues afterwards, so this is
+    the single statement of what a residue list is -- and ``original_index``
+    in particular, which downstream code orders by, now cannot mean one
+    thing in the reader and another in the metal site builder.
+    """
+
+    grouped: "OrderedDict[tuple[str, str, int, str | None], list[AtomRecord]]" = (
+        OrderedDict()
+    )
+    for atom in atoms:
+        grouped.setdefault(atom.residue_key, []).append(atom)
+    return [
+        ResidueRecord(
+            id=ResidueId(chain_id=chain_id, resname=resname, resid=resid, icode=icode),
+            atoms=residue_atoms,
+            record_names={atom.record_name for atom in residue_atoms},
+            original_index=index,
+        )
+        for index, ((chain_id, resname, resid, icode), residue_atoms) in enumerate(
+            grouped.items()
+        )
+    ]

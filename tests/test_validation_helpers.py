@@ -152,15 +152,19 @@ def _write_final_pdb(path, atoms: list[AtomRecord]) -> None:
     write_pdb(PdbStructure(path=path, atoms=atoms, residues=residues, model_count=1), path)
 
 
-def test_a_ligand_renamed_for_tleap_is_accepted_under_its_tleap_name(tmp_path, monkeypatch):
-    # A free lysine declared as a ligand is built under a name the force
-    # fields had free, so that is the name the final PDB comes back with.
+def test_a_ligand_coming_back_under_another_name_is_an_error(tmp_path, monkeypatch):
+    """A free lysine declared as a ligand used to be built under a name the
+    force fields had free, so the final PDB came back saying LY1 and this
+    check had to accept it. mdprep refuses that ligand now instead, so a
+    heterogen the manifest never declared is what it looks like -- and that
+    is the thing this check exists to catch."""
+
     data = manifest_data("tests/data/protein_two_ligands.pdb")
     data["validation"]["run_openmm_energy_check"] = False
     data["ligands"] = [
         {
             "id": "sub_501",
-            "selector": {"chain": "B", "resname": "LYS", "resid": 501, "icode": None},
+            "selector": {"chain": "B", "resname": "SUB", "resid": 501, "icode": None},
             "net_charge": 0,
             "multiplicity": 1,
             "atom_types": "gaff2",
@@ -175,34 +179,30 @@ def test_a_ligand_renamed_for_tleap_is_accepted_under_its_tleap_name(tmp_path, m
     pdb = tmp_path / "system.pdb"
     prmtop.write_text("placeholder\n", encoding="utf-8")
     inpcrd.write_text("placeholder\n", encoding="utf-8")
-    _write_final_pdb(
-        pdb,
-        [
-            _atom(1, "N", "ALA", "A", 1, "N", record_name="ATOM"),
-            _atom(2, "C1", "LY1", "B", 501, "C"),
-            _atom(3, "O", "WAT", "", 1, "O"),
-        ],
-    )
     monkeypatch.setattr(
         "mdprep.validation.topology.run_parmed_check",
         lambda _prmtop, _inpcrd: {"available": False, "status": "skipped", "warning": "test"},
     )
-    renames = [
-        {
-            "ligand_id": "sub_501",
-            "original_resname": "LYS",
-            "tleap_resname": "LY1",
-        }
-    ]
 
-    report = validate_final_outputs(
-        manifest=manifest,
-        prmtop=prmtop,
-        inpcrd=inpcrd,
-        pdb=pdb,
-        ligand_residue_renames=renames,
+    _write_final_pdb(
+        pdb,
+        [
+            _atom(1, "N", "ALA", "A", 1, "N", record_name="ATOM"),
+            _atom(2, "C1", "SUB", "B", 501, "C"),
+            _atom(3, "O", "WAT", "", 1, "O"),
+        ],
     )
+    assert validate_final_outputs(
+        manifest=manifest, prmtop=prmtop, inpcrd=inpcrd, pdb=pdb
+    )["errors"] == []
 
-    assert report["errors"] == []
+    _write_final_pdb(
+        pdb,
+        [
+            _atom(1, "N", "ALA", "A", 1, "N", record_name="ATOM"),
+            _atom(2, "C1", "SU1", "B", 501, "C"),
+            _atom(3, "O", "WAT", "", 1, "O"),
+        ],
+    )
     with pytest.raises(FinalValidationError):
         validate_final_outputs(manifest=manifest, prmtop=prmtop, inpcrd=inpcrd, pdb=pdb)

@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict, defaultdict
+from collections import defaultdict
 from dataclasses import replace
 from pathlib import Path
 from typing import Iterable, Literal
 
-from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord
+from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 
 
 AltlocPolicy = Literal["highest_occupancy", "first", "fail"]
@@ -85,7 +85,7 @@ def read_pdb(
 
     atoms, field_warnings, assigned_resnames = fit_atoms_to_pdb_fields(atoms)
     warnings.extend(field_warnings)
-    residues = _build_residues(atoms)
+    residues = build_residues(atoms)
     present_serials = {atom.serial for atom in atoms if atom.serial is not None}
     retained = {id(atom) for atom in atoms}
     serial_by_line_index = {
@@ -589,24 +589,6 @@ def _select_altloc(
         entries,
         key=lambda item: (item[1].occupancy if item[1].occupancy is not None else 0.0, -item[0]),
     )
-
-
-def _build_residues(atoms: list[AtomRecord]) -> list[ResidueRecord]:
-    grouped: "OrderedDict[tuple[str, str, int, str | None], list[AtomRecord]]" = OrderedDict()
-    for atom in atoms:
-        grouped.setdefault(atom.residue_key, []).append(atom)
-
-    residues: list[ResidueRecord] = []
-    for index, ((chain_id, resname, resid, icode), residue_atoms) in enumerate(grouped.items()):
-        residues.append(
-            ResidueRecord(
-                id=ResidueId(chain_id=chain_id, resname=resname, resid=resid, icode=icode),
-                atoms=residue_atoms,
-                record_names={atom.record_name for atom in residue_atoms},
-                original_index=index,
-            )
-        )
-    return residues
 
 
 def _identity_display(identity: tuple[str, str, int, str | None, str]) -> str:

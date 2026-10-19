@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
@@ -37,7 +36,7 @@ from mdprep.structure.classify import (
     is_titratable_residue,
     is_water_residue,
 )
-from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord
+from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord, build_residues
 from mdprep.structure.selectors import SelectorError, resolve_residue_selector
 
 
@@ -385,7 +384,7 @@ def apply_protonation_stage(
     protonated_structure = PdbStructure(
         path=Path(output_protonation_pdb_path),
         atoms=renamed_atoms,
-        residues=_build_residues(renamed_atoms),
+        residues=build_residues(renamed_atoms),
         model_count=structure.model_count,
         used_model=structure.used_model,
         warnings=list(structure.warnings),
@@ -496,7 +495,7 @@ def reuse_protonation_assignments_after_refinement(
     reused_structure = PdbStructure(
         path=output,
         atoms=atoms,
-        residues=_build_residues(atoms),
+        residues=build_residues(atoms),
         model_count=structure.model_count,
         used_model=structure.used_model,
         warnings=list(structure.warnings),
@@ -948,23 +947,6 @@ def _rename_atoms(structure: PdbStructure, final_by_residue: dict[int, str]) -> 
         final_resname = final_by_key.get(atom.residue_key, atom.resname)
         renamed.append(replace(atom, resname=final_resname))
     return renamed
-
-
-def _build_residues(atoms: list[AtomRecord]) -> list[ResidueRecord]:
-    grouped: "OrderedDict[tuple[str, str, int, str | None], list[AtomRecord]]" = OrderedDict()
-    for atom in atoms:
-        grouped.setdefault(atom.residue_key, []).append(atom)
-    residues: list[ResidueRecord] = []
-    for index, ((chain_id, resname, resid, icode), residue_atoms) in enumerate(grouped.items()):
-        residues.append(
-            ResidueRecord(
-                id=ResidueId(chain_id=chain_id, resname=resname, resid=resid, icode=icode),
-                atoms=residue_atoms,
-                record_names={atom.record_name for atom in residue_atoms},
-                original_index=index,
-            )
-        )
-    return residues
 
 
 def _record(

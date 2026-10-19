@@ -8,7 +8,7 @@ from mdprep.leap.residues import (
     prepare_leap_input_pdb,
     validate_tleap_ligand_coordinates,
 )
-from mdprep.structure.models import PdbStructure, ResidueId, ResidueRecord
+from mdprep.structure.models import PdbStructure, ResidueRecord, build_residues
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.writer import write_pdb
 from tests.test_structure_normalize import ligand_entry, make_manifest, manifest_data
@@ -25,7 +25,7 @@ def test_prepare_leap_input_renames_water_and_preserves_ligand_atoms(tmp_path):
     structure = PdbStructure(
         path=structure.path,
         atoms=atoms,
-        residues=_build_residues(atoms),
+        residues=build_residues(atoms),
         model_count=structure.model_count,
         used_model=structure.used_model,
         warnings=[],
@@ -49,7 +49,7 @@ def test_prepare_leap_input_can_align_residue_numbers_with_mcpb_order(tmp_path):
     shifted = PdbStructure(
         path=structure.path,
         atoms=shifted_atoms,
-        residues=_build_residues(shifted_atoms),
+        residues=build_residues(shifted_atoms),
         model_count=structure.model_count,
         used_model=structure.used_model,
         warnings=[],
@@ -96,7 +96,7 @@ def test_prepare_leap_input_anchors_ligand_to_extracted_parameterization_pdb(tmp
     shifted = PdbStructure(
         path=original.path,
         atoms=shifted_atoms,
-        residues=_build_residues(shifted_atoms),
+        residues=build_residues(shifted_atoms),
         model_count=original.model_count,
         used_model=original.used_model,
         warnings=[],
@@ -157,7 +157,7 @@ def test_prepare_leap_input_applies_extracted_unique_ligand_atom_names(tmp_path)
     structure = PdbStructure(
         path=original.path,
         atoms=structure_atoms,
-        residues=_build_residues(structure_atoms),
+        residues=build_residues(structure_atoms),
         model_count=original.model_count,
         used_model=original.used_model,
         warnings=[],
@@ -196,7 +196,7 @@ def test_tleap_ligand_coordinate_validation_fails_if_dry_build_moves_ligand(tmp_
         PdbStructure(
             path=moved_pdb,
             atoms=moved_atoms,
-            residues=_build_residues(moved_atoms),
+            residues=build_residues(moved_atoms),
             model_count=1,
         ),
         moved_pdb,
@@ -229,7 +229,7 @@ def test_tleap_ligand_coordinate_validation_uses_recorded_mcpb_resname(tmp_path)
         PdbStructure(
             path=renamed_pdb,
             atoms=renamed_atoms,
-            residues=_build_residues(renamed_atoms),
+            residues=build_residues(renamed_atoms),
             model_count=1,
         ),
         renamed_pdb,
@@ -249,19 +249,3 @@ def test_tleap_ligand_coordinate_validation_uses_recorded_mcpb_resname(tmp_path)
 
 
 
-
-def _build_residues(atoms):
-    grouped = {}
-    for atom in atoms:
-        grouped.setdefault(atom.residue_key, []).append(atom)
-    residues = []
-    for index, ((chain, resname, resid, icode), residue_atoms) in enumerate(grouped.items()):
-        residues.append(
-            ResidueRecord(
-                id=ResidueId(chain_id=chain, resname=resname, resid=resid, icode=icode),
-                atoms=residue_atoms,
-                record_names={atom.record_name for atom in residue_atoms},
-                original_index=index,
-            )
-        )
-    return residues

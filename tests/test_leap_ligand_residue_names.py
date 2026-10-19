@@ -32,7 +32,7 @@ from mdprep.leap.residues import (
     check_ligand_residue_names,
     prepare_leap_input_pdb,
 )
-from mdprep.structure.models import PdbStructure
+from mdprep.structure.models import PdbStructure, build_residues
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.writer import write_pdb
 from tests.test_structure_normalize import ligand_entry, make_manifest, manifest_data
@@ -52,7 +52,7 @@ def _structure_named(resname):
     return PdbStructure(
         path=original.path,
         atoms=atoms,
-        residues=_build_residues(atoms),
+        residues=build_residues(atoms),
         model_count=original.model_count,
         used_model=original.used_model,
         warnings=[],
@@ -181,7 +181,6 @@ def test_a_ligand_name_that_is_free_is_left_alone(tmp_path):
     check_ligand_residue_names(manifest=make_manifest(data), structure=structure)
 
     result = prepare_leap_input_pdb(structure, tmp_path / "system.leap_input.pdb")
-    assert result.ligand_residue_renames == []
     assert "SUB" in {residue.id.resname for residue in read_pdb(result.path).residues}
 
 
@@ -239,13 +238,6 @@ def test_a_renamed_mol2_copy_changes_nothing_but_the_residue_name(tmp_path):
         (atom.atom_id, atom.name, atom.x, atom.y, atom.z, atom.atom_type, atom.charge)
         for atom in before.atoms
     ]
-
-
-def _build_residues(atoms):
-    from mdprep.leap.residues import _build_residues as build
-
-    return build(atoms)
-
 
 def test_the_preparation_workflow_refuses_before_it_does_any_work(tmp_path):
     """The three builders that would notice a reserved name are all on the

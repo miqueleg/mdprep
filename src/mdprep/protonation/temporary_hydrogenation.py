@@ -7,7 +7,6 @@ Amber/tleap hydrogenation remains authoritative for the prepared system.
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from dataclasses import dataclass, replace
 from importlib.metadata import PackageNotFoundError, version
 from math import dist
@@ -16,7 +15,7 @@ import random
 
 from typing import Mapping
 
-from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord
+from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.writer import write_pdb
 
@@ -395,28 +394,13 @@ def _restore_and_validate(
         PdbStructure(
             path=output_path,
             atoms=atoms,
-            residues=_build_residues(atoms),
+            residues=build_residues(atoms),
             model_count=1,
             used_model=1,
             warnings=list(reference.warnings),
         ),
         maximum_displacement,
     )
-
-
-def _build_residues(atoms: list[AtomRecord]) -> list[ResidueRecord]:
-    grouped: "OrderedDict[tuple[str, str, int, str | None], list[AtomRecord]]" = OrderedDict()
-    for atom in atoms:
-        grouped.setdefault(atom.residue_key, []).append(atom)
-    return [
-        ResidueRecord(
-            id=ResidueId(chain_id=key[0], resname=key[1], resid=key[2], icode=key[3]),
-            atoms=residue_atoms,
-            record_names={atom.record_name for atom in residue_atoms},
-            original_index=index,
-        )
-        for index, (key, residue_atoms) in enumerate(grouped.items())
-    ]
 
 
 def _package_version(name: str) -> str | None:
