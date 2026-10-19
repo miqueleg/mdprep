@@ -2,8 +2,12 @@ REMARK   1 A dehydrogenated protein fragment plus a free lysine substrate
 REMARK   1 that already carries the hydrogens mdprep placed from a manifest
 REMARK   1 SMILES.  Those hydrogen names (HAA, HB/HBA, HZ/HZA, HXT) are the
 REMARK   1 ones mdprep.ligands.hydrogenate derives from the parent atom, and
-REMARK   1 no OpenMM residue template lists them.  Coordinates are LYS A 301
-REMARK   1 of 6NIE, the BesD halogenase substrate.
+REMARK   1 no OpenMM residue template lists them.  Coordinates are LIG A 301
+REMARK   1 of 6NIE, the BesD halogenase substrate, which the deposition
+REMARK   1 records as LYS A 301.  It is called LIG here because mdprep
+REMARK   1 refuses a ligand whose residue name an Amber force field
+REMARK   1 already defines: tleap would build it from the protein
+REMARK   1 template, and LYS would redirect every lysine in the chain.
 ATOM      1  N   ALA A   1      -2.000   0.000   0.000  1.00 20.00           N
 ATOM      2  CA  ALA A   1      -1.000   0.000   0.000  1.00 20.00           C
 ATOM      3  C   ALA A   1      -0.500   1.200   0.000  1.00 20.00           C
@@ -23,28 +27,28 @@ ATOM     16  CA  ASP A   3       4.600   0.800   0.000  1.00 20.00           C
 ATOM     17  OD1 ASP A   3       5.300   1.600   0.500  1.00 20.00           O
 ATOM     18  OD2 ASP A   3       4.900  -0.300  -0.500  1.00 20.00           O
 TER      19      ASP A   3
-HETATM   20  N   LYS A 301     -18.073  65.651  30.023  1.00 20.00           N
-HETATM   21  CA  LYS A 301     -16.665  65.582  30.428  1.00 20.00           C
-HETATM   22  C   LYS A 301     -16.450  64.591  31.582  1.00 20.00           C
-HETATM   23  O   LYS A 301     -15.312  64.334  32.026  1.00 20.00           O
-HETATM   24  CB  LYS A 301     -16.133  66.973  30.820  1.00 20.00           C
-HETATM   25  CG  LYS A 301     -15.686  67.851  29.598  1.00 20.00           C
-HETATM   26  CD  LYS A 301     -15.222  69.261  30.066  1.00 20.00           C
-HETATM   27  CE  LYS A 301     -14.457  70.025  28.957  1.00 20.00           C
-HETATM   28  NZ  LYS A 301     -15.319  70.241  27.719  1.00 20.00           N
-HETATM   29  OXT LYS A 301     -17.404  63.997  32.069  1.00 20.00           O
-HETATM   30  H   LYS A 301     -18.602  66.508  29.859  1.00 20.00           H
-HETATM   31  HA  LYS A 301     -18.683  64.850  29.859  1.00 20.00           H
-HETATM   32  HAA LYS A 301     -16.104  65.221  29.566  1.00 20.00           H
-HETATM   33  HB  LYS A 301     -15.278  66.842  31.483  1.00 20.00           H
-HETATM   34  HBA LYS A 301     -16.918  67.504  31.359  1.00 20.00           H
-HETATM   35  HG  LYS A 301     -16.523  67.959  28.908  1.00 20.00           H
-HETATM   36  HGA LYS A 301     -14.864  67.356  29.081  1.00 20.00           H
-HETATM   37  HD  LYS A 301     -14.570  69.149  30.932  1.00 20.00           H
-HETATM   38  HDA LYS A 301     -16.097  69.843  30.357  1.00 20.00           H
-HETATM   39  HE  LYS A 301     -13.572  69.454  28.678  1.00 20.00           H
-HETATM   40  HEA LYS A 301     -14.143  70.994  29.345  1.00 20.00           H
-HETATM   41  HZ  LYS A 301     -15.453  71.130  27.237  1.00 20.00           H
-HETATM   42  HZA LYS A 301     -15.856  69.520  27.237  1.00 20.00           H
-HETATM   43  HXT LYS A 301     -18.198  63.502  32.475  1.00 20.00           H
+HETATM   20  N   LIG A 301     -18.073  65.651  30.023  1.00 20.00           N
+HETATM   21  CA  LIG A 301     -16.665  65.582  30.428  1.00 20.00           C
+HETATM   22  C   LIG A 301     -16.450  64.591  31.582  1.00 20.00           C
+HETATM   23  O   LIG A 301     -15.312  64.334  32.026  1.00 20.00           O
+HETATM   24  CB  LIG A 301     -16.133  66.973  30.820  1.00 20.00           C
+HETATM   25  CG  LIG A 301     -15.686  67.851  29.598  1.00 20.00           C
+HETATM   26  CD  LIG A 301     -15.222  69.261  30.066  1.00 20.00           C
+HETATM   27  CE  LIG A 301     -14.457  70.025  28.957  1.00 20.00           C
+HETATM   28  NZ  LIG A 301     -15.319  70.241  27.719  1.00 20.00           N
+HETATM   29  OXT LIG A 301     -17.404  63.997  32.069  1.00 20.00           O
+HETATM   30  H   LIG A 301     -18.602  66.508  29.859  1.00 20.00           H
+HETATM   31  HA  LIG A 301     -18.683  64.850  29.859  1.00 20.00           H
+HETATM   32  HAA LIG A 301     -16.104  65.221  29.566  1.00 20.00           H
+HETATM   33  HB  LIG A 301     -15.278  66.842  31.483  1.00 20.00           H
+HETATM   34  HBA LIG A 301     -16.918  67.504  31.359  1.00 20.00           H
+HETATM   35  HG  LIG A 301     -16.523  67.959  28.908  1.00 20.00           H
+HETATM   36  HGA LIG A 301     -14.864  67.356  29.081  1.00 20.00           H
+HETATM   37  HD  LIG A 301     -14.570  69.149  30.932  1.00 20.00           H
+HETATM   38  HDA LIG A 301     -16.097  69.843  30.357  1.00 20.00           H
+HETATM   39  HE  LIG A 301     -13.572  69.454  28.678  1.00 20.00           H
+HETATM   40  HEA LIG A 301     -14.143  70.994  29.345  1.00 20.00           H
+HETATM   41  HZ  LIG A 301     -15.453  71.130  27.237  1.00 20.00           H
+HETATM   42  HZA LIG A 301     -15.856  69.520  27.237  1.00 20.00           H
+HETATM   43  HXT LIG A 301     -18.198  63.502  32.475  1.00 20.00           H
 END

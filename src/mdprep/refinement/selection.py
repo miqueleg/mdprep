@@ -465,7 +465,17 @@ def _total_multiplicity(manifest: ManifestConfig) -> int:
         for ion in site_by_id[site_id].ions
     )
     open_shell = [value for value in multiplicities if value > 1]
-    return open_shell[0] if open_shell else 1
+    if open_shell:
+        # The manifest schema refuses this case, so reaching it means a
+        # selection was built from something that skipped validation. Guess
+        # here and the whole refinement runs at a spin nobody chose.
+        raise RefinementSelectionError(
+            "refinement.total_qm_multiplicity must be set: the QM region "
+            f"contains {len(open_shell)} open-shell component(s) and its "
+            "total spin state is a chemical decision, not the multiplicity "
+            "of any one of them"
+        )
+    return 1
 
 
 def _validate_protonated_waters(

@@ -243,6 +243,7 @@ def test_a_coordinating_water_becomes_a_bond_in_the_generated_site():
             "metal.z_zn_500_site.charge": 2,
             "metal.z_zn_500_site.confirm_donors": True,
             "metal.z_zn_500_site.multiplicity": 1,
+            "refinement.total_qm_multiplicity": 1,
             "metal.z_zn_500_site.model_charge": 2,
         },
     )

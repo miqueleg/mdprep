@@ -21,7 +21,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
-from mdprep.structure.classify import is_metal_ion_residue
+from mdprep.structure.classify import (
+    LEAP_RESERVED_RESIDUE_NAMES,
+    describe_reserved_residue_names,
+    free_residue_name,
+    is_metal_ion_residue,
+)
 from mdprep.structure.completeness import chain_breaks, incomplete_residues
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
 from mdprep.structure.models import ResidueRecord
@@ -39,6 +44,24 @@ FocusMode = Literal["none", "targets", "structure"]
 
 class DecisionError(ValueError):
     """Raised when a decision plan cannot be built or answered."""
+
+
+class ReservedResidueNameError(DecisionError):
+    """A ligand carries a residue name an Amber force field already defines.
+
+    Carries the offending residues and a free name for each, so a front end
+    can offer the rename as an action on the input rather than leaving the
+    user to edit a megabyte of PDB by hand. The rename is the user's to make:
+    mdprep will not make it silently, which is what it used to do.
+    """
+
+    def __init__(self, message: str, residues: list[dict[str, object]]):
+        super().__init__(message)
+        self.residues = residues
+
+    def to_dict(self) -> dict[str, object]:
+        return {"message": str(self), "residues": self.residues}
+
 
 
 @dataclass(frozen=True)
@@ -388,6 +411,47 @@ def plan_decisions(
         for residue in summary.likely_ligands
         if not is_metal_ion_residue(residue) and residue.id not in monatomic_donors
     ]
+    # A ligand carrying a name the force fields already define cannot be
+    # built: tleap resolves residues by name, so it would use the protein,
+    # water, ion or nucleic template rather than the ligand's own parameters.
+    # mdprep used to rename it for the build, which only moved the problem --
+    # the prepared system then described a residue under a name the input
+    # never used, and every later reader had to know about the substitution.
+    # Refuse here, before a single question is asked, so the fix happens once
+    # in the input. The GUI shows this as the reason the file was rejected.
+    reserved = [
+        residue
+        for residue in ligands
+        if residue.id.resname in LEAP_RESERVED_RESIDUE_NAMES
+    ]
+    if reserved:
+        taken = {residue.id.resname for residue in summary.structure.residues}
+        suggested: dict[str, str] = {}
+        for residue in reserved:
+            # One replacement per original name, so the four copies of a
+            # complex in an asymmetric unit all become the same new residue
+            # rather than four unrelated ones.
+            if residue.id.resname not in suggested:
+                suggested[residue.id.resname] = free_residue_name(
+                    taken | set(suggested.values())
+                )
+        raise ReservedResidueNameError(
+            describe_reserved_residue_names(
+                [(residue.id.display(), residue.id.resname) for residue in reserved]
+            ),
+            [
+                {
+                    "chain": residue.id.chain_id,
+                    "resname": residue.id.resname,
+                    "resid": residue.id.resid,
+                    "icode": residue.id.icode,
+                    "display": residue.id.display(),
+                    "new_resname": suggested[residue.id.resname],
+                }
+                for residue in reserved
+            ],
+        )
+
     decisions: list[Decision] = []
     decisions.extend(_project_decisions(path))
     decisions.extend(_chain_decision(summary))
@@ -416,6 +480,7 @@ def plan_decisions(
                 getattr(summary.structure, "assigned_resnames", frozenset()),
             )
         )
+    decisions.extend(_qm_region_decisions(summary))
     decisions.extend(_solvation_decisions())
     decisions.extend(_md_decisions())
 
@@ -1491,6 +1556,60 @@ def _metal_donor_protonation_decisions(
     return decisions
 
 
+def _qm_region_decisions(summary: InspectionSummary) -> list[Decision]:
+    """The spin state of the QM region as a whole.
+
+    mdprep used to take this from the first open-shell component it found,
+    which for a single high-spin iron gives the right number by accident: the
+    region's multiplicity is that of the ion only when nothing else in it
+    carries unpaired spin, and only when nothing couples. Put an Fe(III) and
+    a substrate radical in the same region and the total is 5 or 7 depending
+    on how the two spins align -- a chemical fact about this system that no
+    arithmetic over the parts can settle.
+
+    So it is asked. The proposal fills in the usual answer, with the terms it
+    came from, and the student changes it when their chemistry says otherwise.
+    """
+
+    sites = list(summary.metal_ions)
+    if not sites:
+        return []
+    # Refinement only runs for a site that is modelled as bonded MCPB and
+    # whose coordination shell was confirmed -- a rejected shell is written
+    # out by hand and generates nothing. With one metal those are two earlier
+    # answers to condition on. With several the question would need "any of",
+    # which a Condition cannot say, so it is asked and then ignored if no
+    # site turns out to be bonded.
+    when: tuple[Condition, ...] = ()
+    if len(sites) == 1:
+        site_id = metal_site_id_for(sites[0])
+        when = (
+            Condition(f"metal.{site_id}.model", ("bonded_mcpb",)),
+            Condition(f"metal.{site_id}.confirm_donors", ("true",)),
+        )
+    return [
+        Decision(
+            id="refinement.total_qm_multiplicity",
+            section="refinement",
+            question="Spin multiplicity of the whole QM region",
+            kind="integer",
+            default=None,
+            requires_user_input=True,
+            why=(
+                "The QM/MM refinement treats the metal, its coordination "
+                "sphere and the cofactors as one quantum system, and that "
+                "system has one spin state. It is not always the metal's: a "
+                "second open-shell component can couple to the ion either "
+                "way, and the answer is chemistry, not arithmetic. mdprep "
+                "proposes the value that follows when the metal is the only "
+                "unpaired spin."
+            ),
+            minimum=1,
+            when=when,
+        )
+    ]
+
+
 def _solvation_decisions() -> list[Decision]:
     return [
         Decision(
@@ -1962,7 +2081,6 @@ def _refinement_block(
     bonded = [site for site in metals if site.get("model") == "bonded_mcpb"]
     if not bonded:
         return {"enabled": False}
-    multiplicities = {site["ions"][0]["multiplicity"] for site in bonded}
     return {
         "enabled": True,
         # The force-field backend holds every heavy atom and relaxes the
@@ -1981,7 +2099,9 @@ def _refinement_block(
         "include_contact_waters": True,
         "movable_atoms": "active_region_hydrogens",
         "post_refinement_protonation": "reuse_initial",
-        "total_qm_multiplicity": max(multiplicities),
+        # Answered, not derived. The region's spin is not a function of
+        # its parts once more than one of them is open-shell.
+        "total_qm_multiplicity": resolved["refinement.total_qm_multiplicity"],
         "ash": {
             "python_executable": "python",
             "xtb_executable": "xtb",
@@ -2125,7 +2245,52 @@ def _proposals(
                 str(value),
                 " ".join(terms) + f" = {value:+d}",
             )
+    spin = _proposed_qm_multiplicity(plan, answers)
+    if spin is not None:
+        proposals["refinement.total_qm_multiplicity"] = spin
     return proposals
+
+
+def _proposed_qm_multiplicity(
+    plan: DecisionPlan, answers: Mapping[str, Any]
+) -> tuple[str, str] | None:
+    """The region's multiplicity when the metal is its only unpaired spin.
+
+    Which is the usual case and the one the arithmetic can speak to. It is a
+    proposal and not an answer precisely because a second open-shell
+    component would make it wrong, and mdprep cannot see that from here.
+    """
+
+    # Read straight from what has been answered so far. A proposal is offered
+    # while the form is half filled in, and resolve_answers refuses an
+    # incomplete set by design.
+    spins: list[tuple[str, int]] = []
+    for decision in plan.decisions:
+        if not decision.id.endswith(".multiplicity") or decision.section != "metals":
+            continue
+        if not decision.is_applicable(answers):
+            continue
+        value = answers.get(decision.id)
+        if value is None:
+            return None
+        try:
+            spins.append((decision.id.split(".")[1], int(value)))
+        except (TypeError, ValueError):
+            return None
+    if not spins:
+        return None
+    open_shell = [(site_id, spin) for site_id, spin in spins if spin > 1]
+    if not open_shell:
+        return ("1", "every component is closed shell = 1")
+    if len(open_shell) > 1:
+        # Two unpaired centres can couple either way; there is no single
+        # value to put forward, so none is.
+        return None
+    site_id, spin = open_shell[0]
+    return (
+        str(spin),
+        f"{site_id} = {spin}, and nothing else in the region is open shell",
+    )
 
 
 def unresolved_mcpb_sites(

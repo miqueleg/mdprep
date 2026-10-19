@@ -17,6 +17,7 @@ from mdprep.config.loader import load_manifest
 from mdprep.external.runner import run_command
 from mdprep.leap.builder import TLeapBuildError, TLeapStageResult, run_tleap_stage
 from mdprep.leap.report import write_tleap_reports
+from mdprep.leap.residues import LeapResidueError, check_ligand_residue_names
 from mdprep.ligands.report import write_ligand_reports
 from mdprep.ligands.workflow import LigandStageResult, LigandWorkflowError, run_ligand_stage
 from mdprep.metals.report import write_metal_reports
@@ -151,6 +152,18 @@ def prepare_system(
     result = normalize_structure_stage(manifest, output_path=normalized_pdb)
     write_pdb(result.normalized_structure, normalized_pdb)
     result.output_path = normalized_pdb
+
+    # Before anything expensive: a ligand named after a force field residue
+    # cannot be built, and the three builders that would notice are all on
+    # the far side of protonation, ligand parameterisation and the metal
+    # site. Say so now, against the normalized structure, so the user is not
+    # told after an hour of quantum chemistry.
+    try:
+        check_ligand_residue_names(
+            manifest=manifest, structure=result.normalized_structure
+        )
+    except LeapResidueError as exc:
+        raise PrepareWorkflowError(str(exc)) from exc
 
     report = write_structure_reports(
         result,

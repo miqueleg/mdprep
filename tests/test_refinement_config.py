@@ -175,6 +175,39 @@ def test_nonbonded_metal_refinement_requires_coordinating_residues_and_spin():
     assert ManifestConfig.model_validate(data).metals[0].ions[0].multiplicity == 1
 
 
+def test_one_open_shell_component_already_requires_total_multiplicity():
+    """It used to take the ion's own multiplicity as the region's, which is
+    right only while that ion is the single unpaired centre and nothing
+    couples to it -- and nothing in a manifest can check either. The region
+    is one quantum system with one spin state, so it is stated."""
+
+    data = base_manifest()
+    data["ligands"] = [_ligand(multiplicity=5)]
+    data["refinement"] = {
+        **_enabled_refinement(),
+        "qm_components": {"ligands": ["substrate"]},
+    }
+
+    with pytest.raises(ValidationError, match="open-shell QM region"):
+        ManifestConfig.model_validate(data)
+
+    data["refinement"]["total_qm_multiplicity"] = 5
+    assert ManifestConfig.model_validate(data).refinement.total_qm_multiplicity == 5
+
+
+def test_a_closed_shell_region_needs_no_total_multiplicity():
+    """Nothing unpaired anywhere, so there is nothing to decide."""
+
+    data = base_manifest()
+    data["ligands"] = [_ligand(multiplicity=1)]
+    data["refinement"] = {
+        **_enabled_refinement(),
+        "qm_components": {"ligands": ["substrate"]},
+    }
+
+    assert ManifestConfig.model_validate(data).refinement.total_qm_multiplicity is None
+
+
 def test_multiple_open_shell_components_require_total_multiplicity():
     data = base_manifest()
     data["ligands"] = [
@@ -190,7 +223,7 @@ def test_multiple_open_shell_components_require_total_multiplicity():
         "qm_components": {"ligands": ["substrate", "cofactor"]},
     }
 
-    with pytest.raises(ValidationError, match="Multiple open-shell"):
+    with pytest.raises(ValidationError, match="open-shell QM region"):
         ManifestConfig.model_validate(data)
 
     data["refinement"]["total_qm_multiplicity"] = 2

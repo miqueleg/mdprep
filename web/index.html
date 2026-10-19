@@ -49,6 +49,19 @@
       </p>
     </section>
 
+    <!-- A residue name no force field leaves free. Refused, with the fix
+         offered as something the user chooses to apply. -->
+    <section id="rename-panel" class="panel hidden">
+      <h2>This structure needs a residue renamed</h2>
+      <p id="rename-message" class="warn"></p>
+      <p id="rename-detail" class="muted"></p>
+      <button id="rename-apply" type="button"></button>
+      <p class="muted">
+        Or rename it yourself in the input file and load it again. Nothing is
+        prepared until the name is changed.
+      </p>
+    </section>
+
     <!-- 2. Findings -->
     <section id="findings-panel" class="panel hidden">
       <h2>2. What mdprep found</h2>

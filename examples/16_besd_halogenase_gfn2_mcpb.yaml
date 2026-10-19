@@ -4,6 +4,12 @@
 # triad with chloride in the carboxylate position, alpha-ketoglutarate as the
 # coordinating cofactor, and a lysine substrate.
 #
+# The deposition records that substrate as LYS A 301. mdprep refuses a
+# ligand whose residue name an Amber force field already defines -- tleap
+# resolves residues by name, so it would build the substrate from the
+# protein template, and bind every lysine in the chain to it -- so rename
+# it to LIG in the input before running this. The GUI offers to do it.
+#
 # Every chemistry-sensitive value below was entered deliberately and none of it
 # is inferred by mdprep:
 #   * keep_chains: [A]       6NIE is four copies; MCPB inputs are single-chain.
@@ -19,7 +25,10 @@
 # cheaper than DFT and is what makes this tractable as a teaching example.
 project:
   name: besd_6nie
-  input_structure: tutorials/besd_6nie/6NIE.pdb
+  # The deposition renamed: see tutorials/besd_6nie/README.md. 6NIE records
+  # the substrate as LYS A 301, and mdprep will not build a ligand whose
+  # residue name an Amber force field already defines.
+  input_structure: tutorials/besd_6nie/6NIE_prepared.pdb
   output_dir: prepared/besd
 
 structure:
@@ -52,8 +61,8 @@ protonation:
 disulfides: {auto_detect: true, detection_cutoff_angstrom: 2.2, force: [], forbid: []}
 
 ligands:
-  - id: a_lys_301
-    selector: {chain: A, resname: LYS, resid: 301, icode: null}
+  - id: a_lig_301
+    selector: {chain: A, resname: LIG, resid: 301, icode: null}
     # Neutral free lysine as deposited; 6NIE has no ligand hydrogens, so the
     # protonation has to be stated rather than inferred.
     net_charge: 0
@@ -133,7 +142,7 @@ refinement:
   backend: openmm
   qm_method: gfn2_xtb
   qm_components:
-    ligands: [a_lys_301, a_akg_304]
+    ligands: [a_lig_301, a_akg_304]
     metal_sites: [a_fe2_302_site]
     metal_coordinating_residues: {}
   active_region_cutoff_angstrom: 4.0

@@ -1213,9 +1213,16 @@ class ManifestConfig(StrictModel):
                     (f"metal:{site_id}:{index}", ion.multiplicity)
                 )
         open_shell = [item for item in component_multiplicities if item[1] > 1]
-        if len(open_shell) > 1 and refinement.total_qm_multiplicity is None:
+        if open_shell and refinement.total_qm_multiplicity is None:
+            # Taking the ion's own multiplicity as the region's was right only
+            # while the ion was the single open shell and nothing coupled to
+            # it, and nothing here can check either. One open-shell component
+            # is enough to make the total a question for the chemist: the
+            # region is one quantum system with one spin state, and a second
+            # unpaired centre can align with the first or against it.
             labels = ", ".join(f"{name}={mult}" for name, mult in open_shell)
             raise ValueError(
-                "Multiple open-shell QM components require an explicit "
-                f"refinement.total_qm_multiplicity; found {labels}"
+                "An open-shell QM region requires an explicit "
+                f"refinement.total_qm_multiplicity; found {labels}. State the "
+                "multiplicity of the whole QM region, not of its parts"
             )

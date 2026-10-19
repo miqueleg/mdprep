@@ -38,8 +38,13 @@ STRUCTURE = REPO / "tests" / "data" / "protein_two_ligands.pdb"
 # A metal site is the case the toolchain is hardest for, because it needs a
 # build of xtb that conda-forge does not carry.
 METAL_STRUCTURE = REPO / "tests" / "data" / "protein_histidine_zinc.pdb"
-# A spin multiplicity cannot be 0, which is the driver's fallback.
-METAL_ANSWERS = {"metal.z_zn_500_site.multiplicity": "1"}
+# A spin multiplicity cannot be 0, which is the driver's fallback. The QM
+# region's own multiplicity is asked separately from the ion's: the region is
+# one quantum system, and its spin is not a function of its parts.
+METAL_ANSWERS = {
+    "metal.z_zn_500_site.multiplicity": "1",
+    "refinement.total_qm_multiplicity": "1",
+}
 
 CHROME_CANDIDATES = (
     "chromium-browser",

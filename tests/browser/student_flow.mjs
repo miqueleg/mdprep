@@ -30,6 +30,22 @@ try {
     { timeout: 300000, polling: 1000 });
 
   await (await page.$("#pdb-file")).uploadFile(structurePath);
+  // 6NIE's substrate is a free lysine deposited as LYS A 301, which mdprep
+  // refuses: tleap resolves residues by name and would build it from the
+  // protein template. The page offers the rename rather than renaming behind
+  // the user, so a student clicks here, and so does this.
+  await page.waitForFunction(
+    () =>
+      ["rename-panel", "question-panel"].some(
+        (id) => !document.getElementById(id).classList.contains("hidden"),
+      ),
+    { timeout: 180000, polling: 500 });
+  report.renamed = await page.evaluate(
+    () => !document.getElementById("rename-panel").classList.contains("hidden"));
+  if (report.renamed) {
+    report.renameMessage = await page.$eval("#rename-message", (n) => n.textContent);
+    await page.click("#rename-apply");
+  }
   await page.waitForFunction(
     () => !document.getElementById("question-panel").classList.contains("hidden"),
     { timeout: 180000, polling: 500 });

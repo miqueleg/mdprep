@@ -18,7 +18,7 @@ from mdprep.leap.residues import (
     LigandParameterFiles,
     append_disulfide_conect_records,
     disulfide_bond_commands,
-    plan_ligand_residue_renames,
+    check_ligand_residue_names,
     prepare_leap_input_pdb,
     validate_ligand_parameter_files,
     validate_tleap_ligand_coordinates,
@@ -154,10 +154,8 @@ def run_tleap_stage(
                 f"{sorted(mcpb_resp_ligand_ids)}, obtained "
                 f"{sorted(item.ligand_id for item in refitted_ligands)}."
             )
-        ligand_residue_renames = plan_ligand_residue_renames(
-            manifest=manifest,
-            structure=structure,
-        )
+        check_ligand_residue_names(manifest=manifest, structure=structure)
+        ligand_residue_renames = ()
         leap_input = prepare_leap_input_pdb(
             metal_structure,
             input_dir / "system.leap_input.pdb",

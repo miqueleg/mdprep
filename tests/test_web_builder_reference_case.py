@@ -38,8 +38,8 @@ STRUCTURE = REPO / "examples" / "tutorials" / "besd_6nie" / "6NIE.pdb"
 ANSWERS = {
     "structure.chains": "A",
     "structure.repair.add_missing_heavy_atoms": "true",
-    "ligand.a_lys_301.net_charge": "0",
-    "ligand.a_lys_301.smiles": "C(CCN)CC(C(=O)O)N",
+    "ligand.a_lig_301.net_charge": "0",
+    "ligand.a_lig_301.smiles": "C(CCN)CC(C(=O)O)N",
     "ligand.a_akg_304.net_charge": "-2",
     "metal.a_fe2_302_site.charge": "2",
     "metal.a_fe2_302_site.confirm_donors": "true",
@@ -91,13 +91,40 @@ def test_the_page_handles_a_real_deposition_without_errors(report):
     assert report["unanswered"] == []
 
 
-def test_the_manifest_it_writes_is_one_mdprep_accepts(manifest, tmp_path):
+def test_the_deposited_substrate_name_is_refused_and_the_rename_offered(report):
+    """6NIE's substrate is deposited as LYS A 301, a name every Amber protein
+    force field defines. mdprep will not build it and will not quietly rename
+    it either, so the page stops and offers the rename -- which is the only
+    reason a student who fetched this entry by its PDB id can continue."""
+
+    assert report["renamed"] is True
+    message = report["renameMessage"]
+    assert "LYS" in message
+    assert "an amino acid" in message
+    assert "Rename" in message
+
+
+def test_the_manifest_names_the_renamed_substrate(manifest):
+    """And the manifest that comes out describes LIG, not LYS: the rename is
+    in the structure the bundle carries, not a substitution mdprep makes on
+    the way past."""
+
+    ligands = {entry["id"]: entry for entry in manifest["ligands"]}
+    assert "a_lig_301" in ligands
+    assert ligands["a_lig_301"]["selector"]["resname"] == "LIG"
+    assert not any(entry["selector"]["resname"] == "LYS" for entry in manifest["ligands"])
+
+
+def test_the_manifest_it_writes_is_one_mdprep_accepts(manifest, besd_structure, tmp_path):
     """Validated through the real schema, not just parsed as YAML."""
 
     # Copied, not mutated: the fixture is module scoped and other tests read
     # what the page actually produced.
     candidate = copy.deepcopy(manifest)
-    candidate["project"]["input_structure"] = str(STRUCTURE)
+    # The renamed structure, not the deposition: the page refused the
+    # deposition and the student renamed the substrate before answering
+    # anything, so that is the file this manifest describes.
+    candidate["project"]["input_structure"] = str(besd_structure)
     candidate["project"]["output_dir"] = str(tmp_path / "prepared")
 
     ManifestConfig.model_validate(candidate)
@@ -143,10 +170,10 @@ def test_the_ligand_without_hydrogens_carries_its_smiles(manifest):
 
     ligands = {item["id"]: item for item in manifest["ligands"]}
 
-    assert ligands["a_lys_301"]["smiles"]
+    assert ligands["a_lig_301"]["smiles"]
     assert "smiles" not in ligands["a_akg_304"]
-    assert ligands["a_lys_301"]["charge_method"] == "am1bcc"
-    assert ligands["a_lys_301"]["atom_types"] == "gaff2"
+    assert ligands["a_lig_301"]["charge_method"] == "am1bcc"
+    assert ligands["a_lig_301"]["atom_types"] == "gaff2"
 
 
 def test_a_proposed_answer_is_shown_filled_in_with_its_arithmetic(report):

@@ -15,7 +15,7 @@ from mdprep.leap.residues import (
     LigandResidueRename,
     append_disulfide_conect_records,
     disulfide_bond_commands,
-    plan_ligand_residue_renames,
+    check_ligand_residue_names,
     prepare_leap_input_pdb,
     validate_ligand_parameter_files,
     validate_tleap_ligand_coordinates,
@@ -79,10 +79,8 @@ def hydrogenate_for_mcpb(
     work = Path(output_dir)
     input_dir = work / "input"
     work.mkdir(parents=True, exist_ok=True)
-    ligand_residue_renames = plan_ligand_residue_renames(
-        manifest=manifest,
-        structure=structure,
-    )
+    check_ligand_residue_names(manifest=manifest, structure=structure)
+    ligand_residue_renames = ()
     leap_input = prepare_leap_input_pdb(
         structure,
         input_dir / "system.pre_mcpb.pdb",

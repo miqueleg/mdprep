@@ -72,7 +72,12 @@ async function bootPython() {
   await micropip.install.callKwargs(`vendor/${index.wheel}`, { deps: false });
   pyodide.runPython(`
 import json
-from mdprep.config.decisions import plan_decisions, build_manifest, DecisionError
+from mdprep.config.decisions import (
+    plan_decisions,
+    build_manifest,
+    DecisionError,
+    ReservedResidueNameError,
+)
 from mdprep.workflows.wizard import render_manifest_yaml
 from mdprep.config.decisions import (
     unresolved_mcpb_sites,
@@ -81,6 +86,7 @@ from mdprep.config.decisions import (
     proposal_explanations,
 )
 from mdprep.structure.reader import read_structure
+from mdprep.structure.rename import rename_residues
 from mdprep.structure.writer import render_pdb
 from mdprep.workflows.runtime import (
     conda_packages_for,
@@ -94,7 +100,13 @@ _PLAN = {}
 def mdprep_plan(text, name):
     with open(name, "w") as handle:
         handle.write(text)
-    plan = plan_decisions(name)
+    try:
+        plan = plan_decisions(name)
+    except ReservedResidueNameError as exc:
+        # Not an error to show and forget: the page can offer the rename,
+        # because mdprep knows exactly which residues and what to call them.
+        # It is still a refusal -- nothing proceeds until the user accepts.
+        return json.dumps({"blocked": exc.to_dict()})
     _PLAN["plan"] = plan
     payload = plan.to_dict()
     # The structure as mdprep read it, for the viewer to draw. Handing it the
@@ -105,6 +117,21 @@ def mdprep_plan(text, name):
     # confirm what they can see.
     payload["structure_pdb"] = render_pdb(read_structure(plan.structure_path))
     return json.dumps(payload)
+
+def mdprep_rename(text, name, renames_json):
+    """Apply the rename the user accepted and hand back the new structure.
+
+    The rewrite goes through mdprep's own reader and writer, so the text the
+    page then plans, shows and ships is exactly what mdprep will read. Doing
+    it in JavaScript would be a second implementation of the PDB column
+    layout, and this project has already been bitten by having two.
+    """
+    with open(name, "w") as handle:
+        handle.write(text)
+    structure = read_structure(name)
+    renamed = rename_residues(structure, json.loads(renames_json))
+    return render_pdb(renamed)
+
 
 def mdprep_proposals(answers_json):
     """Answers that follow from earlier ones, such as a capped model charge.
@@ -205,6 +232,17 @@ async function loadStructure(text, name, pdbId = null) {
     setStatus(readableLoadError(error), true);
     return;
   }
+  if (plan.blocked) {
+    // mdprep will not build a ligand whose residue name a force field owns,
+    // and will not rename it behind the user's back either. Refuse the file,
+    // say why, and offer the rename as something the user decides to do.
+    state.structureText = previous.text;
+    state.structureName = previous.name;
+    state.pdbId = previous.pdbId;
+    offerResidueRename(plan.blocked, text, name);
+    return;
+  }
+  hide("rename-panel");
   const atoms = ((plan.findings || {}).total_atoms) || 0;
   if (!atoms) {
     // A text file named .pdb parses to nothing and used to go all the way
@@ -241,6 +279,60 @@ async function loadStructure(text, name, pdbId = null) {
   initViewer();
   hide("result-panel");
   renderCurrentQuestion();
+}
+
+/*
+ * A residue name the Amber force fields already define cannot be built, and
+ * mdprep used to paper over it by renaming the ligand for the build only --
+ * so the prepared system described a residue under a name the input never
+ * used, and every later reader had to know about the substitution.
+ *
+ * It refuses now. But the structure this matters most for is 6NIE, whose
+ * substrate is a free lysine recorded as LYS 301, fetched here by PDB ID;
+ * telling a student to go and edit a megabyte of PDB is where the workflow
+ * would end. So the refusal comes with the rename attached, as a thing they
+ * choose: nothing is loaded until they do, and what they get afterwards is a
+ * structure that really is named that, all the way into Colab.
+ */
+function offerResidueRename(blocked, text, name) {
+  setStatus("This structure cannot be prepared as it is.", true);
+  const residues = blocked.residues || [];
+  const targets = [...new Set(residues.map((item) => item.resname))];
+  const becomes = [
+    ...new Set(residues.map((item) => `${item.resname} \u2192 ${item.new_resname}`)),
+  ];
+  el("rename-message").textContent = blocked.message;
+  el("rename-detail").textContent =
+    `${residues.length} residue${residues.length === 1 ? "" : "s"}: ` +
+    residues.map((item) => item.display).join(", ") +
+    `. Every copy of ${targets.join(" and ")} listed here is renamed; the ` +
+    "protein's own residues of the same name are not touched.";
+  const button = el("rename-apply");
+  button.textContent = `Rename ${becomes.join(", ")} and load`;
+  button.onclick = () => applyResidueRename(residues, text, name);
+  show("rename-panel");
+  hide("findings-panel");
+  hide("question-panel");
+  hide("result-panel");
+}
+
+async function applyResidueRename(residues, text, name) {
+  setStatus("Renaming\u2026");
+  let renamed;
+  try {
+    const renameFn = state.pyodide.globals.get("mdprep_rename");
+    renamed = renameFn(text, name, JSON.stringify(residues));
+    renameFn.destroy();
+  } catch (error) {
+    setStatus(readableLoadError(error), true);
+    return;
+  }
+  hide("rename-panel");
+  // The PDB id goes with it. Colab re-downloads by id when there is one, and
+  // that would fetch the deposition again -- the one that was just refused.
+  // Without an id the page hands over the bundle instead, which carries the
+  // structure the rename produced.
+  await loadStructure(renamed, name, null);
 }
 
 function renderFindings() {

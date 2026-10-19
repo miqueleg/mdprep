@@ -86,7 +86,7 @@ def test_the_coordinating_cofactor_is_not_given_independent_charges():
     ligands = {entry["id"]: entry for entry in load_example()["ligands"]}
 
     assert ligands["a_akg_304"]["charge_method"] == "mcpb_resp_pyscf"
-    assert ligands["a_lys_301"]["charge_method"] == "am1bcc"  # substrate, not bonded
+    assert ligands["a_lig_301"]["charge_method"] == "am1bcc"  # substrate, not bonded
 
 
 def test_every_declared_bond_names_a_donor_atom():
@@ -132,8 +132,8 @@ def test_the_cutoff_excludes_the_carbons_behind_the_carboxylate():
 
 
 @needs_structure
-def test_choosing_one_chain_prunes_the_other_copies():
-    plan = plan_decisions(STRUCTURE)
+def test_choosing_one_chain_prunes_the_other_copies(besd_structure):
+    plan = plan_decisions(besd_structure)
 
     everything = plan.applicable({"structure.chains": "all"})
     chain_a = plan.applicable({"structure.chains": "A"})
@@ -146,9 +146,9 @@ def test_choosing_one_chain_prunes_the_other_copies():
 
 
 @needs_structure
-def test_the_chain_question_has_no_default_when_a_metal_is_present():
+def test_the_chain_question_has_no_default_when_a_metal_is_present(besd_structure):
     """Building all four copies would make a bonded MCPB site impossible."""
-    plan = plan_decisions(STRUCTURE)
+    plan = plan_decisions(besd_structure)
 
     decision = plan.by_id("structure.chains")
 
@@ -161,37 +161,39 @@ BESD_ANSWERS = {
     "structure.remove_unknown_heterogens": False,
     "structure.repair.add_missing_heavy_atoms": True,
     "protonation.method": "propka_xtb_his",
-    "ligand.a_lys_301.net_charge": 1,
+    "ligand.a_lig_301.net_charge": 1,
     # 6NIE resolves no hydrogens on the free lysine, and a net charge does not
     # say where they go, so the protonation is stated.
-    "ligand.a_lys_301.smiles": "C(CCN)CC(C(=O)O)N",
+    "ligand.a_lig_301.smiles": "C(CCN)CC(C(=O)O)N",
     "ligand.a_akg_304.net_charge": -2,
     "ligand.a_cl_303.net_charge": -1,
     "metal.a_fe2_302_site.model": "bonded_mcpb",
     "metal.a_fe2_302_site.charge": 2,
     "metal.a_fe2_302_site.confirm_donors": True,
     "metal.a_fe2_302_site.multiplicity": 5,
+    # The region as a whole, which mdprep asks for rather than taking
+    # from the iron: here the iron is the only open shell, so it agrees.
+    "refinement.total_qm_multiplicity": 5,
     "metal.a_fe2_302_site.model_charge": -1,
 }
 
 
-@needs_structure
-def generated() -> dict:
+def generated(structure) -> dict:
     from mdprep.config.decisions import build_manifest
 
-    return build_manifest(plan_decisions(STRUCTURE), BESD_ANSWERS)
+    return build_manifest(plan_decisions(structure), BESD_ANSWERS)
 
 
 @needs_structure
-def test_the_builder_generates_a_valid_besd_manifest():
-    ManifestConfig.model_validate(generated())
+def test_the_builder_generates_a_valid_besd_manifest(besd_structure):
+    ManifestConfig.model_validate(generated(besd_structure))
 
 
 @needs_structure
-def test_the_generated_site_reproduces_the_hand_written_bonds():
+def test_the_generated_site_reproduces_the_hand_written_bonds(besd_structure):
     produced = {
         (b["coordinator"]["resname"], b["coordinator"]["resid"], b["coordinator"]["atom_name"])
-        for b in generated()["metals"][0]["mcpb"]["bonds"]
+        for b in generated(besd_structure)["metals"][0]["mcpb"]["bonds"]
     }
     declared = {
         (b["coordinator"]["resname"], b["coordinator"]["resid"], b["coordinator"]["atom_name"])
@@ -202,35 +204,35 @@ def test_the_generated_site_reproduces_the_hand_written_bonds():
 
 
 @needs_structure
-def test_the_generated_manifest_uses_gxtb_for_the_metal_and_gfn2_elsewhere():
+def test_the_generated_manifest_uses_gxtb_for_the_metal_and_gfn2_elsewhere(besd_structure):
     """The Hessian is the one place GFN2 is not good enough: on this iron it
     gives a metal-ligand bond a negative force constant. The ESP and the
     refinement have no such trouble and stay on GFN2, which is where the cost
     would otherwise be."""
 
-    pyscf = generated()["metals"][0]["mcpb"]["pyscf"]
+    pyscf = generated(besd_structure)["metals"][0]["mcpb"]["pyscf"]
 
     assert pyscf["hessian_backend"] == "xtb"
     assert pyscf["xtb"]["model"] == "gxtb"
     assert pyscf["esp_backend"] == "xtb"
     # No executable: naming "xtb" would hand a g-xTB run the GFN-only binary.
     assert "executable" not in pyscf["xtb"]
-    assert generated()["refinement"]["qm_method"] == "gfn2_xtb"
-    assert generated()["refinement"]["enabled"] is True
+    assert generated(besd_structure)["refinement"]["qm_method"] == "gfn2_xtb"
+    assert generated(besd_structure)["refinement"]["enabled"] is True
 
 
 @needs_structure
-def test_the_coordinating_cofactor_defaults_to_the_metal_site_fit():
+def test_the_coordinating_cofactor_defaults_to_the_metal_site_fit(besd_structure):
     """alpha-ketoglutarate bonds the iron, so AM1-BCC would be inconsistent."""
-    ligands = {entry["id"]: entry for entry in generated()["ligands"]}
+    ligands = {entry["id"]: entry for entry in generated(besd_structure)["ligands"]}
 
     assert ligands["a_akg_304"]["charge_method"] == "mcpb_resp_pyscf"
-    assert ligands["a_lys_301"]["charge_method"] == "am1bcc"
+    assert ligands["a_lig_301"]["charge_method"] == "am1bcc"
 
 
 @needs_structure
-def test_only_the_selected_chain_reaches_the_manifest():
-    manifest = generated()
+def test_only_the_selected_chain_reaches_the_manifest(besd_structure):
+    manifest = generated(besd_structure)
 
     assert manifest["structure"]["keep_chains"] == ["A"]
     assert all(entry["selector"]["chain"] == "A" for entry in manifest["ligands"])
@@ -238,24 +240,24 @@ def test_only_the_selected_chain_reaches_the_manifest():
 
 
 @needs_structure
-def test_the_spin_state_is_carried_into_every_model():
-    site = generated()["metals"][0]
+def test_the_spin_state_is_carried_into_every_model(besd_structure):
+    site = generated(besd_structure)["metals"][0]
 
     assert site["ions"][0]["multiplicity"] == 5
     assert site["mcpb"]["small_model_spin"] == 5
     assert site["mcpb"]["large_model_spin"] == 5
-    assert generated()["refinement"]["total_qm_multiplicity"] == 5
+    assert generated(besd_structure)["refinement"]["total_qm_multiplicity"] == 5
 
 
 @needs_structure
-def test_the_toolchain_for_this_run_includes_xtb_propka_and_pyscf():
+def test_the_toolchain_for_this_run_includes_xtb_propka_and_pyscf(besd_structure):
     from mdprep.workflows.runtime import (
         conda_packages_for,
         gxtb_bin_directory,
         micromamba_setup_commands,
     )
 
-    manifest = generated()
+    manifest = generated(besd_structure)
     packages = conda_packages_for(manifest)
 
     assert "ambertools" in packages

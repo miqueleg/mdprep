@@ -20,6 +20,25 @@ say, `mdprep/structure/inspect.py`, that test tells you before the site breaks.
 Pyodide 0.29.5 ships prebuilt wheels for every one of those packages, so the
 only thing the page has to fetch itself is the ~250 KB mdprep wheel.
 
+## When the page refuses a structure
+
+A ligand whose residue name an Amber force field already defines cannot be
+built: `tleap` resolves residues by name, so it would use the protein, water,
+ion or nucleic template instead of the ligand's parameters. mdprep refuses it
+and will not rename it silently, which is what it used to do.
+
+The page shows the refusal and offers the rename, because the structure this
+matters most for is 6NIE -- fetched by PDB id, substrate deposited as
+`LYS A 301`. `mdprep_rename` in `app.js` applies it through mdprep's own
+reader and writer, by residue identity and never by name, so the protein's own
+lysines are untouched and the text the page then plans, draws and ships is one
+file rather than three descriptions of one. Accepting it also clears the
+stored PDB id: the Colab cell re-downloads by id when there is one, which
+would fetch the deposition that was just refused.
+
+`tests/test_web_builder_reference_case.py` drives this in a real browser over
+the untouched deposition.
+
 ## Running it locally
 
 ```bash

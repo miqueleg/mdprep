@@ -257,8 +257,11 @@ interactions, OpenMM 12-6-4 behavior, and current limits.
   Hydrogen-only refinement requires `reuse_initial`; mdprep reapplies the
   reviewed initial states without rerunning PropKa/xTB and validates/preserves
   every optimized protein/water hydrogen for later parameterization.
-- `total_qm_multiplicity`: optional total spin multiplicity. It becomes
-  mandatory when more than one selected component is open-shell.
+- `total_qm_multiplicity`: total spin multiplicity of the QM region as a
+  whole. Mandatory as soon as any selected component is open-shell; optional
+  only for a region in which everything is a singlet, where 1 is the only
+  value it could take. It is never derived from the components: see
+  [qmmm_refinement.md](qmmm_refinement.md).
 - `ash.python_executable`: Python interpreter in an environment containing ASH,
   OpenMM, and geomeTRIC.
 - `ash.xtb_executable`: xTB executable name/path.

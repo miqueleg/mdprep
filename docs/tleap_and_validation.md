@@ -16,16 +16,51 @@ a manifest loads can intercept that, so a free amino acid declared under
 would be built from the protein template and `tleap` would stop on the first
 ligand-named hydrogen it cannot type.
 
-mdprep gives such a ligand a residue name the force fields have not claimed,
-derived from its own (`LYS` becomes `LY1`), and uses that name in the leap
-input PDB, in a copy of the fitted mol2 written beside the original, and in the
-`tleap` script. Atom names, atom order, coordinates and charges are untouched;
-only the residue name moves, and the final PDB carries the new name. Every
-rename is listed in the tleap report under "Ligand Residue Renames". A ligand
-whose name is not already taken keeps it.
+mdprep refuses such a ligand and names it, saying which force field template
+claims the name and what to do:
 
-The alternative -- binding the ligand unit to `LYS` -- would point every real
-lysine in the protein at the ligand's parameters.
+```
+Residue name the Amber force fields already define: LYS (an amino acid;
+a_lys_301). tleap resolves every residue by name against the force field
+templates, so it would build this residue from that template instead of from
+parameters of its own. An amino-acid name would also redirect every matching
+residue in the protein to it. Rename it in the input structure to a code no
+force field uses (LIG, or any unused three-character name), then run mdprep
+again.
+```
+
+The refusal is raised twice over: by `plan_decisions`, so the GUI rejects a
+structure before asking a single question, and in `prepare_system`, against
+the normalized structure, before protonation or any quantum chemistry. Both
+use one wording, from `describe_reserved_residue_names`.
+
+mdprep used to rename the ligand for the build instead -- `LYS` became `LY1`
+in the leap input, a copy of the fitted mol2 and the `tleap` script. That kept
+`tleap` happy and moved the problem: the prepared system then described a
+residue under a name the input never used, so the MCPB site builder, the
+QM/MM point-charge reader and the refinement selection each had to know about
+the substitution, and some of them did not. Nobody can tell what a residue
+called `LYS` is meant to be, so mdprep says so and stops, and the fix happens
+once, in the input.
+
+Binding the ligand unit to `LYS` instead would point every real lysine in the
+protein at the ligand's parameters, which is worse again.
+
+### Renaming it
+
+The input is the user's to change. The web builder offers the change rather
+than leaving it to a text editor, because the structure this matters most for
+is 6NIE -- fetched by PDB id, substrate deposited as `LYS A 301` -- and shows
+the refusal with a button that applies it. The rewrite goes through mdprep's
+own reader and writer (`mdprep.structure.rename.rename_residues`), so the
+structure the page plans, draws and ships to Colab is one file rather than
+three descriptions of one. Renaming is by residue identity and never by name:
+6NIE's four chains hold 32 lysines and only 4 of them are the substrate.
+
+Accepting the rename also drops the page's record of the PDB id, because the
+Colab cell re-downloads by id when there is one -- which would fetch the
+deposition that was just refused. Without an id the page hands over the
+bundle, which carries the renamed structure.
 
 Supported choices:
 
