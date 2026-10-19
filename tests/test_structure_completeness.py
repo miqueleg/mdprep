@@ -213,12 +213,56 @@ def test_a_bulk_water_is_not_a_donor():
     assert "W:HOH602" not in coordinating
 
 
-def test_a_coordinating_water_is_not_offered_for_deletion():
-    """Discarding it would leave a bond pointing at a residue that is gone."""
+def test_a_coordinating_water_does_not_hide_the_question_about_the_others():
+    """The question used to vanish as soon as any water bound any metal. In
+    6NIE that was a surface iron in chain B with three waters on it, and it
+    hid the decision for all 847 waters -- even after chain A was chosen.
+    Now it is asked, and says the bound water stays whatever the answer."""
     plan = plan_decisions(DATA / "protein_zinc_aqua.pdb")
 
     assert plan.findings["coordinating_waters"] == ["W:HOH601"]
-    assert not any(d.id == "structure.keep_crystal_waters" for d in plan.decisions)
+    decision = plan.by_id("structure.keep_crystal_waters")
+    assert any("W:HOH601" in line and "kept whatever" in line for line in decision.evidence)
+
+
+def test_a_water_bound_to_a_bonded_metal_survives_dropping_the_others(tmp_path):
+    """Discarding it would leave an MCPB bond pointing at a residue that is
+    gone, which only surfaced at the MCPB step, after protonation and the
+    ligand parameters."""
+    from mdprep.config.decisions import build_manifest
+    from mdprep.config.models import ManifestConfig
+    from mdprep.structure.normalize import normalize_structure_stage
+
+    plan = plan_decisions(DATA / "protein_zinc_aqua.pdb")
+    data = build_manifest(
+        plan,
+        {
+            "structure.keep_crystal_waters": True,
+            "structure.remove_unknown_heterogens": False,
+            "structure.repair.add_missing_heavy_atoms": False,
+            "metal.z_zn_500_site.model": "bonded_mcpb",
+            "metal.z_zn_500_site.charge": 2,
+            "metal.z_zn_500_site.confirm_donors": True,
+            "metal.z_zn_500_site.multiplicity": 1,
+            "metal.z_zn_500_site.model_charge": 2,
+            "refinement.total_qm_multiplicity": 1,
+        },
+    )
+    data["project"]["output_dir"] = str(tmp_path / "out")
+    manifest = ManifestConfig.model_validate(data)
+    # The builder will not write this combination with QM/MM refinement on
+    # (next test), but a hand-written manifest using external_pdb geometry
+    # can, and normalisation has to protect the bound water on its own.
+    manifest = manifest.model_copy(
+        update={"structure": manifest.structure.model_copy(update={"keep_crystal_waters": False})}
+    )
+
+    result = normalize_structure_stage(manifest, output_path=tmp_path / "n.pdb")
+
+    kept = {(r.id.chain_id, r.id.resname, r.id.resid) for r in result.normalized_structure.residues}
+    assert ("W", "HOH", 601) in kept
+    # And only that one: the free waters went, as asked.
+    assert sum(1 for key in kept if key[1] == "HOH") == 1
 
 
 def test_waters_remain_optional_when_none_coordinate():
@@ -254,3 +298,29 @@ def test_a_coordinating_water_becomes_a_bond_in_the_generated_site():
     }
     assert "HOH" in coordinators
     assert manifest["structure"]["keep_crystal_waters"] is True
+
+
+def test_dropping_waters_with_a_bonded_site_is_caught_in_the_builder():
+    """The QM/MM refinement a bonded site runs needs the active-site waters,
+    and the schema refuses the combination -- but as a pydantic error at
+    Finish. Say what to do instead."""
+    import pytest
+
+    from mdprep.config.decisions import DecisionError, build_manifest
+
+    plan = plan_decisions(DATA / "protein_zinc_aqua.pdb")
+    with pytest.raises(DecisionError, match="crystal waters have to be kept"):
+        build_manifest(
+            plan,
+            {
+                "structure.keep_crystal_waters": False,
+                "structure.remove_unknown_heterogens": False,
+                "structure.repair.add_missing_heavy_atoms": False,
+                "metal.z_zn_500_site.model": "bonded_mcpb",
+                "metal.z_zn_500_site.charge": 2,
+                "metal.z_zn_500_site.confirm_donors": True,
+                "metal.z_zn_500_site.multiplicity": 1,
+                "metal.z_zn_500_site.model_charge": 2,
+                "refinement.total_qm_multiplicity": 1,
+            },
+        )

@@ -1,5 +1,43 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Waters bound to a bonded metal site, as the resting iron of an
+  alpha-ketoglutarate enzyme carries (SyrB2, PDB 2FCT). The decision engine
+  proposes the water as a donor; mdprep writes the TIP3P template MCPB.py
+  requires, supplies the H-O-H angle rigid TIP3P lacks, and counts the water as
+  neutral in the QM/MM refinement.
+- `structure.keep_crystal_ions` and its question: free monatomic ions resolved
+  in the crystal (Cl-, Na+, Br-, ...) are kept or removed as a group, and
+  listed in the structure report either way.
+
+### Fixed
+
+- A free crystal chloride was offered as a ligand and then refused as a
+  reserved residue name, telling the user to rename it. tleap builds it from
+  its ion library like any counterion; it is no longer a ligand candidate, and
+  a histidine xTB cluster that contains one counts its charge.
+- A topology with a water and a halide on the same metal went to NaN in
+  heating: their 1-4 pair through the metal had a Coulomb attraction and no
+  repulsion. Those 1-4 terms are now switched off in the prmtop and listed in
+  the tleap report.
+- tleap bonded the two ends of an unresolved loop into one peptide bond, 6.08 A
+  long in 2FCT. A TER is now written wherever C(i)-N(i+1) exceeds 2 A.
+- The crystal-water and unknown-heterogen questions disappeared whenever any
+  water coordinated any metal -- in 6NIE, three waters on a surface iron of
+  chain B hid the question for all 847. Both are asked now, and the
+  crystal-water question names the bound waters that are kept regardless.
+- A water bound to a bonded metal was dropped with the other crystal waters
+  when those were removed, leaving an MCPB bond to a residue that no longer
+  existed.
+- Declining a ligand while keeping unknown heterogens, dropping crystal waters
+  with a bonded site, or choosing OPC with a water bound to a bonded metal now
+  fail in the builder with what to change, instead of later in Colab.
+- The QM-region spin proposal ignored defaults the user had accepted without
+  typing them, so a bonded iron with the default model got no proposal.
+
 ## 0.3.0 - 2026-10-19
 
 ### Added

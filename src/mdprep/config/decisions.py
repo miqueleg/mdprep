@@ -526,6 +526,7 @@ def plan_decisions(
             if not _ligand_has_hydrogens(residue)
         ],
         "metal_ions": [residue.id.display() for residue in summary.metal_ions],
+        "crystal_ions": [residue.id.display() for residue in summary.crystal_ions],
         "coordinating_waters": [
             residue.id.display() for residue in coordinating_water_residues(summary)
         ],
@@ -671,12 +672,19 @@ def coordinating_water_residues(summary: InspectionSummary) -> list[ResidueRecor
 
 def _structure_decisions(summary: InspectionSummary) -> list[Decision]:
     decisions: list[Decision] = []
-    # A water coordinating a metal is part of that site. Discarding it would
-    # leave a bond pointing at a residue that no longer exists, so it is not
-    # offered as a choice, in the same way a hetero-only chain is not.
-    if coordinating_water_residues(summary):
-        return decisions
+    # A water bound to a metal is part of that site and is kept whatever the
+    # answer here, so the question is about every other crystal water. It
+    # used to be skipped entirely as soon as any water bound any metal --
+    # 6NIE's surface iron in chain B, with three waters on it, hid the
+    # question for all 847 waters, even after chain A had been chosen.
+    bound = coordinating_water_residues(summary)
     if summary.water_residues:
+        evidence = [f"{len(summary.water_residues)} water residues in the input"]
+        if bound:
+            evidence.append(
+                "Bound to a metal, and kept whatever you answer: "
+                + ", ".join(residue.id.display() for residue in bound)
+            )
         decisions.append(
             Decision(
                 id="structure.keep_crystal_waters",
@@ -685,20 +693,62 @@ def _structure_decisions(summary: InspectionSummary) -> list[Decision]:
                 kind="boolean",
                 why=(
                     "Buried or bridging waters are often mechanistically important. "
-                    "Discarding them is a chemistry decision, not a cleanup step."
+                    "Discarding them is a chemistry decision, not a cleanup step. "
+                    "A water bound to a metal is one of its ligands and is kept "
+                    "either way. A bonded metal site needs them all: its QM/MM "
+                    "refinement protonates the active-site waters."
                 ),
                 default="true",
-                evidence=(f"{len(summary.water_residues)} water residues in the input",),
+                evidence=tuple(evidence),
                 target_resnames=tuple(
                     sorted({residue.id.resname for residue in summary.water_residues})
                 ),
                 focus="targets",
             )
         )
+    # Free monatomic ions: a halide in an anion pocket, a sodium on the
+    # surface. tleap builds them from its ion library, so the only decision is
+    # whether they stay. A halide bound to a metal is that site's business.
+    site_ions = {
+        donor.id
+        for metal in summary.metal_ions
+        for donor, _, _ in metal_donor_atoms(summary.structure.residues, metal)
+    }
+    free_ions = [residue for residue in summary.crystal_ions if residue.id not in site_ions]
+    bound_ions = [residue for residue in summary.crystal_ions if residue.id in site_ions]
+    if free_ions:
+        evidence = [residue.id.display() for residue in free_ions]
+        if bound_ions:
+            # Named here because a nonbonded site does not claim it, and then
+            # it goes with this answer like any other crystal ion.
+            evidence.append(
+                "Bound to a metal: "
+                + ", ".join(residue.id.display() for residue in bound_ions)
+                + ". A bonded site keeps it whatever you answer; with a "
+                "nonbonded site it follows this answer."
+            )
+        decisions.append(
+            Decision(
+                id="structure.keep_crystal_ions",
+                section="structure",
+                question="Keep the crystallographic ions?",
+                kind="boolean",
+                why=(
+                    "A chloride or bromide the crystal resolved often marks a real "
+                    "anion-binding site, which in a halogenase may be the point. "
+                    "They are built with Amber's standard ion parameters. Remove "
+                    "them only if you know they are crystallisation additives."
+                ),
+                default="true",
+                evidence=tuple(evidence),
+                targets=tuple(_target_for(residue) for residue in free_ions),
+                focus="targets",
+            )
+        )
     unknown = [
         residue
         for residue in summary.heterogen_residues
-        if not is_metal_ion_residue(residue)
+        if not is_metal_ion_residue(residue) and residue not in summary.crystal_ions
     ]
     if unknown:
         decisions.append(
@@ -714,9 +764,11 @@ def _structure_decisions(summary: InspectionSummary) -> list[Decision]:
                 default=None,
                 requires_user_input=True,
                 why=(
-                    "Any heterogen left unconfigured will stop the build. Answer true "
-                    "only if you have checked that every residue listed below is "
-                    "genuinely disposable; otherwise answer false and configure them."
+                    "Every heterogen listed here is offered to you as a ligand in the "
+                    "questions that follow. This decides what happens to one you then "
+                    "decline: true removes it, false stops the build so nothing is "
+                    "dropped without your say. If you will keep all of them, answer "
+                    "false."
                 ),
                 evidence=tuple(residue.id.display() for residue in unknown),
                 targets=tuple(_target_for(residue) for residue in unknown),
@@ -1769,6 +1821,63 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
     resolved = resolve_answers(plan, answers)
     get = resolved.get
 
+    # A heterogen the user declined as a ligand is an unknown heterogen, and
+    # normalisation stops on one unless removing them was allowed. Saying so
+    # here costs nothing; saying so in Colab costs the whole setup cell.
+    declined = [
+        decision.subject.to_selector()
+        for decision in plan.decisions
+        if decision.section == "ligands"
+        and decision.id.endswith(".include")
+        and decision.is_applicable(resolved)
+        and resolved.get(decision.id) is False
+    ]
+    if declined and not get("structure.remove_unknown_heterogens", False):
+        listed = ", ".join(
+            f"{item['chain']}:{item['resname']}{item['resid']}" for item in declined
+        )
+        raise DecisionError(
+            f"You declined {listed} as a ligand but answered no to removing "
+            "unconfigured heterogens, so the build would stop on it. Either "
+            "include it, or answer yes to removing unconfigured heterogens."
+        )
+
+    bonded_sites = [
+        decision.id.split(".")[1]
+        for decision in plan.decisions
+        if decision.section == "metals"
+        and decision.id.endswith(".model")
+        and decision.is_applicable(resolved)
+        and resolved.get(decision.id) == "bonded_mcpb"
+    ]
+    if bonded_sites and get("structure.keep_crystal_waters", True) is False:
+        raise DecisionError(
+            "A bonded metal site is refined with QM/MM, which protonates and "
+            "includes the active-site waters, so the crystal waters have to be "
+            "kept. Answer yes to keeping them, or model "
+            f"{', '.join(bonded_sites)} nonbonded."
+        )
+
+    # A water bound to a bonded metal joins the MCPB quantum model, and a
+    # four-point water's extra point has no nucleus to put in it.
+    if bonded_sites and get("protein.water_model") not in (None, "TIP3P"):
+        waters_on_metal = [
+            f"{target.chain}:{target.resname}{target.resid}"
+            for decision in plan.decisions
+            if decision.id.endswith(".confirm_donors")
+            and decision.id.split(".")[1] in bonded_sites
+            and resolved.get(decision.id)
+            for target in decision.targets[1:]
+            if target.resname in {"HOH", "WAT", "H2O", "DOD"}
+        ]
+        if waters_on_metal:
+            raise DecisionError(
+                f"{', '.join(waters_on_metal)} is a water bound to a bonded metal, "
+                "which makes it part of the MCPB quantum model. That needs a "
+                f"three-point water, and {get('protein.water_model')} has an extra "
+                "point with no nucleus. Choose ff14SB with TIP3P for this system."
+            )
+
     manifest: dict[str, Any] = {
         "project": {
             "name": resolved["project.name"],
@@ -1785,6 +1894,7 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
                 ]
             ),
             "keep_crystal_waters": get("structure.keep_crystal_waters", True),
+            "keep_crystal_ions": get("structure.keep_crystal_ions", True),
             "altloc_policy": "highest_occupancy",
             "remove_unknown_heterogens": get("structure.remove_unknown_heterogens", False),
             "preserve_chain_ids": True,
@@ -2251,6 +2361,26 @@ def _proposals(
     return proposals
 
 
+def _answers_with_defaults(
+    plan: DecisionPlan, answers: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Answers so far, plus the default of every question not yet answered.
+
+    Unlike resolve_answers this never refuses: it is for proposals made while
+    the form is still being filled in.
+    """
+
+    seen = dict(answers)
+    for decision in plan.decisions:
+        if decision.id in seen or decision.default is None:
+            continue
+        try:
+            seen[decision.id] = coerce_answer(decision, decision.default)
+        except DecisionError:
+            continue
+    return seen
+
+
 def _proposed_qm_multiplicity(
     plan: DecisionPlan, answers: Mapping[str, Any]
 ) -> tuple[str, str] | None:
@@ -2261,16 +2391,19 @@ def _proposed_qm_multiplicity(
     component would make it wrong, and mdprep cannot see that from here.
     """
 
-    # Read straight from what has been answered so far. A proposal is offered
-    # while the form is half filled in, and resolve_answers refuses an
-    # incomplete set by design.
+    # Read from what has been answered so far, with defaults filled in where
+    # nothing was typed. A proposal is offered while the form is half filled
+    # in, and resolve_answers refuses an incomplete set by design -- but a
+    # default the user accepted is still an answer, and without it every
+    # question conditioned on "the model is bonded" looked unreachable.
+    seen = _answers_with_defaults(plan, answers)
     spins: list[tuple[str, int]] = []
     for decision in plan.decisions:
         if not decision.id.endswith(".multiplicity") or decision.section != "metals":
             continue
-        if not decision.is_applicable(answers):
+        if not decision.is_applicable(seen):
             continue
-        value = answers.get(decision.id)
+        value = seen.get(decision.id)
         if value is None:
             return None
         try:

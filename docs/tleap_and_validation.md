@@ -6,6 +6,19 @@ loads ligand mol2/frcmod files, emits disulfide bond commands, and runs
 parameters, residue renames, and explicit bonds are composed into the same
 mdprep-owned scripts.
 
+## Chain Breaks
+
+tleap bonds every residue of a chain to the next one unless a TER record
+separates them, however far apart they are. A deposition with an unresolved
+loop therefore came out with a peptide bond several angstroms long -- 6.08 A
+across SyrB2's missing residues 57-60 -- which the first picoseconds of heating
+turn into NaN. mdprep writes a TER wherever a residue's C is more than 2 A from
+the next residue's N (pdb4amber's rule). The distance decides, not the
+numbering: a numbering jump between residues that are bonded is not a break,
+and a model that numbers straight through a stretch it did not build still
+gets one. The two ends become termini, which is what leaving a loop absent
+means; building the loop is a modelling decision mdprep does not make.
+
 ## Ligands Named After A Force-Field Residue
 
 `tleap` resolves every residue in the input PDB by name against the templates

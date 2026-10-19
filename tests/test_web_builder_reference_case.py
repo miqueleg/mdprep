@@ -37,6 +37,9 @@ STRUCTURE = REPO / "examples" / "tutorials" / "besd_6nie" / "6NIE.pdb"
 # alone, so what comes out is what a student gets by clicking Next.
 ANSWERS = {
     "structure.chains": "A",
+    # Every heterogen in chain A is taken as a ligand below, so nothing is
+    # declined and nothing has to be removed.
+    "structure.remove_unknown_heterogens": "false",
     "structure.repair.add_missing_heavy_atoms": "true",
     "ligand.a_lig_301.net_charge": "0",
     "ligand.a_lig_301.smiles": "C(CCN)CC(C(=O)O)N",

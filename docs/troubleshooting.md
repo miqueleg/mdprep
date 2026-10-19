@@ -117,6 +117,16 @@ references stayed unwrapped. Either one puts a restrained particle a full box
 length from its reference, which at 5 kcal/mol/A^2 is a restraint force of
 order 1e5 kJ/mol/nm.
 
+Two causes found on a bonded iron site (SyrB2, PDB 2FCT) are now handled at
+build time:
+
+- **A peptide bond across a missing loop.** tleap bonds consecutive residues of
+  a chain unless a TER separates them. mdprep now writes a TER wherever a
+  residue's C is more than 2 A from the next residue's N, measured rather than
+  read from the numbering, so the two ends become termini.
+- **A 1-4 pair through the metal with no repulsion.** See
+  [1-4 pairs through the metal](metals.md#1-4-pairs-through-the-metal).
+
 If a NaN still appears, inspect `md_report.json`: a stage whose
 `potential_energy_kj_mol` jumps by a large positive amount relative to the
 previous stage indicates the input is strained rather than the protocol

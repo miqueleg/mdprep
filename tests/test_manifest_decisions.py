@@ -211,10 +211,28 @@ def test_declining_a_ligand_removes_its_dependent_questions():
     answers = answer_blocking(plan)
     answers["ligand.b_sub_501.include"] = False
     answers.pop("ligand.b_sub_501.net_charge")
+    # Declining it makes it an unconfigured heterogen, so it has to be allowed
+    # to go.
+    answers["structure.remove_unknown_heterogens"] = True
 
     manifest = build_manifest(plan, answers)
 
     assert [entry["id"] for entry in manifest["ligands"]] == ["c_cof_601"]
+    assert manifest["structure"]["remove_unknown_heterogens"] is True
+
+
+def test_declining_a_ligand_while_keeping_unknown_heterogens_is_caught_here():
+    """That pair of answers gives a manifest normalisation refuses, and it
+    used to be found only in Colab -- after the setup cell had run."""
+
+    plan = plan_decisions(DATA / "protein_two_ligands.pdb")
+    answers = answer_blocking(plan)
+    answers["ligand.b_sub_501.include"] = False
+    answers.pop("ligand.b_sub_501.net_charge")
+    answers["structure.remove_unknown_heterogens"] = False
+
+    with pytest.raises(DecisionError, match="declined B:SUB501"):
+        build_manifest(plan, answers)
 
 
 def test_conditional_decisions_are_pruned_by_earlier_answers():

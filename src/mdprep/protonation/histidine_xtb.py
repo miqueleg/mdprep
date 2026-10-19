@@ -28,7 +28,12 @@ from mdprep.protonation.histidine_qmmm import (
 )
 from mdprep.protonation.xtb_parser import XtbEnergyComparison, compare_hid_hie_energies, parse_xtb_energy_file
 from mdprep.protonation.xtb_runner import XtbExecutionError, run_xtb
-from mdprep.structure.classify import is_likely_ligand_or_cofactor, is_water_residue
+from mdprep.structure.classify import (
+    bulk_ion_charge,
+    is_bulk_ion_residue,
+    is_likely_ligand_or_cofactor,
+    is_water_residue,
+)
 from mdprep.structure.models import PdbStructure, ResidueRecord
 from mdprep.structure.selectors import SelectorError, resolve_residue_selector
 
@@ -794,6 +799,18 @@ def cluster_charge_breakdown(
                     "state": resname,
                     "charge": 0,
                     "source": "water",
+                }
+            )
+            continue
+        if is_bulk_ion_residue(residue):
+            # A free crystal ion near the histidine: its charge is its
+            # element's, and the cluster's electron count has to include it.
+            terms.append(
+                {
+                    "residue": residue.id.display(),
+                    "state": residue.id.resname,
+                    "charge": bulk_ion_charge(residue),
+                    "source": "crystal_ion",
                 }
             )
             continue

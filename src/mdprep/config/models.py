@@ -99,7 +99,14 @@ class StructureConfig(StrictModel):
     # a bonded MCPB site requires because MCPB inputs are single-chain, and
     # which crystal structures containing several copies of a complex need.
     keep_chains: list[str] = Field(default_factory=list)
+    # Waters bound to a configured metal site are part of that site and are
+    # kept whatever this says; it governs the rest.
     keep_crystal_waters: bool = True
+    # Free single-atom ions in the deposition -- a chloride in an anion
+    # pocket, a sodium on the surface. tleap builds them from its own ion
+    # library, so they need no parameters, only a decision to keep them. A
+    # halide bound to a metal is part of that site, not one of these.
+    keep_crystal_ions: bool = True
     altloc_policy: Literal["highest_occupancy", "first", "fail"] = "highest_occupancy"
     remove_unknown_heterogens: bool = False
     preserve_chain_ids: bool = True
