@@ -107,7 +107,16 @@ Each decision carries a stable `id`, the `question`, its `kind`
 (`choice`, `integer`, `number`, `text`, `boolean`), the allowed `choices`, the
 `default` (`null` when there is none), `requires_user_input`, the `evidence`
 from the structure, and a `when` list naming the earlier answers that make it
-relevant.
+relevant. A decision is asked when every condition in `when` holds and, if its
+`when_any` list is not empty, at least one condition there does too; an answer
+counts only while its own question is still asked.
+
+In a structure with several copies of one protein, a copy's questions carry
+`copy_of`: the id of the same question about the counterpart residue in the
+first copy. They are skipped when the copies share parameters
+(`structure.same_parametrization`), and `build_manifest` gives them that
+question's answer. A front end needs to do nothing about this beyond
+honouring `when_any`; see [oligomers.md](oligomers.md).
 
 ### Driving a 3D viewer
 

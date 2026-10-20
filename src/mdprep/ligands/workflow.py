@@ -6,6 +6,7 @@ import json
 import shutil
 from dataclasses import dataclass, field, replace
 from pathlib import Path
+from typing import Callable
 
 from mdprep.ambertools.antechamber import run_antechamber
 from mdprep.ambertools.commands import AmberToolRun, AmberToolsError
@@ -138,19 +139,24 @@ def run_ligand_stage(
     try:
         extracted = extract_configured_ligands(structure, manifest, output_dir=output_dir)
         qmmesp_indices = [
-            index for index, item in enumerate(extracted) if item.config.charge_method == "qmmesp_pyscf"
+            index
+            for index, item in enumerate(extracted)
+            if item.config.charge_method == "qmmesp_pyscf" and item.config.parameters_from is None
         ]
         if not qmmesp_indices:
             return LigandStageResult(
-                ligands=[_process_ligand(item, output_dir=output_dir) for item in extracted]
+                ligands=_each_once(
+                    extracted, lambda item: _process_ligand(item, output_dir=output_dir)
+                )
             )
 
         if qmmesp_indices:
             if protonation_result is None:
                 raise LigandWorkflowError("qmmesp_pyscf requires a protonation result to build the provisional Amber system.")
-            provisional_items = [
-                _prepare_provisional_am1bcc_ligand(item, output_dir=output_dir) for item in extracted
-            ]
+            provisional_items = _each_once(
+                extracted,
+                lambda item: _prepare_provisional_am1bcc_ligand(item, output_dir=output_dir),
+            )
             provisional_result = LigandStageResult(ligands=provisional_items)
             provisional_system = _build_qmmesp_provisional_system(
                 structure,
@@ -163,6 +169,10 @@ def run_ligand_stage(
             final_items: list[LigandWorkflowItem] = []
             for index, extracted_ligand in enumerate(extracted):
                 provisional_item = provisional_items[index]
+                if extracted_ligand.config.parameters_from is not None:
+                    # Filled in below, once its reference is final.
+                    final_items.append(provisional_item)
+                    continue
                 if extracted_ligand.config.charge_method != "qmmesp_pyscf":
                     if extracted_ligand.config.charge_method == "am1bcc":
                         final_items.append(
@@ -199,6 +209,17 @@ def run_ligand_stage(
                         point_charges=point_charges,
                     )
                 )
+            final_by_id = {item.ligand_id: item for item in final_items}
+            final_items = [
+                _share_parameters(
+                    extracted_ligand,
+                    final_by_id[extracted_ligand.config.parameters_from],
+                    extracted_by_id(extracted)[extracted_ligand.config.parameters_from],
+                )
+                if extracted_ligand.config.parameters_from is not None
+                else final_items[index]
+                for index, extracted_ligand in enumerate(extracted)
+            ]
     except (
         LigandExtractionError,
         AmberToolsError,
@@ -239,10 +260,10 @@ def build_provisional_am1bcc_system(
             manifest,
             output_dir=output_dir,
         )
-        provisional_items = [
-            _prepare_provisional_am1bcc_ligand(item, output_dir=output_dir)
-            for item in extracted
-        ]
+        provisional_items = _each_once(
+            extracted,
+            lambda item: _prepare_provisional_am1bcc_ligand(item, output_dir=output_dir),
+        )
         provisional_result = LigandStageResult(ligands=provisional_items)
         provisional_system = _build_qmmesp_provisional_system(
             structure,
@@ -264,6 +285,82 @@ def build_provisional_am1bcc_system(
         _write_ligand_failure_report(output_dir, exc)
         raise LigandWorkflowError(str(exc)) from exc
     return provisional_result, provisional_system
+
+
+def extracted_by_id(extracted: list[ExtractedLigand]) -> dict[str, ExtractedLigand]:
+    return {item.config.id: item for item in extracted}
+
+
+def _each_once(
+    extracted: list[ExtractedLigand],
+    parameterise: "Callable[[ExtractedLigand], LigandWorkflowItem]",
+) -> list[LigandWorkflowItem]:
+    """Parameterise every ligand that has parameters of its own, once.
+
+    A ligand with ``parameters_from`` -- the same residue in another copy of
+    the protein -- is not parameterised again: it takes its reference's
+    files. Two fits of one molecule from two conformations would give two
+    sets of charges, and tleap can hold only one template per residue name.
+    Results come back in manifest order.
+    """
+
+    by_id = extracted_by_id(extracted)
+    done: dict[str, LigandWorkflowItem] = {}
+    for item in extracted:
+        if item.config.parameters_from is None:
+            done[item.config.id] = parameterise(item)
+    return [
+        done[item.config.id]
+        if item.config.parameters_from is None
+        else _share_parameters(
+            item,
+            done[item.config.parameters_from],
+            by_id[item.config.parameters_from],
+        )
+        for item in extracted
+    ]
+
+
+def _share_parameters(
+    copy: ExtractedLigand,
+    reference_item: LigandWorkflowItem,
+    reference: ExtractedLigand,
+) -> LigandWorkflowItem:
+    """A ligand built with another ligand's parameter files.
+
+    It has to be the same molecule, written the same way: tleap matches a
+    residue to its template atom by atom name, and the charges were fitted to
+    the reference's atoms in the reference's order. Anything else is refused
+    rather than matched up.
+    """
+
+    own = [(atom.name, (atom.element or "").strip().upper()) for atom in copy.atoms]
+    theirs = [(atom.name, (atom.element or "").strip().upper()) for atom in reference.atoms]
+    if own != theirs:
+        raise LigandWorkflowError(
+            f"Ligand {copy.config.id} takes its parameters from {reference.config.id}, but "
+            f"its atoms are {[name for name, _ in own]} and the reference's are "
+            f"{[name for name, _ in theirs]}. A residue sharing a template must have the "
+            "same atoms, named alike and in the same order."
+        )
+    return replace(
+        reference_item,
+        ligand_id=copy.config.id,
+        selector=copy.config.selector.model_dump(mode="json"),
+        residue_identity=copy.residue.id.to_dict(),
+        atom_count=len(copy.atoms),
+        extracted_pdb_path=copy.pdb_path,
+        identity_path=copy.identity_path,
+        validation=None,
+        antechamber=None,
+        parmchk2=None,
+        qm=None,
+        warnings=[
+            *copy.warnings,
+            f"Built with the parameters of {reference.config.id}: the same residue in "
+            "another copy of the protein, parameterised once.",
+        ],
+    )
 
 
 def _write_ligand_failure_report(output_dir: str | Path, exc: Exception) -> None:

@@ -298,6 +298,16 @@ def validate_ligand_parameter_files(
                 "use unique residue names or shared parameter files."
             )
         residue_parameter_files[resname] = key
+        # The same residue in another copy of the protein, built from the
+        # same files: one template serves every residue of the name, so it
+        # is loaded once.
+        if any(
+            entry.residue_name == resname
+            and entry.final_mol2_path == item.final_mol2_path
+            and entry.final_frcmod_path == item.final_frcmod_path
+            for entry in validated
+        ):
+            continue
         variable = _unique_variable_name(ligand.id, variable_names)
         validated.append(
             LigandParameterFiles(
@@ -638,9 +648,27 @@ def _resolve_ligand_in_tleap_output(
     ]
     if len(candidates) == 1:
         return candidates[0]
+    if len(candidates) > 1:
+        # Copies of one ligand in an oligomer: tleap renumbers residues and
+        # drops chain letters, so name and atoms alone cannot tell chain A's
+        # cofactor from chain B's. They sit tens of angstroms apart, and the
+        # check this feeds is that coordinates were preserved -- so the copy
+        # whose atoms are nearest is the one, and a ligand that did move is
+        # still caught by that check against the nearest copy.
+        return min(candidates, key=lambda residue: _largest_deviation(reference, residue))
     raise LeapResidueError(
         f"Could not map ligand {ligand_id} uniquely in {stage} tleap PDB for coordinate validation; "
         "use unique residue names and atom-name sequences for independent ligand instances."
+    )
+
+
+def _largest_deviation(reference: ResidueRecord, observed: ResidueRecord) -> float:
+    return max(
+        (
+            _distance((ref.x, ref.y, ref.z), (out.x, out.y, out.z))
+            for ref, out in zip(reference.atoms, observed.atoms, strict=True)
+        ),
+        default=0.0,
     )
 
 

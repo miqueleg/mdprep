@@ -446,12 +446,16 @@ function focusOn(decision) {
 /* -------------------------------------------------------------- questions */
 
 // Mirrors Decision.is_applicable: a decision is asked only when every
-// condition on it is satisfied by the answers already given.
+// condition in `when` is satisfied by the answers already given, and at
+// least one in `when_any` if it has any -- a copy's ligand, say, is asked
+// when its chain is kept alone or when copies are not to share parameters.
 function isApplicable(decision, answers) {
-  return decision.when.every((condition) => {
+  const met = (condition) => {
     const value = answers[condition.decision_id];
     return value !== undefined && condition.values.includes(String(value));
-  });
+  };
+  const anyOf = decision.when_any || [];
+  return decision.when.every(met) && (anyOf.length === 0 || anyOf.some(met));
 }
 
 function applicableDecisions() {

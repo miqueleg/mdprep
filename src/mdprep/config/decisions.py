@@ -35,7 +35,8 @@ from mdprep.structure.coordination import (
     metal_donor_atoms,
 )
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
-from mdprep.structure.models import ResidueRecord
+from mdprep.structure.models import ResidueId, ResidueRecord
+from mdprep.structure.oligomer import OligomerAnalysis, analyse_oligomer
 from mdprep.structure.pdb import AltlocPolicy
 
 
@@ -152,12 +153,22 @@ class Decision:
     default: str | None = None
     choices: tuple[Choice, ...] = ()
     when: tuple[Condition, ...] = ()
+    # Asked only if at least one of these holds as well as every `when`.
+    # Conditions are otherwise all-of, and some questions are needed for one
+    # reason or another: the spin of the QM region whichever metal turns out
+    # bonded, a copy's ligand whether its chain was kept alone or its
+    # parameters were not to be shared.
+    when_any: tuple[Condition, ...] = ()
     requires_user_input: bool = False
     evidence: tuple[str, ...] = ()
     # targets[0] is the subject of the decision -- the ligand being charged, the
     # ion being modelled -- and any further entries are surrounding context the
     # viewer should also show. The manifest builders rely on that ordering.
     targets: tuple[ResidueTarget, ...] = ()
+    # The same question about the counterpart of this residue in the copy
+    # whose parameters this one shares. Skipped when parameters are shared,
+    # and given that question's answer instead.
+    copy_of: str | None = None
     # Residue names standing in for a set too large to enumerate usefully, such
     # as every crystallographic water. A viewer selects on these directly.
     target_resnames: tuple[str, ...] = ()
@@ -179,7 +190,10 @@ class Decision:
         return self.targets[0]
 
     def is_applicable(self, answers: Mapping[str, Any]) -> bool:
-        return all(condition.is_met(answers) for condition in self.when)
+        return all(condition.is_met(answers) for condition in self.when) and (
+            not self.when_any
+            or any(condition.is_met(answers) for condition in self.when_any)
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -192,6 +206,8 @@ class Decision:
             "requires_user_input": self.requires_user_input,
             "choices": [choice.to_dict() for choice in self.choices],
             "when": [condition.to_dict() for condition in self.when],
+            "when_any": [condition.to_dict() for condition in self.when_any],
+            "copy_of": self.copy_of,
             "evidence": list(self.evidence),
             "targets": [target.to_dict() for target in self.targets],
             "target_resnames": list(self.target_resnames),
@@ -209,6 +225,10 @@ class DecisionPlan:
     structure_path: Path
     decisions: tuple[Decision, ...]
     findings: dict[str, Any] = field(default_factory=dict)
+    # Which chains are copies of one protein and how their residues pair.
+    # Kept on the plan because the manifest built from it has to name every
+    # copy's residues, and the front end holds the plan, not the structure.
+    oligomer: OligomerAnalysis | None = None
 
     def by_id(self, decision_id: str) -> Decision:
         for decision in self.decisions:
@@ -217,9 +237,22 @@ class DecisionPlan:
         raise DecisionError(f"Unknown decision id: {decision_id}")
 
     def applicable(self, answers: Mapping[str, Any]) -> list[Decision]:
-        """Decisions still reachable given the answers collected so far."""
+        """Decisions still reachable given the answers collected so far.
 
-        return [decision for decision in self.decisions if decision.is_applicable(answers)]
+        An answer only counts while its own question is reachable, the way a
+        front end walks the plan: a confirmed coordination shell left over
+        from when a site was bonded says nothing once it is nonbonded.
+        """
+
+        reachable: dict[str, Any] = {}
+        found: list[Decision] = []
+        for decision in self.decisions:
+            if not decision.is_applicable(reachable):
+                continue
+            found.append(decision)
+            if decision.id in answers:
+                reachable[decision.id] = answers[decision.id]
+        return found
 
     def blocking(self, answers: Mapping[str, Any] | None = None) -> list[Decision]:
         """Decisions with no safe default, which a user must answer.
@@ -262,12 +295,20 @@ def _id_stem(residue: ResidueRecord) -> str:
     ligand and metal-site ids have to stay unique across them.
     """
 
-    parts = [part for part in (residue.id.chain_id.strip().lower(),) if part]
-    parts.append(residue.id.resname.lower())
-    parts.append(str(residue.id.resid))
-    if residue.id.icode:
-        parts.append(residue.id.icode.strip().lower())
+    return _id_stem_of(residue.id)
+
+
+def _id_stem_of(residue_id: ResidueId) -> str:
+    parts = [part for part in (residue_id.chain_id.strip().lower(),) if part]
+    parts.append(residue_id.resname.lower())
+    parts.append(str(residue_id.resid))
+    if residue_id.icode:
+        parts.append(residue_id.icode.strip().lower())
     return "_".join(parts)
+
+
+def _residue_id_of(target: "ResidueTarget") -> ResidueId:
+    return ResidueId(target.chain, target.resname, target.resid, target.icode)
 
 
 def ligand_id_for(residue: ResidueRecord) -> str:
@@ -415,6 +456,8 @@ def plan_decisions(
             ],
         )
 
+    oligomer = analyse_oligomer(summary.structure.residues)
+
     decisions: list[Decision] = []
     decisions.extend(_project_decisions(path))
     decisions.extend(_chain_decision(summary))
@@ -447,28 +490,33 @@ def plan_decisions(
     decisions.extend(_solvation_decisions())
     decisions.extend(_md_decisions())
 
-    # A ligand or metal in a chain the user did not select must not be asked
-    # about, and must not reach the manifest.
+    # A ligand or metal in a copy the user did not keep must not be asked
+    # about, and must not reach the manifest. The copy is the protein chain
+    # it sits in or against, which is not its own chain letter when a
+    # prediction writes every ligand as a chain of its own.
     selectable = set(protein_chain_ids(summary))
     if any(decision.id == "structure.chains" for decision in decisions):
         decisions = [
             replace(
                 decision,
-                when=decision.when
-                + (
-                    Condition(
-                        "structure.chains", ("all", decision.targets[0].chain)
-                    ),
-                ),
+                when=decision.when + (Condition("structure.chains", ("all", chain)),),
             )
             if (
                 decision.section in {"ligands", "metals"}
                 and decision.targets
-                and decision.targets[0].chain in selectable
+                and (chain := oligomer.chain_of_residue.get(_residue_id_of(decision.subject)))
+                in selectable
             )
             else decision
             for decision in decisions
         ]
+
+    decisions, shared = _share_between_copies(decisions, oligomer)
+    if shared:
+        after = next(
+            index for index, decision in enumerate(decisions) if decision.id == "structure.chains"
+        )
+        decisions.insert(after + 1, _same_parametrization_decision(oligomer, shared))
 
     findings = {
         "total_atoms": len(summary.structure.atoms),
@@ -506,9 +554,18 @@ def plan_decisions(
             item.describe() for item in chain_breaks(summary.structure.residues)
         ],
         "structure_warnings": list(summary.structure.warnings),
+        "oligomer": oligomer.to_dict(),
+        # The atoms each ligand is written with, so a manifest can only let
+        # two residues share one template when tleap would accept it.
+        "ligand_atom_names": {
+            ligand_id_for(residue): residue.atom_names() for residue in ligands
+        },
     }
     return DecisionPlan(
-        structure_path=path, decisions=tuple(decisions), findings=findings
+        structure_path=path,
+        decisions=tuple(decisions),
+        findings=findings,
+        oligomer=oligomer,
     )
 
 
@@ -564,23 +621,24 @@ def non_protein_chain_ids(summary: InspectionSummary) -> list[str]:
 
 
 def _chain_decision(summary: InspectionSummary) -> list[Decision]:
-    """Which chain to build, when the input holds more than one."""
+    """Which chains to build, when the input holds more than one."""
 
     # Only chains carrying protein are copies of the complex. A chain holding
     # nothing but a metal or a ligand is part of whichever copy it belongs to
-    # and is kept regardless, so offering it here would invite discarding it.
+    # and goes wherever that copy goes.
     chains = protein_chain_ids(summary)
     if len(chains) < 2:
         return []
-    # A bonded MCPB site is single-chain, and a crystal structure with several
-    # copies of a metalloenzyme is the usual reason to be asked at all, so the
-    # presence of a metal makes this a decision with no safe default.
+    # A crystal asymmetric unit is often several copies of a complex that is
+    # a monomer in solution, and a prediction of a dimer is usually meant as
+    # one. With a metal in it the difference is also a bonded site fitted
+    # once or a system several times the size, so it is not guessed.
     has_metal = bool(summary.metal_ions)
     choices = [
         Choice(
             chain,
             f"Chain {chain} only",
-            "One copy of the complex; required for a bonded MCPB metal site.",
+            "One copy of the complex, with the ligands and metals that belong to it.",
         )
         for chain in chains
     ]
@@ -588,20 +646,22 @@ def _chain_decision(summary: InspectionSummary) -> list[Decision]:
         Choice(
             "all",
             "All chains",
-            "Build the whole asymmetric unit. Not usable with a bonded MCPB site.",
+            "The whole assembly in the file: a dimer, trimer, tetramer...",
         )
     )
     return [
         Decision(
             id="structure.chains",
             section="structure",
-            question="Which chain should be prepared?",
+            question="Which chains should be prepared?",
             kind="choice",
             why=(
-                "The input contains more than one chain. MCPB metal-site inputs "
-                "are single-chain, and a crystallographic multimer is usually "
-                "several copies of the same complex rather than the assembly you "
-                "want to simulate."
+                "The input contains more than one protein chain. A predicted "
+                "oligomer is usually the assembly you mean to simulate; a "
+                "crystal structure's chains are often copies of a complex that "
+                "is a monomer in solution, packed together by the crystal. "
+                "Keep all of them for the assembly, or one for a single copy. "
+                "Ligands and metals go with the chain they belong to."
             ),
             default=None if has_metal else "all",
             requires_user_input=has_metal,
@@ -617,6 +677,134 @@ def _chain_decision(summary: InspectionSummary) -> list[Decision]:
             focus="structure",
         )
     ]
+
+
+def _share_between_copies(
+    decisions: list[Decision], oligomer: OligomerAnalysis
+) -> tuple[list[Decision], list[tuple[ResidueId, ResidueId]]]:
+    """Mark each copy's questions as copies of the reference copy's.
+
+    A ligand or metal in a copy with a counterpart in the reference copy has
+    the same questions, about the same chemistry. Each of them is given
+    ``copy_of`` -- the reference question it stands for -- and is asked only
+    when the parameters are not to be shared, or when its own chain is the
+    one being kept.
+
+    A counterpart whose questions are not the same, one for one, is not a
+    copy after all: a ligand resolved with hydrogens in one chain and without
+    in the other is asked for a SMILES in one only. It is reported and asked
+    about on its own.
+
+    Returns the decisions and the (copy, reference) residues now shared.
+    """
+
+    if not oligomer.homomeric:
+        return decisions, []
+    ids = {decision.id for decision in decisions}
+    items: dict[tuple[str, str], list[int]] = {}
+    subjects: dict[tuple[str, str], ResidueId] = {}
+    for index, decision in enumerate(decisions):
+        kind = decision.id.split(".", 1)[0]
+        if kind not in {"ligand", "metal"} or decision.id.count(".") < 2:
+            continue
+        key = (kind, decision.id.split(".")[1])
+        items.setdefault(key, []).append(index)
+        if key not in subjects and decision.targets:
+            subjects[key] = _residue_id_of(decision.subject)
+
+    shared: list[tuple[ResidueId, ResidueId]] = []
+    for (kind, item), indices in items.items():
+        subject = subjects.get((kind, item))
+        if subject is None:
+            continue
+        chain = oligomer.chain_of_residue.get(subject)
+        reference = oligomer.counterpart(subject)
+        if chain is None or reference is None or oligomer.reference_chain(chain) == chain:
+            continue
+        reference_item = _id_stem_of(reference) + ("_site" if kind == "metal" else "")
+        mapped: dict[int, str] = {}
+        for index in indices:
+            decision = decisions[index]
+            field_name = decision.id.split(".", 2)[2]
+            if field_name.startswith("donor_state."):
+                donor = oligomer.counterpart(_residue_id_of(decision.subject))
+                if donor is None:
+                    break
+                field_name = "donor_state." + _id_stem_of(donor)
+            mapped[index] = f"{kind}.{reference_item}.{field_name}"
+        reference_ids = {
+            decision_id for decision_id in ids if decision_id.startswith(f"{kind}.{reference_item}.")
+        }
+        if len(mapped) != len(indices) or set(mapped.values()) != reference_ids:
+            oligomer.unmatched[subject] = (
+                f"its questions are not the same as {reference.display()}'s"
+            )
+            continue
+        for index, reference_id in mapped.items():
+            decisions[index] = replace(
+                decisions[index],
+                copy_of=reference_id,
+                when_any=(
+                    Condition("structure.chains", (chain,)),
+                    Condition("structure.same_parametrization", ("false",)),
+                ),
+            )
+        shared.append((subject, reference))
+    return decisions, shared
+
+
+def _same_parametrization_decision(
+    oligomer: OligomerAnalysis, shared: list[tuple[ResidueId, ResidueId]]
+) -> Decision:
+    evidence: list[str] = []
+    for group in oligomer.groups:
+        if len(group) < 2:
+            continue
+        evidence.append(f"Chains {', '.join(group)} are copies of one protein.")
+        for chain in group[1:]:
+            alignment = oligomer.alignments[chain]
+            evidence.append(
+                f"Chain {chain}: {alignment.identity:.0%} identical to chain "
+                f"{alignment.reference} over {len(alignment.pairs)} residues"
+                + (", numbered differently" if alignment.renumbered else "")
+            )
+    for copy, reference in shared:
+        evidence.append(f"{copy.display()} would share {reference.display()}'s parameters")
+    for residue, reason in oligomer.unmatched.items():
+        evidence.append(f"Asked about on its own either way: {residue.display()}, as {reason}")
+    return Decision(
+        id="structure.same_parametrization",
+        section="structure",
+        question="Give every copy of the protein the same parameters?",
+        kind="boolean",
+        why=(
+            "These chains are copies of one protein. Answer yes and the "
+            "questions that follow are asked for the first copy only; each "
+            "answer is then given to the matching residue of every other "
+            "copy. mdprep matches residues by sequence and by position, not "
+            "by residue number, which often differs between copies. A ligand "
+            "is parameterised once, and a bonded metal site is fitted once, "
+            "with its templates and bonds then reused in each copy. Answer no "
+            "to answer for every copy separately, as for copies in different "
+            "states -- a substrate bound in one and not in another. Anything "
+            "listed as asked on its own has no counterpart, and is asked "
+            "about either way."
+        ),
+        default="true",
+        when=(Condition("structure.chains", ("all",)),),
+        evidence=tuple(evidence),
+        targets=tuple(
+            ResidueTarget(
+                chain=residue.chain_id,
+                resname=residue.resname,
+                resid=residue.resid,
+                icode=residue.icode,
+            )
+            for pair in shared
+            for residue in pair
+        ),
+        focus="targets",
+    )
 
 
 def coordinating_water_residues(summary: InspectionSummary) -> list[ResidueRecord]:
@@ -1597,17 +1785,17 @@ def _qm_region_decisions(summary: InspectionSummary) -> list[Decision]:
         return []
     # Refinement only runs for a site that is modelled as bonded MCPB and
     # whose coordination shell was confirmed -- a rejected shell is written
-    # out by hand and generates nothing. With one metal those are two earlier
-    # answers to condition on. With several the question would need "any of",
-    # which a Condition cannot say, so it is asked and then ignored if no
-    # site turns out to be bonded.
-    when: tuple[Condition, ...] = ()
-    if len(sites) == 1:
-        site_id = metal_site_id_for(sites[0])
-        when = (
-            Condition(f"metal.{site_id}.model", ("bonded_mcpb",)),
-            Condition(f"metal.{site_id}.confirm_donors", ("true",)),
-        )
+    # out by hand and generates nothing. A confirmed shell is only asked
+    # about once the site is bonded, so that one answer is the condition,
+    # for whichever site it turns out to be. A metal with no donor in range
+    # has no shell to confirm and can never be bonded here.
+    when_any = tuple(
+        Condition(f"metal.{metal_site_id_for(site)}.confirm_donors", ("true",))
+        for site in sites
+        if metal_donor_atoms(summary.structure.residues, site)
+    )
+    if not when_any:
+        return []
     return [
         Decision(
             id="refinement.total_qm_multiplicity",
@@ -1626,7 +1814,7 @@ def _qm_region_decisions(summary: InspectionSummary) -> list[Decision]:
                 "unpaired spin."
             ),
             minimum=1,
-            when=when,
+            when_any=when_any,
         )
     ]
 
@@ -1787,7 +1975,7 @@ def resolve_answers(
 def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, Any]:
     """Assemble a manifest dictionary from a complete set of answers."""
 
-    resolved = resolve_answers(plan, answers)
+    resolved = share_answers(plan, resolve_answers(plan, answers))
     get = resolved.get
 
     # A heterogen the user declined as a ligand is an unknown heterogen, and
@@ -1798,7 +1986,6 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
         for decision in plan.decisions
         if decision.section == "ligands"
         and decision.id.endswith(".include")
-        and decision.is_applicable(resolved)
         and resolved.get(decision.id) is False
     ]
     if declined and not get("structure.remove_unknown_heterogens", False):
@@ -1816,9 +2003,9 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
         for decision in plan.decisions
         if decision.section == "metals"
         and decision.id.endswith(".model")
-        and decision.is_applicable(resolved)
         and resolved.get(decision.id) == "bonded_mcpb"
     ]
+    _require_one_bonded_fit(plan, resolved, bonded_sites)
     if bonded_sites and get("structure.keep_crystal_waters", True) is False:
         raise DecisionError(
             "A bonded metal site is refined with QM/MM, which protonates and "
@@ -1847,6 +2034,10 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
                 "point with no nucleus. Choose ff14SB with TIP3P for this system."
             )
 
+    ligand_blocks = _link_ligand_copies(plan, resolved, _ligand_blocks(plan, resolved))
+    metal_blocks = _link_metal_copies(plan, resolved, _metal_blocks(plan, resolved))
+    _require_one_template_per_metal_name(metal_blocks)
+
     manifest: dict[str, Any] = {
         "project": {
             "name": resolved["project.name"],
@@ -1854,14 +2045,7 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
             "output_dir": resolved["project.output_dir"],
         },
         "structure": {
-            "keep_chains": (
-                []
-                if resolved.get("structure.chains", "all") == "all"
-                else [
-                    resolved["structure.chains"],
-                    *plan.findings.get("non_protein_chains", []),
-                ]
-            ),
+            "keep_chains": _kept_chains(plan, resolved.get("structure.chains", "all")),
             "keep_crystal_waters": get("structure.keep_crystal_waters", True),
             "keep_crystal_ions": get("structure.keep_crystal_ions", True),
             "altloc_policy": "highest_occupancy",
@@ -1893,8 +2077,8 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
             "force": [],
             "forbid": [],
         },
-        "ligands": _ligand_blocks(plan, resolved),
-        "metals": _metal_blocks(plan, resolved),
+        "ligands": ligand_blocks,
+        "metals": metal_blocks,
         "refinement": {},
         "solvation": _solvation_block(resolved),
         "validation": {
@@ -1909,6 +2093,263 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
         plan, resolved, manifest["metals"], manifest["ligands"]
     )
     return manifest
+
+
+def share_answers(plan: DecisionPlan, resolved: Mapping[str, Any]) -> dict[str, Any]:
+    """Give each copy's skipped questions the reference copy's answers.
+
+    Only when the parameters are to be shared, and only for questions that
+    would have been asked had they not been: a copy's ligand the reference
+    copy declined is declined in every copy, and nothing is answered for a
+    copy that is not being built.
+    """
+
+    shared = dict(resolved)
+    if shared.get("structure.same_parametrization") is not True:
+        return shared
+    for decision in plan.decisions:
+        if decision.copy_of is None or decision.id in shared:
+            continue
+        if decision.copy_of not in shared:
+            continue
+        if not all(condition.is_met(shared) for condition in decision.when):
+            continue
+        shared[decision.id] = shared[decision.copy_of]
+    return shared
+
+
+def _kept_chains(plan: DecisionPlan, chosen: str) -> list[str]:
+    """Chain letters to keep: the chosen protein chain and what belongs to it.
+
+    A chain with no protein in it -- a prediction's ligand, a deposition's
+    separate chain of ions -- is kept with the protein chain it sits against,
+    and kept regardless when it touches none. Keeping every such chain, as
+    mdprep used to, left the other copy's cofactors floating in the box.
+    """
+
+    if chosen == "all":
+        return []
+    owners = (
+        plan.oligomer.chain_of_nonprotein_chain if plan.oligomer is not None else {}
+    )
+    return [
+        chosen,
+        *(
+            chain
+            for chain in plan.findings.get("non_protein_chains", [])
+            if owners.get(chain) in (None, chosen)
+        ),
+    ]
+
+
+def _shared_from(decision: Decision, resolved: Mapping[str, Any]) -> str | None:
+    """The reference item whose answers this copy's item took, if it did."""
+
+    if decision.copy_of is None or resolved.get("structure.same_parametrization") is not True:
+        return None
+    return decision.copy_of.split(".")[1]
+
+
+# The fields that make two ligand residues one template. tleap builds every
+# residue of one name from one template, so two residues sharing a name
+# either agree on all of these or cannot both be built.
+LIGAND_PARAMETER_FIELDS = (
+    "net_charge",
+    "multiplicity",
+    "atom_types",
+    "charge_method",
+    "smiles",
+)
+
+
+def _link_ligand_copies(
+    plan: DecisionPlan,
+    resolved: Mapping[str, Any],
+    blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Mark ligands that take another ligand's parameters.
+
+    A copy whose answers were shared takes its reference's parameters. So,
+    too, does any other ligand with the same residue name and the same
+    answers: tleap builds every residue called AKG from the one AKG template,
+    so two of them cannot carry different charges -- and two that were
+    answered alike would otherwise be fitted twice, from two conformations,
+    into two templates that collide. Two with the same name and different
+    answers cannot be built at all; that is refused here, with the fix.
+    """
+
+    by_id = {block["id"]: block for block in blocks}
+    for block in blocks:
+        include = plan.by_id(f"ligand.{block['id']}.include")
+        source = _shared_from(include, resolved)
+        if source is not None and source in by_id:
+            block["parameters_from"] = source
+
+    atom_names = plan.findings.get("ligand_atom_names", {})
+    first_by_name: dict[str, dict[str, Any]] = {}
+    for block in blocks:
+        name = block["selector"]["resname"]
+        if "parameters_from" in block:
+            continue
+        first = first_by_name.get(name)
+        if first is None:
+            first_by_name[name] = block
+            continue
+        differing = [
+            field_name
+            for field_name in LIGAND_PARAMETER_FIELDS
+            if block.get(field_name) != first.get(field_name)
+        ]
+        if atom_names.get(block["id"]) != atom_names.get(first["id"]):
+            differing.append("atom names")
+        if differing:
+            raise DecisionError(
+                f"{_selector_label(block['selector'])} and "
+                f"{_selector_label(first['selector'])} are both called {name} but "
+                f"differ in {', '.join(differing)}. tleap builds every residue of one "
+                "name from one template, so they cannot both be built as they are. "
+                "Give them the same answers, or rename one of them in the input."
+            )
+        block["parameters_from"] = first["id"]
+    return blocks
+
+
+def _link_metal_copies(
+    plan: DecisionPlan,
+    resolved: Mapping[str, Any],
+    blocks: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Mark the metal sites of copies that share a site's parameters.
+
+    A bonded copy's bonds are written in the order of its reference's, so
+    the n-th bond of one is the n-th of the other and the build can carry
+    the reference's templates across residue by residue.
+    """
+
+    by_id = {block["id"]: block for block in blocks}
+    oligomer = plan.oligomer
+    for block in blocks:
+        model = plan.by_id(f"metal.{block['id']}.model")
+        source = _shared_from(model, resolved)
+        if source is None or source not in by_id:
+            continue
+        block["parameters_from"] = source
+        reference = by_id[source]
+        if block["model"] != "bonded_mcpb" or oligomer is None:
+            continue
+        chain = oligomer.chain_of_residue.get(_selector_residue_id(block["ions"][0]["selector"]))
+
+        def in_this_copy(selector: Mapping[str, Any]) -> tuple[ResidueId, str]:
+            residue = _selector_residue_id(selector)
+            for copy in oligomer.copies_of(residue):
+                if oligomer.chain_of_residue.get(copy) == chain:
+                    return copy, selector["atom_name"]
+            raise DecisionError(
+                f"{_selector_label(selector)} has no counterpart in chain {chain}"
+            )
+
+        def in_reference_order(own: list[dict[str, Any]], theirs: list[dict[str, Any]], key: str):
+            by_residue = {
+                (_selector_residue_id(item[key]), item[key]["atom_name"]): item for item in own
+            }
+            ordered = []
+            for item in theirs:
+                counterpart = in_this_copy(item[key])
+                if counterpart not in by_residue:
+                    raise DecisionError(
+                        f"{block['id']} has no bond to the counterpart of "
+                        f"{_selector_label(item[key])} {item[key]['atom_name']}, so it is "
+                        f"not a copy of {source}; answer no to sharing parameters"
+                    )
+                ordered.append(by_residue[counterpart])
+            return ordered
+
+        block["mcpb"]["bonds"] = in_reference_order(
+            block["mcpb"]["bonds"], reference["mcpb"]["bonds"], "coordinator"
+        )
+        if "coordinating_ions" in reference:
+            block["coordinating_ions"] = in_reference_order(
+                block.get("coordinating_ions", []), reference["coordinating_ions"], "selector"
+            )
+    return blocks
+
+
+def _require_one_bonded_fit(
+    plan: DecisionPlan, resolved: Mapping[str, Any], bonded_sites: list[str]
+) -> None:
+    """Refuse two bonded sites that would each need an MCPB fit of their own.
+
+    One fit per preparation is what mdprep can build: MCPB.py names its
+    residue templates and atom types the same way for every site it fits,
+    so two separate fits cannot be loaded side by side. A copy that shares
+    its reference's parameters is not a second fit -- it reuses the first.
+    """
+
+    independent = [
+        site
+        for site in bonded_sites
+        if _shared_from(plan.by_id(f"metal.{site}.model"), resolved) is None
+    ]
+    if len(independent) <= 1:
+        return
+    sharing = resolved.get("structure.same_parametrization")
+    if sharing is True:
+        advice = (
+            "Each copy that matches the first one already reuses its fit; these "
+            "do not match it, so model all but one of them nonbonded."
+        )
+    elif sharing is False:
+        advice = (
+            "Answer yes to giving every copy the same parameters, so the copies "
+            "reuse one fit, or model all but one of them nonbonded."
+        )
+    else:
+        advice = "Model all but one of them nonbonded."
+    raise DecisionError(
+        f"{', '.join(independent)} would each need a bonded MCPB fit of their own, "
+        "and mdprep builds one fit per preparation: MCPB.py gives every fit the same "
+        f"residue and atom-type names, so two cannot be loaded together. {advice}"
+    )
+
+
+def _require_one_template_per_metal_name(blocks: list[dict[str, Any]]) -> None:
+    """Two metals with one residue name must be one Amber ion.
+
+    tleap builds a residue from the template of its name, so an FE2 that is
+    Fe(II) in one site and Fe(III) in another, or carries two different
+    Li/Merz sets, cannot be built. A bonded site's metal counts with the set
+    it is built with before MCPB.py replaces it.
+    """
+
+    seen: dict[str, tuple[tuple[object, ...], str]] = {}
+    for block in blocks:
+        family = (
+            block["nonbonded"]["parameter_set"]
+            if block["model"] == "nonbonded"
+            else block["mcpb"]["provisional_nonbonded_parameter_set"]
+        )
+        for ion in block["ions"]:
+            name = ion["selector"]["resname"]
+            signature = (ion["element"], ion["charge"], family)
+            previous = seen.get(name)
+            if previous is not None and previous[0] != signature:
+                raise DecisionError(
+                    f"{_selector_label(ion['selector'])} and {previous[1]} are both "
+                    f"called {name} but differ in charge or ion parameter set, and "
+                    "tleap builds every residue of one name from one template. "
+                    "Give them the same answers, or rename one of them in the input."
+                )
+            seen[name] = (signature, _selector_label(ion["selector"]))
+
+
+def _selector_residue_id(selector: Mapping[str, Any]) -> ResidueId:
+    return ResidueId(
+        selector["chain"], selector["resname"], selector["resid"], selector.get("icode")
+    )
+
+
+def _selector_label(selector: Mapping[str, Any]) -> str:
+    return f"{selector['chain']}:{selector['resname']}{selector['resid']}{selector.get('icode') or ''}"
 
 
 def _metal_donor_overrides(
@@ -2157,9 +2598,37 @@ def _refinement_block(
 ) -> dict[str, Any]:
     """QM/MM refinement, which a bonded site takes its geometry from."""
 
-    bonded = [site for site in metals if site.get("model") == "bonded_mcpb"]
+    # The site that is fitted. A copy that reuses its parameters is not
+    # fitted, so its geometry is not refined for a fit either.
+    bonded = [
+        site
+        for site in metals
+        if site.get("model") == "bonded_mcpb" and "parameters_from" not in site
+    ]
     if not bonded:
         return {"enabled": False}
+    # The QM region is that site and the ligands of its own copy of the
+    # protein. A ligand in another copy is tens of angstroms away; putting it
+    # in the same quantum system would add a disconnected fragment, and with
+    # it a spin state nobody asked about.
+    oligomer = plan.oligomer
+    region_chains = {
+        oligomer.chain_of_residue.get(_selector_residue_id(ion["selector"]))
+        if oligomer is not None
+        else None
+        for site in bonded
+        for ion in site["ions"]
+    }
+    region_ligands = [
+        entry["id"]
+        for entry in ligands
+        if "parameters_from" not in entry
+        and (
+            oligomer is None
+            or oligomer.chain_of_residue.get(_selector_residue_id(entry["selector"]))
+            in region_chains | {None}
+        )
+    ]
     return {
         "enabled": True,
         # The force-field backend holds every heavy atom and relaxes the
@@ -2169,7 +2638,7 @@ def _refinement_block(
         "backend": "openmm",
         "qm_method": "gfn2_xtb",
         "qm_components": {
-            "ligands": [entry["id"] for entry in ligands],
+            "ligands": region_ligands,
             "metal_sites": [site["id"] for site in bonded],
             "metal_coordinating_residues": {},
         },

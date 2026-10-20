@@ -77,12 +77,19 @@ def resolve_metal_sites(
 ) -> list[ResolvedMetalSite]:
     """Resolve all configured ions and explicit bonds against ``structure``."""
 
-    bonded_sites = [site for site in manifest.metals if site.model == "bonded_mcpb"]
+    # A site that reuses another's parameters is not fitted, so it does not
+    # count: only fits collide.
+    bonded_sites = [
+        site
+        for site in manifest.metals
+        if site.model == "bonded_mcpb" and site.parameters_from is None
+    ]
     if len(bonded_sites) > 1:
         raise MetalCoordinationError(
-            "Only one bonded_mcpb site is supported in one preparation. Put interacting ions "
-            "in the same site's ions list; independent MCPB.py residue-renaming outputs cannot "
-            "be combined safely."
+            "Only one bonded_mcpb site is fitted in one preparation. Put interacting ions "
+            "in the same site's ions list, and give a site in another copy of the protein "
+            "parameters_from; independent MCPB.py residue-renaming outputs cannot be "
+            "combined safely."
         )
 
     resolved: list[ResolvedMetalSite] = []

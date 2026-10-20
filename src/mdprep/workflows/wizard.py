@@ -158,6 +158,19 @@ def render_manifest_yaml(
             "#       file. A bonded MCPB site needs external QM artifacts; add it by"
         )
         header.append("#       hand following docs/metals.md before preparing.")
+    # Copies of the protein built with another copy's parameters, named up
+    # front: the blocks repeat every setting, so the one line that makes them
+    # copies is easy to miss further down.
+    shared = [
+        f"#   {block['id']} <- {block['parameters_from']}"
+        for block in (*manifest["ligands"], *manifest["metals"])
+        if "parameters_from" in block
+    ]
+    if shared:
+        header.append(
+            "# Built with another block's parameters (parameters_from), see docs/oligomers.md:"
+        )
+        header.extend(shared)
     body = yaml.safe_dump(manifest, sort_keys=False, default_flow_style=False)
     return "\n".join(header) + "\n\n" + body
 

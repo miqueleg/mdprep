@@ -91,7 +91,7 @@ def validate_final_outputs(
             if metal_result is not None and metal_result.mcpb_site is not None:
                 accepted_resnames.update(
                     str(rename["final_resname"])
-                    for rename in metal_result.mcpb_site.residue_renames
+                    for rename in metal_result.mcpb_site.all_residue_renames
                     if rename.get("original_resname") == expected
                 )
             residues = [
@@ -238,7 +238,7 @@ def _allowed_final_heterogen_resnames(
     if metal_result is not None and metal_result.mcpb_site is not None:
         allowed.update(
             str(rename["final_resname"])
-            for rename in metal_result.mcpb_site.residue_renames
+            for rename in metal_result.mcpb_site.all_residue_renames
         )
     if manifest.solvation.enabled and (
         manifest.solvation.neutralize or manifest.solvation.salt_concentration_molar > 0

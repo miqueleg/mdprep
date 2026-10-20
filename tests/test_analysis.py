@@ -156,6 +156,30 @@ def test_the_metal_site_is_shown_as_a_whole(tmp_path):
     assert {entry["residue"] for entry in totals["fractional_residues"]} == {"HD1 1", "FE1 2"}
 
 
+def test_each_copy_of_a_metal_site_is_its_own_integer_charge():
+    """A dimer has a site per copy. Summed, two -1 sites read as one of -2."""
+
+    from mdprep.analysis.prmtop import AmberAtom, AmberResidue, AmberTopology
+
+    atoms, residues, bonds = [], [], []
+    for copy in range(2):
+        start = len(atoms)
+        for name, element, charge in (("NE2", 7, -0.4), ("CE1", 6, -0.6)):
+            atoms.append(AmberAtom(len(atoms), name, "Y1", charge, 14.0, element, len(residues)))
+        residues.append(AmberResidue(len(residues), "HD1", start, len(atoms)))
+        atoms.append(AmberAtom(len(atoms), "FE", "M1", 0.0, 55.8, 26, len(residues)))
+        residues.append(AmberResidue(len(residues), "FE1", len(atoms) - 1, len(atoms)))
+        bonds.append((start, len(atoms) - 1))
+    topology = AmberTopology(atoms=atoms, residues=residues, bonds=bonds, periodic=False)
+
+    sites = charges.metal_sites(topology)
+
+    assert [site["metals"] for site in sites] == [["FE1 2:FE"], ["FE1 4:FE"]]
+    assert [site["total"] for site in sites] == [-1.0, -1.0]
+    assert [len(site["bonds"]) for site in sites] == [1, 1]
+    assert charges.metal_site(topology)["total"] == -2.0
+
+
 # --------------------------------------------------------------------------
 # DCD and the trajectory
 # --------------------------------------------------------------------------

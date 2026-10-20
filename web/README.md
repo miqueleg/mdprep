@@ -39,6 +39,17 @@ would fetch the deposition that was just refused.
 `tests/test_web_builder_reference_case.py` drives this in a real browser over
 the untouched deposition.
 
+## Dimers and tetramers
+
+When all chains of an oligomer are kept and some are copies of one protein,
+the page asks once whether every copy should share the first copy's
+parameters, and then asks about the first copy only. The skipped questions
+carry `copy_of` and a `when_any` condition; `isApplicable` in `app.js` honours
+`when_any` exactly as `Decision.is_applicable` does, and `build_manifest`
+fills in the copies. See [docs/oligomers.md](../docs/oligomers.md);
+`tests/test_web_builder_oligomer_case.py` drives the SyrB2 dimer through the
+page.
+
 ## Running it locally
 
 ```bash

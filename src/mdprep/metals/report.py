@@ -79,6 +79,31 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 )
         else:
             lines.append("- None")
+        # Sites in other copies of the protein, built from this fit rather
+        # than fitted: every residue they had renamed is listed, since the
+        # prepared system names them after the fit's templates.
+        copies = bonded.get("copies", [])
+        lines.extend(["", "### Copies built from this fit", ""])
+        if copies:
+            for copy in copies:
+                lines.append(
+                    f"- `{copy['site_id']}` reuses `{copy['parameters_from']}`: "
+                    f"{len(copy['residue_renames'])} residue(s) renamed to its templates, "
+                    f"{len(copy['leap_bond_commands'])} bond(s) to its metal and along its chain"
+                )
+                for rename in copy["residue_renames"]:
+                    lines.append(
+                        f"  - {rename['chain'] or '<blank>'}:{rename['original_resname']}"
+                        f"{rename['resid']}{rename['icode'] or ''} -> "
+                        f"{rename['final_resname']}"
+                    )
+                for ligand in copy.get("refitted_ligands", []):
+                    lines.append(
+                        f"  - ligand `{ligand['ligand_id']}` takes the fitted "
+                        f"`{ligand['final_resname']}` template"
+                    )
+        else:
+            lines.append("- None")
         comparison = bonded["parameter_comparison"]
         if comparison is not None:
             lines.extend(

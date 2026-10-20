@@ -20,6 +20,10 @@ recorded in the output reports.
   PySCF gas-phase RESP, or electrostatically embedded PySCF QMMESP charges.
 - Amber nonbonded metal models or bonded MCPB.py models with explicit
   coordinating atoms, charges, and multiplicities.
+- Dimers, trimers, tetramers: every protein chain in one system. Copies of one
+  protein can share parameters -- asked about once, matched residue for
+  residue by sequence and position rather than number, and a bonded metal site
+  fitted once and reused in every copy ([docs/oligomers.md](docs/oligomers.md)).
 - MCPB Seminario Hessians from PySCF, GFN2-xTB, g-xTB, or MACE-POLAR-1;
   PySCF supplies the embedded large-model ESP/RESP calculation.
 - Optional ASH/OpenMM active-site QM/MM refinement before final
@@ -240,8 +244,9 @@ charge model, protonation, force field, QM method, or metal model.
 
 mdprep does not support noncanonical amino acids inside peptide chains,
 covalent ligands, automatic loop modeling (a missing loop is left as two
-termini), a metal-bound hydroxide, ORCA, Multiwfn, multiple independent bonded
-MCPB sites, or multi-chain MCPB protein inputs. Unsupported chemistry fails
+termini), a metal-bound hydroxide, ORCA, Multiwfn, more than one independently
+fitted bonded MCPB site (copies of one site in an oligomer share a single
+fit), or a bonded MCPB site bound by two chains. Unsupported chemistry fails
 explicitly.
 
 ## Development and release checks
