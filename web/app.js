@@ -17,8 +17,10 @@ const WHEEL_INDEX_URL = "vendor/wheel.json";
 // generated cell installs from the repository instead. Switch this to
 // "mdprep" once a release carrying them is published.
 const MDPREP_INSTALL = '"mdprep @ git+https://github.com/miqueleg/mdprep@master"';
+// The official notebook: it takes the bundle this page writes, prepares and
+// equilibrates the system, and shows every step of it.
 const COLAB_NOTEBOOK_URL =
-  "https://colab.research.google.com/github/miqueleg/mdprep/blob/master/examples/mdprep_colab_run.ipynb";
+  "https://colab.research.google.com/github/miqueleg/mdprep/blob/master/examples/mdprep_colab.ipynb";
 
 const state = {
   pyodide: null,
@@ -737,6 +739,7 @@ function renderColabCell(result) {
     ];
   }
 
+  el("open-colab").href = COLAB_NOTEBOOK_URL;
   el("colab-setup").textContent = setup;
   el("colab-intro").textContent = intro;
   el("colab-command").textContent = runLines.join("\n");

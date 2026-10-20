@@ -18,6 +18,15 @@ class PdbParseError(ValueError):
     """Raised when a PDB file cannot be parsed under the requested policy."""
 
 
+# A residue name mdprep assigned -- because the one it read could not be
+# written to a PDB column -- is recorded so that nothing reads chemistry into
+# it. That record used to live only in memory, so a structure mdprep wrote
+# and read back (a model with transplanted waters, say) lost it: a predicted
+# iron called LIG1 became FE, and FE read cold is the CCD code for Fe(III).
+# The writer states the assignment in this remark and the reader honours it.
+ASSIGNED_RESNAME_REMARK = "REMARK 999 MDPREP ASSIGNED RESNAME"
+
+
 def read_pdb(
     path: str | Path,
     *,
@@ -85,6 +94,14 @@ def read_pdb(
 
     atoms, field_warnings, assigned_resnames = fit_atoms_to_pdb_fields(atoms)
     warnings.extend(field_warnings)
+    declared = {
+        line[len(ASSIGNED_RESNAME_REMARK):].strip()
+        for line in lines
+        if line.startswith(ASSIGNED_RESNAME_REMARK)
+    }
+    assigned_resnames = frozenset(
+        assigned_resnames | (declared & {atom.resname for atom in atoms})
+    )
     residues = build_residues(atoms)
     present_serials = {atom.serial for atom in atoms if atom.serial is not None}
     retained = {id(atom) for atom in atoms}

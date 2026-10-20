@@ -251,6 +251,26 @@ button.primary {
   color: var(--accent-ink);
 }
 
+a.button {
+  display: inline-block;
+  padding: 9px 16px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  text-decoration: none;
+  color: var(--ink);
+}
+
+a.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+details summary {
+  cursor: pointer;
+  margin: 12px 0;
+}
+
 button:disabled {
   opacity: 0.45;
   cursor: not-allowed;

@@ -28,6 +28,11 @@ recorded in the output reports.
   topology, coordinate, charge, and optional OpenMM energy validation.
 - Optional Roe–Brooks OpenMM minimization, heating, density equilibration, and
   manifest-sized production MD with GPU-first/CPU-fallback execution.
+- Predicted models: the closest X-ray structure from the RCSB, and its crystal
+  waters transplanted onto the model with PyMOL -- a water on the metal moves
+  with it.
+- An official Colab notebook that prepares, equilibrates, and shows every step:
+  charges, metal-site parameters, the equilibration, the trajectory.
 
 ## Installation
 
@@ -139,22 +144,27 @@ Relative paths are resolved from the manifest directory. Unknown heterogens
 are not deleted or guessed: configure them under `ligands` or `metals`, or
 explicitly request their removal.
 
-For a guided 3D workflow, upload
-[`examples/mdprep_interactive_colab.ipynb`](examples/mdprep_interactive_colab.ipynb)
-to Google Colab. It accepts an RCSB PDB ID or uploaded PDB, requires review of
-all structural and chemistry decisions, creates a validated manifest, and can
-either download a portable input bundle or run mdprep in Colab. BesD PDB 7JSD
-is the default structural example; charges, spin states, and metal chemistry
-remain explicit user decisions. For bonded MCPB preparation, a dedicated cell
-installs the pinned official g-xTB Linux build and accepts it only after
-checksum verification and a successful `--gxtb --hess` smoke calculation. The
-guided metal workflow supports one explicitly bonded, single-chain MCPB site
-and can select either that g-xTB Hessian or PySCF B3LYP/6-31G*; every
-coordination bond remains explicitly selected. The notebook derives the MCPB
-small/large-model charge and multiplicity and the complete QM-region
-multiplicity from the reviewed component electronic states, displays the
-calculation, and refuses ambiguous multi-open-shell spin coupling rather than
-guessing it. All multi-selection fields use comma-separated values.
+For a guided workflow, use the [web input builder](https://miqueleg.github.io/mdprep/):
+it shows the structure in 3D, asks only the questions your structure needs, and
+writes a validated manifest and a bundle. Then open the
+[official Colab notebook](https://colab.research.google.com/github/miqueleg/mdprep/blob/master/examples/mdprep_colab.ipynb)
+([`examples/mdprep_colab.ipynb`](examples/mdprep_colab.ipynb)), upload the
+bundle, and it installs what the manifest needs, prepares the system,
+equilibrates it, and lets you investigate every step: the structure at each
+stage, the protonation states, the charge on every atom, the metal site's
+force constants, how the box equilibrated, and the MD trajectory.
+
+No crystal structure of your protein? Predict the complex with its cofactors
+(Boltz or AlphaFold3 in ColabFold), then let mdprep find the closest X-ray
+structure and bring its crystal waters across -- including a water bound to
+the metal, which a prediction never has:
+
+```bash
+mdprep closest-xray model.cif
+mdprep transplant-waters model.cif --reference 2FCT
+```
+
+See [Predicted structures](docs/predicted_structures.md).
 
 ## Common workflows
 
@@ -202,7 +212,9 @@ specified in steps in the manifest.
 | Metal centers and MCPB.py | [Metal centers](docs/metals.md) | `examples/08_nonbonded_zinc_1264.yaml`, `09_bonded_zinc_mcpb_prepare.yaml` |
 | Active-site QM/MM refinement | [QM/MM refinement](docs/qmmm_refinement.md) | `examples/10_qmmm_refinement_ash.yaml` |
 | Roe–Brooks OpenMM MD | [Molecular dynamics](docs/molecular_dynamics.md) | `examples/15_roe_brooks_openmm.yaml` |
-| Running a manifest in Colab | [Colab example notes](examples/README.md) | `examples/mdprep_colab_run.ipynb` |
+| Predicted models: closest X-ray, crystal waters | [Predicted structures](docs/predicted_structures.md) | `mdprep closest-xray`, `mdprep transplant-waters` |
+| A water bound to a metal | [Metal centers](docs/metals.md#waters-bound-in-a-metal-site) | `examples/17_syrb2_bound_water_mcpb.yaml` |
+| Preparing, running and investigating in Colab | [Colab example notes](examples/README.md) | `examples/mdprep_colab.ipynb` |
 | Guided Colab builder (legacy) | [Colab example notes](examples/README.md) | `examples/mdprep_interactive_colab.ipynb` |
 | Complete Fe(III) workflow | [7E07 tutorial](examples/tutorials/7E07_bonded_fe3/README.md) | `examples/tutorials/7E07_bonded_fe3/system.yaml` |
 
@@ -226,10 +238,11 @@ charge model, protonation, force field, QM method, or metal model.
 
 ## Current limitations
 
-Version 0.3.0 does not support noncanonical amino acids inside peptide chains,
-covalent ligands, mmCIF input, automatic loop modeling, ORCA, Multiwfn,
-multiple independent bonded MCPB sites, or multi-chain MCPB protein inputs.
-Unsupported chemistry fails explicitly.
+mdprep does not support noncanonical amino acids inside peptide chains,
+covalent ligands, automatic loop modeling (a missing loop is left as two
+termini), a metal-bound hydroxide, ORCA, Multiwfn, multiple independent bonded
+MCPB sites, or multi-chain MCPB protein inputs. Unsupported chemistry fails
+explicitly.
 
 ## Development and release checks
 

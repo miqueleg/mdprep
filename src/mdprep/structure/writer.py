@@ -6,6 +6,7 @@ from pathlib import Path
 
 from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 from mdprep.structure.pdb import (
+    ASSIGNED_RESNAME_REMARK,
     HYBRID36_DIGITS_LOWER,
     HYBRID36_DIGITS_UPPER,
     HYBRID36_RESID_LOWER_OFFSET,
@@ -34,6 +35,9 @@ def render_pdb(structure: PdbStructure) -> str:
     """
 
     lines: list[str] = []
+    present = {atom.resname for atom in structure.atoms}
+    for name in sorted(set(structure.assigned_resnames) & present):
+        lines.append(f"{ASSIGNED_RESNAME_REMARK} {name}\n")
     previous_atom: AtomRecord | None = None
     ter_written_after: set[int] = set()
     # An atom mdprep created -- a ligand hydrogen it placed -- carries no

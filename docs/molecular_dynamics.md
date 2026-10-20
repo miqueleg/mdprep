@@ -73,6 +73,15 @@ and `md_report.json` under `md/roe_brooks_2020/`. Random seeds, platform,
 thermodynamic settings, convergence statistics, energies, volumes, production
 steps, and output paths are recorded.
 
+`equilibration.csv` puts the whole protocol on one time axis: one row per
+minimisation, and one every 0.5 ps of dynamics, with the stage, the simulated
+time, the potential and kinetic energy, the temperature, the box volume and
+the density. It is what shows the system heating in step 2, the box shrinking
+from tleap's loosely packed water once the barostat starts in step 7, and the
+density levelling off in step 10. `mdprep.analysis.equilibration` reads it,
+and the official Colab notebook plots it; the stages are described in
+`mdprep.md.roe_brooks.STAGES`.
+
 ## Restraints and the coordinate frame
 
 Steps 1-4 restrain solute heavy atoms to the coordinates of the input

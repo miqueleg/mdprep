@@ -124,5 +124,6 @@ markers = [
   "propka: tests requiring optional PropKa executable",
   "xtb: tests requiring optional xTB executable",
   "mace: tests requiring optional MACE-POLAR-1 dependencies and checkpoint",
+  "pymol: tests requiring optional PyMOL (pymol-open-source)",
   "slow: slow tests excluded from quick CI runs",
 ]

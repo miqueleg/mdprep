@@ -27,6 +27,28 @@ class RoeBrooksError(ValueError):
     """Raised when the OpenMM MD protocol cannot complete safely."""
 
 
+# What each stage of run_roe_brooks does, in the order it runs, for reports
+# and for anyone reading a plot of the equilibration. Restraint constants are
+# kcal/mol/A^2 on heavy atoms unless the backbone is named. Kept beside the
+# code that runs the stages, so the two change together.
+STAGES: dict[str, str] = {
+    "step01": "Minimise, heavy atoms restrained (5.0)",
+    "step01b": "Minimise again with bonds to H constrained and rigid water",
+    "step02": "Heat: 15 ps NVT at 1 fs, Langevin, heavy atoms restrained (5.0)",
+    "step03": "Minimise, restraints relaxed to 2.0",
+    "step04": "Minimise, restraints relaxed to 0.1",
+    "step05": "Minimise without restraints",
+    "step05b": "Minimise without restraints, constraints on",
+    "step05c": "Settle: 0.2 ps at 0.25 fs, heavy atoms restrained (1.0)",
+    "step06": "5 ps NVT at 1 fs, heavy atoms restrained (1.0)",
+    "step07": "5 ps NPT at 1 fs, heavy atoms restrained (0.5): the box starts to adjust",
+    "step08": "10 ps at 1 fs, backbone restrained (0.5)",
+    "step09": "10 ps NPT at 2 fs, no restraints",
+    "step10": "NPT at 2 fs, no restraints, until the density stops drifting",
+    "production": "Production",
+}
+
+
 @dataclass(frozen=True)
 class RoeBrooksResult:
     output_dir: Path
@@ -38,6 +60,7 @@ class RoeBrooksResult:
     trajectory: Path
     state_log: Path
     report_path: Path
+    equilibration_log: Path | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -51,6 +74,9 @@ class RoeBrooksResult:
             "trajectory": str(self.trajectory),
             "state_log": str(self.state_log),
             "report_path": str(self.report_path),
+            "equilibration_log": (
+                str(self.equilibration_log) if self.equilibration_log is not None else None
+            ),
         }
 
 
@@ -251,6 +277,39 @@ def resolve_random_seed(
     return config.model_copy(update={"random_seed": drawn})
 
 
+# How often the equilibration log samples a dynamics stage, in simulated time.
+EQUILIBRATION_LOG_INTERVAL_PS = 0.5
+EQUILIBRATION_LOG_COLUMNS = (
+    "stage",
+    "time_ps",
+    "stage_time_ps",
+    "potential_energy_kj_mol",
+    "kinetic_energy_kj_mol",
+    "temperature_k",
+    "box_volume_nm3",
+    "density_g_ml",
+)
+_GAS_CONSTANT_KJ_MOL_K = 0.00831446261815324
+_AVOGADRO = 6.02214076e23
+
+
+def degrees_of_freedom(
+    masses_da: Sequence[float], constraints: int, removes_com_motion: bool
+) -> int:
+    """Kinetic degrees of freedom, counted the way OpenMM's reporters count them."""
+
+    dof = 3 * sum(1 for mass in masses_da if mass > 0.0) - constraints
+    return dof - 3 if removes_com_motion else dof
+
+
+def temperature_kelvin(kinetic_kj_mol: float, dof: int) -> float:
+    return 0.0 if dof <= 0 else 2.0 * kinetic_kj_mol / (dof * _GAS_CONSTANT_KJ_MOL_K)
+
+
+def density_g_ml(total_mass_da: float, volume_nm3: float) -> float:
+    return (total_mass_da / _AVOGADRO) / (volume_nm3 * 1.0e-21)
+
+
 def run_roe_brooks(
     *,
     prmtop_path: str | Path,
@@ -392,6 +451,56 @@ def run_roe_brooks(
         )
 
     stage_records: list[dict[str, object]] = []
+    # Every stage on one time axis, so the whole equilibration can be read
+    # off one table: the heating in step 2, the box settling through steps
+    # 7-9, the density plateau of step 10. Minimisations add a point at
+    # the time they happened; dynamics add one every half picosecond.
+    equilibration_path = output / "equilibration.csv"
+    with equilibration_path.open("w", newline="", encoding="utf-8") as handle:
+        csv.writer(handle).writerow(EQUILIBRATION_LOG_COLUMNS)
+    clock_ps = [0.0]
+
+    def log_state(simulation: Any, label: str, stage_time_ps: float) -> None:
+        system = simulation.system
+        state = simulation.context.getState(getEnergy=True)
+        masses = [
+            system.getParticleMass(index).value_in_unit(unit.dalton)
+            for index in range(system.getNumParticles())
+        ]
+        removes_com = any(
+            isinstance(system.getForce(index), mm.CMMotionRemover)
+            for index in range(system.getNumForces())
+        )
+        dof = degrees_of_freedom(masses, system.getNumConstraints(), removes_com)
+        potential = state.getPotentialEnergy().value_in_unit(unit.kilojoules_per_mole)
+        kinetic = state.getKineticEnergy().value_in_unit(unit.kilojoules_per_mole)
+        volume = state.getPeriodicBoxVolume().value_in_unit(unit.nanometer**3)
+        with equilibration_path.open("a", newline="", encoding="utf-8") as handle:
+            csv.writer(handle).writerow(
+                [
+                    label,
+                    round(clock_ps[0], 6),
+                    round(stage_time_ps, 6),
+                    potential,
+                    kinetic,
+                    temperature_kelvin(kinetic, dof),
+                    volume,
+                    density_g_ml(sum(masses), volume),
+                ]
+            )
+
+    def step_logged(simulation: Any, label: str, steps: int, timestep: Any) -> None:
+        interval = max(
+            1, steps_from_time(EQUILIBRATION_LOG_INTERVAL_PS * unit.picoseconds, timestep)
+        )
+        step_ps = timestep.value_in_unit(unit.picoseconds)
+        done = 0
+        while done < steps:
+            advance = min(interval, steps - done)
+            simulation.step(advance)
+            done += advance
+            clock_ps[0] += advance * step_ps
+            log_state(simulation, label, done * step_ps)
 
     def make_simulation(
         system: Any,
@@ -477,6 +586,7 @@ def run_roe_brooks(
     )
     mm.LocalEnergyMinimizer.minimize(simulation.context, maxIterations=1000)
     write_pdb(simulation, "step01.pdb")
+    log_state(simulation, "step01", 0.0)
     state = record_stage(simulation, "step01")
     current_positions = state.getPositions()
     current_box = state.getPeriodicBoxVectors()
@@ -491,6 +601,7 @@ def run_roe_brooks(
     )
     mm.LocalEnergyMinimizer.minimize(simulation.context, maxIterations=500)
     write_pdb(simulation, "step01b.pdb")
+    log_state(simulation, "step01b", 0.0)
     state = record_stage(simulation, "step01b")
     current_positions = state.getPositions()
     current_box = state.getPeriodicBoxVectors()
@@ -503,7 +614,7 @@ def run_roe_brooks(
     simulation = make_simulation(
         system, integrator, current_positions, current_box, initialize_velocities=True
     )
-    simulation.step(steps_from_time(15.0 * unit.picoseconds, dt_1fs))
+    step_logged(simulation, "step02", steps_from_time(15.0 * unit.picoseconds, dt_1fs), dt_1fs)
     write_pdb(simulation, "step02.pdb")
     save_restart(simulation, "after_step02")
     state = record_stage(simulation, "step02")
@@ -518,6 +629,7 @@ def run_roe_brooks(
         )
         mm.LocalEnergyMinimizer.minimize(simulation.context, maxIterations=1000)
         write_pdb(simulation, f"{label}.pdb")
+        log_state(simulation, label, 0.0)
         state = record_stage(simulation, label)
         current_positions, current_box = state.getPositions(), state.getPeriodicBoxVectors()
 
@@ -527,6 +639,7 @@ def run_roe_brooks(
     )
     mm.LocalEnergyMinimizer.minimize(simulation.context, maxIterations=1000)
     write_pdb(simulation, "step05.pdb")
+    log_state(simulation, "step05", 0.0)
     state = record_stage(simulation, "step05")
     current_positions, current_box = state.getPositions(), state.getPeriodicBoxVectors()
 
@@ -536,6 +649,7 @@ def run_roe_brooks(
     )
     mm.LocalEnergyMinimizer.minimize(simulation.context, maxIterations=500)
     write_pdb(simulation, "step05b.pdb")
+    log_state(simulation, "step05b", 0.0)
     state = record_stage(simulation, "step05b")
     current_positions, current_box = state.getPositions(), state.getPeriodicBoxVectors()
     step5_reference = current_positions
@@ -551,7 +665,9 @@ def run_roe_brooks(
     simulation = make_simulation(
         system, integrator, current_positions, current_box, initialize_velocities=True
     )
-    simulation.step(steps_from_time(0.2 * unit.picoseconds, settle_dt))
+    step_logged(
+        simulation, "step05c", steps_from_time(0.2 * unit.picoseconds, settle_dt), settle_dt
+    )
     write_pdb(simulation, "step05c.pdb")
     state = record_stage(simulation, "step05c")
     current_positions, current_velocities = state.getPositions(), state.getVelocities()
@@ -583,7 +699,9 @@ def run_roe_brooks(
             current_box,
             velocities=current_velocities,
         )
-        simulation.step(steps_from_time(duration_ps * unit.picoseconds, timestep))
+        step_logged(
+            simulation, label, steps_from_time(duration_ps * unit.picoseconds, timestep), timestep
+        )
         write_pdb(simulation, f"{label}.pdb")
         state = record_stage(simulation, label)
         current_positions, current_velocities = state.getPositions(), state.getVelocities()
@@ -654,6 +772,8 @@ def run_roe_brooks(
             elapsed_ps = (elapsed_steps * dt_2fs).value_in_unit(unit.picoseconds)
             if not all(math.isfinite(value) for value in (volume, density)):
                 raise RoeBrooksError("Step 10 produced a non-finite density or box volume")
+            clock_ps[0] += advance * dt_2fs.value_in_unit(unit.picoseconds)
+            log_state(simulation, "step10", elapsed_ps)
             times.append(elapsed_ps)
             densities.append(density)
             with density_path.open("a", newline="", encoding="utf-8") as handle:
@@ -736,6 +856,7 @@ def run_roe_brooks(
         "stages": stage_records,
         "runtime_seconds": perf_counter() - started,
         "outputs": {
+            "equilibration_log": str(equilibration_path),
             "trajectory": str(trajectory),
             "state_log": str(state_log),
             "periodic_checkpoint": str(periodic_checkpoint),
@@ -756,4 +877,5 @@ def run_roe_brooks(
         trajectory=trajectory,
         state_log=state_log,
         report_path=report_path,
+        equilibration_log=equilibration_path,
     )
