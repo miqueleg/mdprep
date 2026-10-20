@@ -13,6 +13,7 @@ from mdprep.structure.classify import (
     is_standard_protein_residue,
     is_water_residue,
 )
+from mdprep.structure.coordination import metal_bound_waters
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord
 from mdprep.structure.pdb import read_pdb
@@ -159,6 +160,16 @@ def normalize_structure_stage(
     configured_metal_residue_keys = configured_metal_ion_keys | _mcpb_model_residue_keys(
         structure, manifest
     )
+    # A water in the first shell of a metal the build keeps -- bonded or not
+    # -- is one of its ligands. The crystal-water question promises it stays
+    # with its metal whatever the answer, and this is the geometry that
+    # promise was made from.
+    metal_bound_water_keys = {
+        id(residue)
+        for residue in metal_bound_waters(
+            structure.residues, [residue for _, _, residue in configured_metals]
+        )
+    }
     # Only the chains the build keeps. A deposition of four copies has four
     # sets of cofactors, and demanding a declaration for the three about to be
     # discarded would reject a manifest that is already complete. The repair
@@ -211,13 +222,14 @@ def normalize_structure_stage(
             continue
         if is_standard_protein_residue(residue):
             keep_residue_ids.add(id(residue))
-        elif id(residue) in configured_metal_residue_keys:
+        elif id(residue) in configured_metal_residue_keys or id(residue) in metal_bound_water_keys:
             # Before the water and ion branches, on purpose. A water bound to
             # a bonded iron is one of its MCPB coordinators: dropping it with
             # the other crystal waters would leave a bond pointing at a
             # residue that no longer exists, and that only surfaces at the
-            # MCPB step, after protonation and the ligand parameters. The
-            # same holds for a coordinating halide among the crystal ions.
+            # MCPB step, after protonation and the ligand parameters. A water
+            # on a nonbonded ion is its first shell all the same. The same
+            # holds for a coordinating halide among the crystal ions.
             keep_residue_ids.add(id(residue))
             if is_water_residue(residue):
                 waters_kept.append(residue)

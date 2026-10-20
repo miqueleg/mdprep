@@ -156,6 +156,29 @@ def test_the_chain_question_has_no_default_when_a_metal_is_present(besd_structur
     assert decision.requires_user_input is True
 
 
+@needs_structure
+def test_a_surface_iron_with_waters_no_longer_hides_the_structure_questions(besd_structure):
+    """6NIE has an iron on the surface of chain B with three waters on it,
+    and any water on any metal used to suppress both the crystal-water and
+    the unknown-heterogen question -- for all 847 waters, and even after
+    chain A, which has no such water, was chosen. The manifest then got
+    keep_crystal_waters: true and remove_unknown_heterogens: false without
+    either being asked, and the crystal-water decision is a workshop topic."""
+
+    plan = plan_decisions(besd_structure)
+    asked = {decision.id for decision in plan.applicable({"structure.chains": "A"})}
+
+    assert {"structure.keep_crystal_waters", "structure.remove_unknown_heterogens"} <= asked
+    waters = plan.by_id("structure.keep_crystal_waters")
+    assert waters.evidence[0] == "847 water residues in the input"
+    assert waters.evidence[1] == (
+        "Bound to a metal, and kept with it whatever you answer: B:HOH464, B:HOH412, D:HOH410"
+    )
+    heterogens = plan.by_id("structure.remove_unknown_heterogens")
+    assert heterogens.requires_user_input and heterogens.default is None
+    assert "A:LIG301" in heterogens.evidence and "A:AKG304" in heterogens.evidence
+
+
 BESD_ANSWERS = {
     "structure.chains": "A",
     "structure.remove_unknown_heterogens": False,

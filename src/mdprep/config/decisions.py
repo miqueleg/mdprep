@@ -28,6 +28,11 @@ from mdprep.structure.classify import (
     is_metal_ion_residue,
 )
 from mdprep.structure.completeness import chain_breaks, incomplete_residues
+from mdprep.structure.coordination import (
+    COORDINATION_CUTOFF_ANGSTROM,
+    metal_bound_waters,
+    metal_donor_atoms,
+)
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
 from mdprep.structure.models import ResidueRecord
 from mdprep.structure.pdb import AltlocPolicy
@@ -297,16 +302,6 @@ def _target_for(
 # which mdprep requires the user to declare explicitly.
 CONTACT_CUTOFF_ANGSTROM = 3.0
 
-# First-shell metal-donor distances sit near 2.0-2.4 A. 2.6 A admits a long
-# halide or carboxylate contact while excluding the second-shell carbons that
-# sit behind a coordinating oxygen, which a 3.0 A search picks up.
-COORDINATION_CUTOFF_ANGSTROM = 2.6
-
-# Carbon and hydrogen are not metal donors; admitting them turns the atom
-# behind a coordinating oxygen into a spurious bond.
-METAL_DONOR_ELEMENTS = {"N", "O", "S", "SE", "P", "F", "CL", "BR", "I"}
-
-
 def contact_residues(
     residues: Sequence[ResidueRecord],
     centre: ResidueRecord,
@@ -341,39 +336,6 @@ def _target_from_id(residue_id: Any) -> "ResidueTarget":
         resid=residue_id.resid,
         icode=residue_id.icode,
     )
-
-
-def metal_donor_atoms(
-    residues: Sequence[ResidueRecord],
-    metal: ResidueRecord,
-    *,
-    cutoff_angstrom: float = COORDINATION_CUTOFF_ANGSTROM,
-) -> list[tuple[ResidueRecord, Any, float]]:
-    """Candidate first-shell donors of a metal, nearest first.
-
-    This proposes a coordination shell for a user to confirm; it does not
-    decide one. mdprep requires coordinating bonds to be explicit in the
-    manifest, and the questions built from this keep them so.
-    """
-
-    origin = metal.atoms[0]
-    found: list[tuple[ResidueRecord, Any, float]] = []
-    for residue in residues:
-        if residue.id == metal.id:
-            continue
-        for atom in residue.atoms:
-            element = (atom.element or "").strip().upper()
-            if element not in METAL_DONOR_ELEMENTS:
-                continue
-            distance = (
-                (atom.x - origin.x) ** 2
-                + (atom.y - origin.y) ** 2
-                + (atom.z - origin.z) ** 2
-            ) ** 0.5
-            if distance <= cutoff_angstrom:
-                found.append((residue, atom, distance))
-    found.sort(key=lambda item: item[2])
-    return found
 
 
 def _residue_element(residue: ResidueRecord) -> str:
@@ -657,23 +619,20 @@ def _chain_decision(summary: InspectionSummary) -> list[Decision]:
 
 
 def coordinating_water_residues(summary: InspectionSummary) -> list[ResidueRecord]:
-    """Waters in the first shell of a metal, which are part of its site."""
+    """Waters in the first shell of a metal, which are part of its site.
 
-    waters = {residue.id for residue in summary.water_residues}
-    found: list[ResidueRecord] = []
-    for metal in summary.metal_ions:
-        for residue, _, _ in metal_donor_atoms(summary.structure.residues, metal):
-            if residue.id in waters and all(
-                residue.id != seen.id for seen in found
-            ):
-                found.append(residue)
-    return found
+    The same waters normalisation keeps with their metal whatever the answer
+    about crystal waters, because both ask structure.coordination.
+    """
+
+    return metal_bound_waters(summary.structure.residues, summary.metal_ions)
 
 
 def _structure_decisions(summary: InspectionSummary) -> list[Decision]:
     decisions: list[Decision] = []
-    # A water bound to a metal is part of that site and is kept whatever the
-    # answer here, so the question is about every other crystal water. It
+    # A water bound to a metal is part of that site and is kept with it
+    # whatever the answer here (normalisation sees to that, from the same
+    # geometry), so the question is about every other crystal water. It
     # used to be skipped entirely as soon as any water bound any metal --
     # 6NIE's surface iron in chain B, with three waters on it, hid the
     # question for all 847 waters, even after chain A had been chosen.
@@ -682,7 +641,7 @@ def _structure_decisions(summary: InspectionSummary) -> list[Decision]:
         evidence = [f"{len(summary.water_residues)} water residues in the input"]
         if bound:
             evidence.append(
-                "Bound to a metal, and kept whatever you answer: "
+                "Bound to a metal, and kept with it whatever you answer: "
                 + ", ".join(residue.id.display() for residue in bound)
             )
         decisions.append(
@@ -695,7 +654,7 @@ def _structure_decisions(summary: InspectionSummary) -> list[Decision]:
                     "Buried or bridging waters are often mechanistically important. "
                     "Discarding them is a chemistry decision, not a cleanup step. "
                     "A water bound to a metal is one of its ligands and is kept "
-                    "either way. A bonded metal site needs them all: its QM/MM "
+                    "with it either way. A bonded metal site needs them all: its QM/MM "
                     "refinement protonates the active-site waters."
                 ),
                 default="true",

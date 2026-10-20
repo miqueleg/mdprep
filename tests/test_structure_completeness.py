@@ -222,7 +222,7 @@ def test_a_coordinating_water_does_not_hide_the_question_about_the_others():
 
     assert plan.findings["coordinating_waters"] == ["W:HOH601"]
     decision = plan.by_id("structure.keep_crystal_waters")
-    assert any("W:HOH601" in line and "kept whatever" in line for line in decision.evidence)
+    assert any("W:HOH601" in line and "kept with it whatever" in line for line in decision.evidence)
 
 
 def test_a_water_bound_to_a_bonded_metal_survives_dropping_the_others(tmp_path):
@@ -324,3 +324,43 @@ def test_dropping_waters_with_a_bonded_site_is_caught_in_the_builder():
                 "refinement.total_qm_multiplicity": 1,
             },
         )
+
+
+def test_a_water_bound_to_a_nonbonded_metal_survives_dropping_the_others(tmp_path):
+    """The crystal-water question promises a water on a metal stays with it
+    whatever the answer. That held only for a bonded site; a water on a
+    nonbonded zinc went with the others."""
+    from mdprep.config.decisions import build_manifest
+    from mdprep.config.models import ManifestConfig
+    from mdprep.structure.normalize import normalize_structure_stage
+
+    plan = plan_decisions(DATA / "protein_zinc_aqua.pdb")
+    data = build_manifest(
+        plan,
+        {
+            "structure.keep_crystal_waters": False,
+            "structure.remove_unknown_heterogens": False,
+            "structure.repair.add_missing_heavy_atoms": False,
+            "metal.z_zn_500_site.model": "nonbonded",
+            "metal.z_zn_500_site.charge": 2,
+        },
+    )
+    data["project"]["output_dir"] = str(tmp_path / "out")
+
+    result = normalize_structure_stage(
+        ManifestConfig.model_validate(data), output_path=tmp_path / "n.pdb"
+    )
+
+    report = result.to_report_dict()
+    assert [(w["chain_id"], w["resid"]) for w in report["waters_kept"]] == [("W", 601)]
+    assert [(w["chain_id"], w["resid"]) for w in report["waters_removed"]] == [("W", 602)]
+
+
+def test_the_question_and_the_build_share_one_definition_of_bound():
+    """Two copies of "within bonding distance" would let the question promise
+    one set of waters and the build keep another."""
+    from mdprep.config import decisions
+    from mdprep.structure import coordination
+
+    assert decisions.metal_donor_atoms is coordination.metal_donor_atoms
+    assert decisions.COORDINATION_CUTOFF_ANGSTROM == coordination.COORDINATION_CUTOFF_ANGSTROM

@@ -29,9 +29,12 @@
   water coordinated any metal -- in 6NIE, three waters on a surface iron of
   chain B hid the question for all 847. Both are asked now, and the
   crystal-water question names the bound waters that are kept regardless.
-- A water bound to a bonded metal was dropped with the other crystal waters
-  when those were removed, leaving an MCPB bond to a residue that no longer
-  existed.
+- A water bound to a metal was dropped with the other crystal waters when
+  those were removed: for a bonded site that left an MCPB bond to a residue
+  that no longer existed, and for a nonbonded one it stripped the ion's first
+  shell, though the question had said it would stay. The question and
+  normalisation now share one definition of a bound water
+  (`mdprep.structure.coordination`).
 - Declining a ligand while keeping unknown heterogens, dropping crystal waters
   with a bonded site, or choosing OPC with a water bound to a bonded metal now
   fail in the builder with what to change, instead of later in Colab.

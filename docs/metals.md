@@ -713,7 +713,9 @@ water becomes an `mcpb.bonds` coordinator like any other:
 What mdprep does with it:
 
 - **Kept whatever `keep_crystal_waters` says.** Dropping it with the other
-  waters would leave an MCPB bond pointing at a residue that is gone.
+  waters would leave an MCPB bond pointing at a residue that is gone. (A
+  water on a nonbonded metal is kept with it too: it is the ion's first
+  shell.)
 - **Given to MCPB.py as a TIP3P template.** MCPB.py asks for a mol2 for every
   non-amino-acid residue bonded to the metal, a water included. mdprep writes
   it from the water's own coordinates with TIP3P's atom types and charges
