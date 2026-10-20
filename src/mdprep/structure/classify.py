@@ -137,7 +137,16 @@ def is_nonstandard_nonwater_residue(residue: ResidueRecord) -> bool:
 
 
 def is_likely_ligand_or_cofactor(residue: ResidueRecord) -> bool:
-    return is_nonstandard_nonwater_residue(residue)
+    """A heterogen that needs parameters of its own.
+
+    A free monatomic ion does not. tleap builds a crystallographic Cl-, Na+ or
+    Br- from its ion library like any counterion, and antechamber cannot
+    treat a single atom anyway -- so offering one as a ligand only ever led to
+    a failure, and from 0.3.0 to a refusal telling the user to rename a
+    chloride to LIG. Halogenase structures are full of them.
+    """
+
+    return is_nonstandard_nonwater_residue(residue) and not is_bulk_ion_residue(residue)
 
 
 def likely_ligands_or_cofactors(residues: list[ResidueRecord]) -> list[ResidueRecord]:
@@ -171,6 +180,26 @@ def is_bulk_ion_residue(residue: ResidueRecord) -> bool:
     if is_water_residue(residue) or is_standard_protein_residue(residue):
         return False
     return _single_atom_element(residue) in BULK_ION_ELEMENTS
+
+
+# Formal charges of the monatomic ions tleap's ion library builds by name.
+BULK_ION_CHARGES = {
+    "LI": 1, "NA": 1, "K": 1, "RB": 1, "CS": 1,
+    "F": -1, "CL": -1, "BR": -1, "I": -1,
+}
+
+
+def bulk_ion_charge(residue: ResidueRecord) -> int:
+    element = _single_atom_element(residue)
+    if element not in BULK_ION_CHARGES:
+        raise ValueError(f"{residue.id.display()} is not a monatomic bulk ion")
+    return BULK_ION_CHARGES[element]
+
+
+def crystal_ion_residues(residues: list[ResidueRecord]) -> list[ResidueRecord]:
+    """Free monatomic ions in the input, before any metal site claims one."""
+
+    return [residue for residue in residues if is_bulk_ion_residue(residue)]
 
 
 def metal_ion_residues(residues: list[ResidueRecord]) -> list[ResidueRecord]:

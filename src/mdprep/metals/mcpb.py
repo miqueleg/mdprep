@@ -24,7 +24,11 @@ from mdprep.metals.nonbonded import (
     resolve_amberhome,
     write_single_ion_mol2,
 )
-from mdprep.structure.classify import is_standard_protein_residue, is_water_residue
+from mdprep.structure.classify import (
+    WATER_RESIDUES,
+    is_standard_protein_residue,
+    is_water_residue,
+)
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord, build_residues
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.writer import write_pdb
@@ -202,14 +206,17 @@ def run_mcpb_site(
         ligand_result=ligand_result,
         work_dir=work,
     )
-    ligand_frcmods = ligand_frcmods + _stage_coordinating_ion_frcmods(
-        site, manifest, work_dir=work
+    ligand_frcmods = (
+        ligand_frcmods
+        + _stage_coordinating_ion_frcmods(site, manifest, work_dir=work)
+        + _stage_bound_water_frcmod(site, work_dir=work)
     )
     ion_mol2 = _write_mcpb_ion_mol2(site, numbering=numbering, work_dir=work)
     ligand_mol2 = (
         ligand_mol2
         + _write_mcpb_coordinating_ion_mol2(site, numbering=numbering, work_dir=work)
         + _write_mcpb_ion_charge_mol2(site, numbering=numbering, work_dir=work)
+        + _write_mcpb_water_mol2(site, manifest=manifest, work_dir=work)
     )
     input_path = work / "mcpb.in"
     input_path.write_text(
@@ -1147,6 +1154,124 @@ def _write_mcpb_coordinating_ion_mol2(
             parameter,
             path,
         )
+        paths.append(path)
+    return paths
+
+
+# TIP3P, as tleap's WAT unit defines it: the bound water keeps the atom
+# types and charges of every other water until MCPB refits the site.
+_TIP3P_WATER = {"O": ("OW", -0.834), "H1": ("HW", 0.417), "H2": ("HW", 0.417)}
+
+
+def _stage_bound_water_frcmod(site: ResolvedMetalSite, *, work_dir: Path) -> list[Path]:
+    """The H-O-H angle a water bound to the metal needs and TIP3P never had.
+
+    TIP3P is rigid in Amber: frcmod.tip3p holds its shape with an H-H
+    pseudo-bond for SHAKE and defines no angle. MCPB.py gives the bound
+    oxygen a new atom type and copies every term the old type had -- so the
+    O-H bond came across, and tleap then stopped on HW-Y6-HW, an angle with
+    no parameter anywhere. The bound water is no longer a rigid TIP3P
+    molecule, so it gets the angle Amber's own parm94/parm99 define for the
+    same geometry, and MCPB.py carries it over to the new type like the bond.
+    """
+
+    if not any(
+        bond.coordinator_residue.id.resname in WATER_RESIDUES
+        or bond.coordinator_residue.id.resname == "WAT"
+        for bond in site.bonds
+    ):
+        return []
+    path = work_dir / "mdprep_bound_water.frcmod"
+    path.write_text(
+        "Water bound to a metal: the TIP3P angle from parm94/parm99\n"
+        "MASS\n\n"
+        "BOND\n\n"
+        "ANGLE\n"
+        "HW-OW-HW    100.00      104.52    TIP3P water geometry, parm99.dat\n\n"
+        "DIHE\n\n"
+        "NONBON\n\n",
+        encoding="utf-8",
+    )
+    return [path]
+
+
+def _write_mcpb_water_mol2(
+    site: ResolvedMetalSite,
+    *,
+    manifest: ManifestConfig,
+    work_dir: Path,
+) -> list[Path]:
+    """A template for a water bound to the metal, which MCPB.py requires.
+
+    MCPB.py treats every non-amino-acid residue bonded to the metal as a
+    non-standard residue and asks for its mol2 -- a water included. The
+    MCPB.py tutorial makes one with tleap's savemol2; it is written here
+    directly instead, from the bound water's own coordinates, for the same
+    reason the coordinating-ion template is: the atom types and charges are
+    all MCPB needs, and they are TIP3P's.
+
+    A four-point water cannot be a member of the QM model: its extra point
+    has no element, no nucleus and no place in a Hessian. So a water bound to
+    a bonded metal requires TIP3P, and saying so here beats MCPB.py failing
+    on a residue it cannot type.
+    """
+
+    waters = []
+    seen: set[str] = set()
+    for bond in site.bonds:
+        residue = bond.coordinator_residue
+        if residue.id.resname not in WATER_RESIDUES and residue.id.resname != "WAT":
+            continue
+        if residue.id.resname in seen:
+            continue
+        seen.add(residue.id.resname)
+        waters.append(residue)
+    if not waters:
+        return []
+    if manifest.protein.water_model != "TIP3P":
+        raise McpbWorkflowError(
+            f"Metal site {site.config.id} has a water bound to the metal, which "
+            "becomes part of the MCPB quantum model. That needs a three-point "
+            f"water; {manifest.protein.water_model} has an extra point with no "
+            "nucleus. Use TIP3P (with ff14SB) for this system."
+        )
+    paths: list[Path] = []
+    for residue in waters:
+        atoms = {atom.name.strip(): atom for atom in residue.atoms}
+        missing = sorted(set(_TIP3P_WATER) - set(atoms))
+        if missing:
+            raise McpbWorkflowError(
+                f"Bound water {residue.id.display()} has no {', '.join(missing)}; "
+                "it should have been built as a TIP3P water before MCPB."
+            )
+        resname = residue.id.resname
+        lines = [
+            "@<TRIPOS>MOLECULE",
+            resname,
+            "    3     2     1     0     0",
+            "SMALL",
+            "USER_CHARGES",
+            "",
+            "",
+            "@<TRIPOS>ATOM",
+        ]
+        for index, name in enumerate(("O", "H1", "H2"), start=1):
+            atom = atoms[name]
+            atom_type, charge = _TIP3P_WATER[name]
+            lines.append(
+                f"{index:7d} {name:<4} {atom.x:12.4f}{atom.y:12.4f}{atom.z:12.4f} "
+                f"{atom_type:<5}{1:5d} {resname:<6}{charge:12.6f}"
+            )
+        lines += [
+            "@<TRIPOS>BOND",
+            "     1     1     2 1",
+            "     2     1     3 1",
+            "@<TRIPOS>SUBSTRUCTURE",
+            f"     1 {resname:<4}        1 TEMP              0 ****  ****    0 ROOT",
+            "",
+        ]
+        path = work_dir / f"{resname}.mol2"
+        path.write_text("\n".join(lines), encoding="utf-8")
         paths.append(path)
     return paths
 

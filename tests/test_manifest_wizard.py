@@ -116,7 +116,9 @@ def test_wizard_rejects_an_invalid_answer_and_asks_again(tmp_path):
 def test_unreachable_questions_are_never_asked(tmp_path):
     prompt = scripted_prompter(
         {
-            "structure.remove_unknown_heterogens": "no",
+            # Declining a ligand makes it an unconfigured heterogen, which has
+            # to be allowed to go or the manifest is one mdprep would refuse.
+            "structure.remove_unknown_heterogens": "yes",
             "ligand.b_sub_501.include": "no",
             "ligand.c_cof_601.net_charge": "0",
         }

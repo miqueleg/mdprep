@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from mdprep.structure.models import AtomRecord, PdbStructure
+from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 from mdprep.structure.pdb import (
     HYBRID36_DIGITS_LOWER,
     HYBRID36_DIGITS_UPPER,
@@ -52,8 +52,11 @@ def render_pdb(structure: PdbStructure) -> str:
             taken.add(next_serial)
             assigned[id(atom)] = next_serial
 
+    breaks_before = _chain_break_starts(structure.atoms)
     for atom in structure.atoms:
-        if previous_atom is not None and _needs_implicit_ter(previous_atom, atom):
+        if previous_atom is not None and (
+            _needs_implicit_ter(previous_atom, atom) or id(atom) in breaks_before
+        ):
             previous_serial = previous_atom.serial
             if previous_serial is None or previous_serial not in ter_written_after:
                 lines.append("TER\n")
@@ -66,6 +69,44 @@ def render_pdb(structure: PdbStructure) -> str:
     lines.extend(_format_conect_records(structure))
     lines.append("END\n")
     return "".join(lines)
+
+
+# A peptide C-N bond is 1.33 A. pdb4amber calls anything past 2 A a gap.
+CHAIN_BREAK_DISTANCE_ANGSTROM = 2.0
+
+
+def _chain_break_starts(atoms: list[AtomRecord]) -> set[int]:
+    """First atoms of protein residues that do not bond to the residue before.
+
+    A deposition with an unresolved loop has two residues of one chain that
+    sit apart in space, and without a TER between them tleap bonds them
+    anyway: SyrB2 (2FCT) is missing residues 57-60, and the prepared system
+    had a 6.08 A peptide bond from residue 56 to 61, which the first
+    picoseconds of heating turned into NaN. pdb4amber's rule is used: a gap
+    is a C-N distance over 2 A, measured, not inferred from numbering -- a
+    numbering jump between residues that are in fact bonded is not a break.
+    The two ends become termini, which is what leaving a loop absent means.
+    """
+
+    residues = build_residues(atoms)
+    starts: set[int] = set()
+    for before, after in zip(residues, residues[1:]):
+        if before.id.chain_id != after.id.chain_id:
+            continue
+        if before.record_names != {"ATOM"} or after.record_names != {"ATOM"}:
+            continue
+        carbon = next((a for a in before.atoms if a.name.strip() == "C"), None)
+        nitrogen = next((a for a in after.atoms if a.name.strip() == "N"), None)
+        if carbon is None or nitrogen is None:
+            continue
+        gap = (
+            (carbon.x - nitrogen.x) ** 2
+            + (carbon.y - nitrogen.y) ** 2
+            + (carbon.z - nitrogen.z) ** 2
+        ) ** 0.5
+        if gap > CHAIN_BREAK_DISTANCE_ANGSTROM:
+            starts.add(id(after.atoms[0]))
+    return starts
 
 
 def _needs_implicit_ter(previous: AtomRecord, current: AtomRecord) -> bool:

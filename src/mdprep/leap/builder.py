@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import os
 from pathlib import Path
 
 from mdprep.config.models import ManifestConfig
+from mdprep.metals.through_metal import (
+    ThroughMetalError,
+    switch_off_unshielded_through_metal_14,
+)
 from mdprep.leap.forcefields import ForceFieldError, ForceFieldSources, forcefield_sources
 from mdprep.leap.ions import IonPlan, IonPlanError, amber_inpcrd_box_volume, build_ion_plan
 from mdprep.leap.log_parser import LeapLogError, assert_tleap_success
@@ -70,6 +74,9 @@ class TLeapStageResult:
     salt_volume_a3: float | None
     c4_postprocessing: list[C4PostprocessRun]
     warnings: list[str]
+    # 1-4 pairs through a bonded metal with no repulsion on one side, whose
+    # interaction was switched off (metals/through_metal.py).
+    through_metal_14_switched_off: list[dict[str, str]] = field(default_factory=list)
 
     def to_report_dict(self) -> dict[str, object]:
         return {
@@ -96,6 +103,7 @@ class TLeapStageResult:
             "salt_ion_pairs_requested": self.ion_plan.salt_pairs if self.ion_plan is not None else 0,
             "salt_volume_a3": self.salt_volume_a3,
             "c4_postprocessing": [run.to_dict() for run in self.c4_postprocessing],
+            "through_metal_14_switched_off": self.through_metal_14_switched_off,
             "final_tleap": self.final_run.to_dict() if self.final_run is not None else None,
             "final_outputs": self.final_outputs.to_dict(),
             "warnings": self.warnings,
@@ -207,6 +215,13 @@ def run_tleap_stage(
             context="dry",
         )
         _ensure_outputs(dry_outputs)
+        bonded_site = metal_result is not None and metal_result.mcpb_site is not None
+        through_metal: list[dict[str, str]] = []
+        if bonded_site:
+            through_metal = [
+                pair.to_dict()
+                for pair in switch_off_unshielded_through_metal_14(dry_outputs.prmtop)
+            ]
         c4_runs: list[C4PostprocessRun] = []
         if metal_result is not None and metal_result.c4_atom_types:
             c4_runs.append(
@@ -266,6 +281,7 @@ def run_tleap_stage(
         LeapResidueError,
         TLeapRunError,
         C4PostprocessError,
+        ThroughMetalError,
         FileNotFoundError,
     ) as exc:
         raise TLeapBuildError(str(exc)) from exc
@@ -288,6 +304,7 @@ def run_tleap_stage(
         ion_plan=ion_plan,
         salt_volume_a3=salt_volume_a3,
         c4_postprocessing=c4_runs,
+        through_metal_14_switched_off=through_metal,
         warnings=warnings,
     )
 
@@ -444,6 +461,8 @@ def _run_solvated_build(
         context="solvated",
     )
     _ensure_outputs(final_outputs)
+    if metal_result is not None and metal_result.mcpb_site is not None:
+        switch_off_unshielded_through_metal_14(final_outputs.prmtop)
     c4_run: C4PostprocessRun | None = None
     if metal_result is not None and metal_result.c4_atom_types:
         c4_run = apply_12_6_4_c4(

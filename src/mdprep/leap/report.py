@@ -65,6 +65,21 @@ def _render_markdown(report: dict[str, Any]) -> str:
         lines.extend(f"- `{bond['command']}`" for bond in bonds)
     else:
         lines.append("- None")
+    lines.extend(["", "## 1-4 Pairs Through The Metal Switched Off", ""])
+    switched = report.get("through_metal_14_switched_off", [])
+    if switched:
+        lines.append(
+            "These pairs bind to the metal from different residues, and one atom of "
+            "each has no Lennard-Jones repulsion, so their 1-4 Coulomb term had no "
+            "lower bound. Their interaction is switched off; the angles MCPB.py "
+            "fitted around the metal hold the geometry."
+        )
+        lines.append("")
+        lines.extend(
+            f"- `{pair['first']}` -- `{pair['metal']}` -- `{pair['last']}`" for pair in switched
+        )
+    else:
+        lines.append("- None")
     lines.extend(["", "## 12-6-4 Post-processing", ""])
     c4_runs = report.get("c4_postprocessing", [])
     if c4_runs:

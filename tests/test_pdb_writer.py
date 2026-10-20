@@ -176,3 +176,61 @@ def test_a_solvated_box_numbers_its_residues_past_the_four_columns(tmp_path):
         10001,
         50000,
     ]
+
+
+# --------------------------------------------------------------------------
+# Chain breaks
+#
+# tleap bonds consecutive residues of one chain unless a TER separates them.
+# SyrB2 (PDB 2FCT) is missing residues 57-60; without a TER the prepared
+# system had a 6.08 A peptide bond from 56 to 61, and the first picoseconds
+# of heating turned it into NaN.
+# --------------------------------------------------------------------------
+
+
+def _backbone(serial, resid, x0):
+    """N, CA, C of an alanine laid along x, starting at ``x0``."""
+
+    return [
+        _atom(serial=serial, name="N", resname="ALA", resid=resid, x=x0, y=0.0, z=0.0,
+              element="N", record_name="ATOM"),
+        _atom(serial=serial + 1, name="CA", resname="ALA", resid=resid, x=x0 + 1.46,
+              y=0.0, z=0.0, element="C", record_name="ATOM"),
+        _atom(serial=serial + 2, name="C", resname="ALA", resid=resid, x=x0 + 2.0,
+              y=0.0, z=0.0, element="C", record_name="ATOM"),
+    ]
+
+
+def _chain(tmp_path, *, second_resid, gap):
+    """Residue 1, then ``second_resid`` with its N ``gap`` A from 1's C."""
+
+    from mdprep.structure.models import PdbStructure
+    from mdprep.structure.writer import write_pdb
+
+    atoms = _backbone(1, 1, 0.0) + _backbone(4, second_resid, 2.0 + gap)
+    output = tmp_path / "chain.pdb"
+    write_pdb(PdbStructure(path=output, atoms=atoms, residues=[], model_count=1), output)
+    return output
+
+
+def test_a_gap_in_space_gets_a_ter_so_tleap_does_not_bond_across_it(tmp_path):
+    output = _chain(tmp_path, second_resid=61, gap=6.08)
+
+    assert read_pdb(output).ter_after_serials >= {3}, "TER after residue 1's last atom"
+
+
+def test_a_numbering_jump_between_bonded_residues_is_not_a_break(tmp_path):
+    """Insertions and renumbered constructs skip numbers while the chain is
+    continuous. Only the measured C-N distance decides."""
+
+    output = _chain(tmp_path, second_resid=61, gap=1.33)
+
+    assert 3 not in read_pdb(output).ter_after_serials
+
+
+def test_consecutive_numbering_does_not_hide_a_gap_in_space(tmp_path):
+    """A model can number straight through a stretch it did not build."""
+
+    output = _chain(tmp_path, second_resid=2, gap=4.0)
+
+    assert 3 in read_pdb(output).ter_after_serials

@@ -34,7 +34,13 @@ relative executable path when needed.
   for a bonded MCPB metal site, whose inputs are single-chain, and is how a
   crystal structure containing several copies of a complex is reduced to one.
   Chains holding only heterogens or water are kept regardless.
-- `keep_crystal_waters`: keep waters in the input PDB.
+- `keep_crystal_waters`: keep waters in the input PDB. A water bound to a
+  metal the build keeps -- bonded or nonbonded, within 2.6 A -- stays with it
+  regardless, and a bonded site with QM/MM refinement requires `true`.
+- `keep_crystal_ions`: keep free monatomic ions (Cl-, Na+, Br-, ...) resolved
+  in the input. Default `true`. tleap builds them from its ion library; a
+  halide bound to a bonded metal site is kept regardless. Every ion kept or
+  removed is listed in `reports/structure_report.md`.
 - `altloc_policy`: `highest_occupancy`, `first`, or `fail`.
 - `remove_unknown_heterogens`: remove unconfigured heterogens instead of
   failing.

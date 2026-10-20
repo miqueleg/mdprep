@@ -398,6 +398,20 @@ def _charge_components(
             continue
         if residue_index in selected_coordinating_ions:
             continue
+        if is_water_residue(input_residue):
+            # An aqua ligand: the open-shell iron of an alpha-ketoglutarate
+            # enzyme at rest usually carries one, where O2 later binds. Built
+            # by tleap as a neutral water, which is what is counted here. A
+            # hydroxide would need a residue template this version does not
+            # build, so there is no way to ask for one.
+            components.append(
+                ChargeComponent(
+                    label=f"water:{input_residue.id.display()}",
+                    kind="water",
+                    charge=0,
+                )
+            )
+            continue
         if not is_standard_protein_residue(input_residue):
             raise RefinementSelectionError(
                 "A non-protein metal coordinator must be configured as a ligand/cofactor "

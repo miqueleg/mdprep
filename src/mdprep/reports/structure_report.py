@@ -39,6 +39,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- Kept: {len(report['waters_kept'])}",
         f"- Removed: {len(report['waters_removed'])}",
         "",
+        "## Crystal Ions",
+        "",
+        f"- Kept: {len(report.get('crystal_ions_kept', []))}",
+        f"- Removed: {len(report.get('crystal_ions_removed', []))}",
+        "",
         "## Configured Ligands",
         "",
     ]

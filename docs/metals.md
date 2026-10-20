@@ -647,6 +647,10 @@ silently choosing one charge model.
   output appropriate to the selected method; the `pyscf` workflow requires
   PySCF and either a completed selected-site QM/MM refinement or a user-supplied
   optimized small-model PDB.
+- A water bound to the metal is always built as H2O, and only with TIP3P. A
+  bound hydroxide needs a residue template this version does not build, and a
+  four-point water's extra point cannot join the QM model. See
+  [Waters bound in a metal site](#waters-bound-in-a-metal-site).
 
 ## Ions bound in a metal site
 
@@ -686,3 +690,76 @@ structure normalization rather than treated as an unknown heterogen.
 
 Only the metal contributes unpaired electrons; a closed-shell halide beside it
 does not.
+
+## Waters bound in a metal site
+
+The resting iron of an alpha-ketoglutarate enzyme often holds a water where O2
+later binds. SyrB2 ([PDB 2FCT](https://www.rcsb.org/structure/2FCT)) is the
+reference case: Fe(II), two histidines, a chloride, bidentate
+alpha-ketoglutarate and one water. In a predicted model there is no water at
+all, so one has to be brought in from a crystal structure first.
+
+The decision engine finds a water within bonding distance of a metal and
+proposes it as a donor with the rest of the shell. Confirm the shell and the
+water becomes an `mcpb.bonds` coordinator like any other:
+
+```yaml
+    mcpb:
+      bonds:
+        - ion: {chain: A, resname: FE2, resid: 900, icode: null, atom_name: FE}
+          coordinator: {chain: A, resname: HOH, resid: 1072, icode: null, atom_name: O}
+```
+
+What mdprep does with it:
+
+- **Kept whatever `keep_crystal_waters` says.** Dropping it with the other
+  waters would leave an MCPB bond pointing at a residue that is gone. (A
+  water on a nonbonded metal is kept with it too: it is the ion's first
+  shell.)
+- **Given to MCPB.py as a TIP3P template.** MCPB.py asks for a mol2 for every
+  non-amino-acid residue bonded to the metal, a water included. mdprep writes
+  it from the water's own coordinates with TIP3P's atom types and charges
+  (OW -0.834, HW +0.417), which MCPB.py then refits with the rest of the site.
+- **Given the H-O-H angle TIP3P never had.** TIP3P is rigid in Amber: its
+  frcmod holds the shape with an H-H pseudo-bond and defines no angle. Bound to
+  the metal the water is a flexible ligand, so mdprep supplies parm99's
+  `HW-OW-HW` angle (100 kcal/mol/rad^2, 104.52 degrees) and MCPB.py carries it
+  over to the oxygen's new atom type. Without it tleap stops on
+  `HW-Y6-HW`.
+- **Counted as neutral in the QM/MM refinement.**
+- **Requires TIP3P.** A four-point water such as OPC has an extra point with no
+  nucleus, which cannot be part of a QM model. The decision engine refuses the
+  combination before a manifest is written.
+
+### 1-4 pairs through the metal
+
+Amber adds a scaled nonbonded interaction between the two ends of every
+dihedral. Through a bonded metal that pairs atoms of different ligands: with a
+chloride and a water on the same iron, Cl-Fe-O-H makes the chloride and the
+water's hydrogen a 1-4 pair. MCPB.py zeroes the torsions through the metal, the
+O...Cl repulsion is excluded because the two are 1-3 through the iron, and a
+TIP3P hydrogen has no Lennard-Jones radius. That leaves a Coulomb attraction
+between -0.95 and +0.45 with nothing to stop it: in SyrB2 the first
+minimisation put the hydrogen 0.14 A from the chloride, and heating went to
+NaN.
+
+So after tleap, mdprep switches off exactly those 1-4 terms: through a metal,
+between different residues, where one atom has no repulsion at all. It sets the
+dihedral's "ignore end group" flag in the prmtop, which every Amber engine and
+OpenMM honour, and changes nothing else. The coordination geometry is still
+held by the angles MCPB.py fitted around the metal. Every pair switched off is
+listed in `reports/tleap_report.md` under *1-4 Pairs Through The Metal Switched
+Off*.
+
+With the fix, SyrB2 runs the whole Roe-Brooks protocol and production with
+Fe-N(His) 2.0-2.35 A, Fe-Cl 2.2-2.5 A, Fe-O(alpha-KG) 1.9-2.2 A, Fe-O(water)
+2.1-2.5 A, and the water hydrogens never closer than 3 A to the chloride.
+
+## Free ions in the crystal
+
+A chloride or sodium the crystal resolved away from any metal is a *crystal
+ion*, not a ligand: tleap builds it from its ion library like a counterion.
+`structure.keep_crystal_ions` (default `true`) decides whether it stays. A
+halide bound to a bonded metal site is kept with the site whatever the answer;
+one bound to a nonbonded metal follows the answer like any other crystal ion.
+

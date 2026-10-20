@@ -7,11 +7,13 @@ from pathlib import Path
 
 from mdprep.config.models import ManifestConfig
 from mdprep.structure.classify import (
+    is_bulk_ion_residue,
     is_likely_ligand_or_cofactor,
     is_nonstandard_nonwater_residue,
     is_standard_protein_residue,
     is_water_residue,
 )
+from mdprep.structure.coordination import metal_bound_waters
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord
 from mdprep.structure.pdb import read_pdb
@@ -50,6 +52,8 @@ class StructureNormalizationResult:
     normalized_structure: PdbStructure
     waters_kept: list[dict[str, object]] = field(default_factory=list)
     waters_removed: list[dict[str, object]] = field(default_factory=list)
+    crystal_ions_kept: list[dict[str, object]] = field(default_factory=list)
+    crystal_ions_removed: list[dict[str, object]] = field(default_factory=list)
     configured_ligands_kept: list[NormalizedLigand] = field(default_factory=list)
     configured_metal_ions_kept: list[NormalizedMetalIon] = field(default_factory=list)
     unknown_heterogens_removed: list[dict[str, object]] = field(default_factory=list)
@@ -70,6 +74,8 @@ class StructureNormalizationResult:
             "chains": [{"chain_id": chain, "display": chain or "<blank>"} for chain in normalized_summary.chain_ids],
             "waters_kept": self.waters_kept,
             "waters_removed": self.waters_removed,
+            "crystal_ions_kept": self.crystal_ions_kept,
+            "crystal_ions_removed": self.crystal_ions_removed,
             "configured_ligands_kept": [
                 {"id": ligand.ligand_id, **ligand.residue} for ligand in self.configured_ligands_kept
             ],
@@ -154,6 +160,16 @@ def normalize_structure_stage(
     configured_metal_residue_keys = configured_metal_ion_keys | _mcpb_model_residue_keys(
         structure, manifest
     )
+    # A water in the first shell of a metal the build keeps -- bonded or not
+    # -- is one of its ligands. The crystal-water question promises it stays
+    # with its metal whatever the answer, and this is the geometry that
+    # promise was made from.
+    metal_bound_water_keys = {
+        id(residue)
+        for residue in metal_bound_waters(
+            structure.residues, [residue for _, _, residue in configured_metals]
+        )
+    }
     # Only the chains the build keeps. A deposition of four copies has four
     # sets of cofactors, and demanding a declaration for the three about to be
     # discarded would reject a manifest that is already complete. The repair
@@ -185,6 +201,8 @@ def normalize_structure_stage(
     keep_residue_ids: set[int] = set()
     waters_kept: list[ResidueRecord] = []
     waters_removed: list[ResidueRecord] = []
+    ions_kept: list[ResidueRecord] = []
+    ions_removed: list[ResidueRecord] = []
     unknown_removed: list[ResidueRecord] = []
     chains_removed: list[ResidueRecord] = []
 
@@ -204,6 +222,17 @@ def normalize_structure_stage(
             continue
         if is_standard_protein_residue(residue):
             keep_residue_ids.add(id(residue))
+        elif id(residue) in configured_metal_residue_keys or id(residue) in metal_bound_water_keys:
+            # Before the water and ion branches, on purpose. A water bound to
+            # a bonded iron is one of its MCPB coordinators: dropping it with
+            # the other crystal waters would leave a bond pointing at a
+            # residue that no longer exists, and that only surfaces at the
+            # MCPB step, after protonation and the ligand parameters. A water
+            # on a nonbonded ion is its first shell all the same. The same
+            # holds for a coordinating halide among the crystal ions.
+            keep_residue_ids.add(id(residue))
+            if is_water_residue(residue):
+                waters_kept.append(residue)
         elif is_water_residue(residue):
             if manifest.structure.keep_crystal_waters:
                 keep_residue_ids.add(id(residue))
@@ -212,8 +241,12 @@ def normalize_structure_stage(
                 waters_removed.append(residue)
         elif id(residue) in configured_ligand_keys:
             keep_residue_ids.add(id(residue))
-        elif id(residue) in configured_metal_residue_keys:
-            keep_residue_ids.add(id(residue))
+        elif is_bulk_ion_residue(residue):
+            if manifest.structure.keep_crystal_ions:
+                keep_residue_ids.add(id(residue))
+                ions_kept.append(residue)
+            else:
+                ions_removed.append(residue)
         elif residue in unknown_heterogens:
             unknown_removed.append(residue)
         else:
@@ -268,6 +301,8 @@ def normalize_structure_stage(
         normalized_structure=normalized_structure,
         waters_kept=_residue_dicts(waters_kept),
         waters_removed=_residue_dicts(waters_removed),
+        crystal_ions_kept=_residue_dicts(ions_kept),
+        crystal_ions_removed=_residue_dicts(ions_removed),
         configured_ligands_kept=[
             NormalizedLigand(ligand_id=ligand_id, residue=_residue_dict(residue))
             for ligand_id, residue in configured_ligands

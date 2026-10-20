@@ -129,3 +129,26 @@ def test_solvation_commands():
     )
     with pytest.raises(TLeapBuildError):
         solvation_command(box="bad", water_box="TIP3PBOX", buffer_angstrom=8.0)
+
+
+def test_the_tleap_report_names_every_through_metal_pair_it_switched_off():
+    """metals/through_metal.py edits the topology after tleap; the report is
+    the only place that says so."""
+
+    from mdprep.leap.report import _render_markdown
+
+    outputs = {"prmtop": "p", "inpcrd": "i", "pdb": "x"}
+    report = {
+        "force_fields_sourced": [],
+        "dry_outputs": outputs,
+        "final_outputs": outputs,
+        "through_metal_14_switched_off": [
+            {"first": "CL1 1:CL", "metal": "FE1 2:FE", "last": "WT1 3:H1"}
+        ],
+    }
+
+    text = _render_markdown(report)
+
+    section = text.split("## 1-4 Pairs Through The Metal Switched Off")[1].split("##")[0]
+    assert "`CL1 1:CL` -- `FE1 2:FE` -- `WT1 3:H1`" in section
+    assert "no lower bound" in section

@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from mdprep.structure.classify import (
+    crystal_ion_residues,
     is_histidine,
     is_metal_ion_residue,
     is_likely_ligand_or_cofactor,
@@ -31,6 +32,9 @@ class InspectionSummary:
     titratable_residues: list[ResidueRecord]
     possible_disulfides: list[DisulfideCandidate]
     metal_ions: list[ResidueRecord] = field(default_factory=list)
+    # Free monatomic ions (Cl-, Na+, ...). A halide bound to a metal is in
+    # here too; the metal site claims it later.
+    crystal_ions: list[ResidueRecord] = field(default_factory=list)
 
     @property
     def chain_ids(self) -> list[str]:
@@ -58,12 +62,14 @@ class InspectionSummary:
                 "titratable_residues": len(self.titratable_residues),
                 "possible_disulfides": len(self.possible_disulfides),
                 "metal_ions": len(self.metal_ions),
+                "crystal_ions": len(self.crystal_ions),
             },
             "likely_ligands": [_residue_to_dict(residue) for residue in self.likely_ligands],
             "histidines": [_residue_to_dict(residue) for residue in self.histidines],
             "titratable_residues": [_residue_to_dict(residue) for residue in self.titratable_residues],
             "possible_disulfides": [candidate.to_dict() for candidate in self.possible_disulfides],
             "metal_ions": [_residue_to_dict(residue) for residue in self.metal_ions],
+            "crystal_ions": [_residue_to_dict(residue) for residue in self.crystal_ions],
         }
 
 
@@ -86,6 +92,7 @@ def inspect_pdb_structure(
     histidines = [residue for residue in residues if is_histidine(residue)]
     titratable_residues = [residue for residue in residues if is_titratable_residue(residue)]
     metal_ions = [residue for residue in residues if is_metal_ion_residue(residue)]
+    crystal_ions = crystal_ion_residues(residues)
     possible_disulfides = detect_possible_disulfides(
         residues,
         cutoff_angstrom=disulfide_cutoff_angstrom,
@@ -100,6 +107,7 @@ def inspect_pdb_structure(
         titratable_residues=titratable_residues,
         possible_disulfides=possible_disulfides,
         metal_ions=metal_ions,
+        crystal_ions=crystal_ions,
     )
 
 
