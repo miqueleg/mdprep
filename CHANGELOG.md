@@ -21,6 +21,14 @@
 - `examples/18_syrb2_dimer_shared_mcpb.yaml`: both copies of SyrB2, one fit.
 - `mdprep.analysis.charges.metal_sites`: each metal site's charge on its own,
   which the official notebook now shows one table per site.
+- The web builder lists which chains are copies of one protein, shows the
+  chain and copy questions with each chain in its own colour, and names
+  residues with their chain.
+- Refusals the answers already make certain are given at the question that
+  causes them, in the web builder and in `mdprep init --interactive`: a second
+  bonded metal site needing a fit of its own, or a cofactor whose charges were
+  to come from a site made nonbonded. Every `DecisionError` names the question
+  to go back to (`decision_id`), and the page goes there.
 
 - The official Colab notebook, `examples/mdprep_colab.ipynb`: takes a bundle
   from the web builder (or runs the SyrB2 example), prepares and equilibrates
@@ -72,6 +80,9 @@
 - The ligand coordinate check after tleap could not tell two copies of one
   cofactor apart, since tleap renumbers residues; it now takes the copy nearest
   the ligand it checks.
+- The web builder and the wizard told a student to add a SMILES to a ligand
+  without hydrogens after asking for it and being given it.
+- `mdprep init --interactive` re-asked a rejected answer without saying why.
 
 - A residue name mdprep assigned (a predicted iron called `LIG1` read as `FE`)
   lost that record when the structure was written and read back, and `FE` read

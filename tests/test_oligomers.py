@@ -831,3 +831,95 @@ def test_a_ligand_copy_with_other_atom_names_is_refused(tmp_path):
 
     with pytest.raises(LigandWorkflowError, match="same atoms, named alike"):
         _share_parameters(copy, object(), reference)
+
+
+# --------------------------------------------------------------------------
+# Refusals a front end can place
+# --------------------------------------------------------------------------
+
+
+def test_a_second_fit_is_refused_at_the_question_that_asks_for_it(plan):
+    from mdprep.config.decisions import answer_conflicts
+
+    answers = {**SHARED, "structure.same_parametrization": False, **CHAIN_B}
+    for key in [k for k in answers if "model_charge" in k or "multiplicity" in k]:
+        answers.pop(key)
+
+    conflict = answer_conflicts(plan, answers)
+
+    assert conflict.decision_id == "metal.b_fe2_899_site.model"
+    assert "A:FE2900 and B:FE2899" in str(conflict)
+    with pytest.raises(DecisionError) as refused:
+        build_manifest(plan, {**SHARED, "structure.same_parametrization": False, **CHAIN_B})
+    assert refused.value.decision_id == "metal.b_fe2_899_site.model"
+
+
+def test_sharing_raises_no_conflict(plan):
+    from mdprep.config.decisions import answer_conflicts
+
+    assert answer_conflicts(plan, SHARED) is None
+
+
+def test_a_fitted_cofactor_on_a_nonbonded_metal_is_refused_where_it_happens(plan):
+    """The cofactor's charge method defaults to the site's fit, and is asked
+    before the site: a site made nonbonded afterwards left it pointing at a
+    fit that never runs."""
+
+    from mdprep.config.decisions import answer_conflicts
+
+    answers = {**SHARED, "structure.chains": "A", "metal.a_fe2_900_site.model": "nonbonded",
+               "ligand.a_akg_897.charge_method": "mcpb_resp_pyscf"}
+
+    conflict = answer_conflicts(plan, answers)
+
+    assert conflict.decision_id == "metal.a_fe2_900_site.model"
+    assert "A:AKG897's charges were to come from the MCPB fit" in str(conflict)
+    with pytest.raises(DecisionError, match="such as AM1-BCC") as refused:
+        build_manifest(plan, answers)
+    assert refused.value.decision_id == "metal.a_fe2_900_site.model"
+
+
+def test_a_name_conflict_points_at_the_answer_that_differs(plan):
+    answers = {
+        **SHARED,
+        "structure.same_parametrization": False,
+        "metal.a_fe2_900_site.model": "nonbonded",
+        "metal.b_fe2_899_site.model": "nonbonded",
+        "metal.b_fe2_899_site.charge": 2,
+        "ligand.a_akg_897.charge_method": "am1bcc",
+        "ligand.b_akg_898.charge_method": "gas_resp_pyscf",
+        "ligand.b_akg_898.net_charge": -2,
+        "ligand.b_akg_898.smiles": AKG_SMILES,
+    }
+
+    with pytest.raises(DecisionError) as refused:
+        build_manifest(plan, answers)
+
+    assert refused.value.decision_id == "ligand.b_akg_898.charge_method"
+
+
+def test_the_wizard_refuses_a_second_fit_at_its_question_and_asks_again(tmp_path):
+    from mdprep.workflows.wizard import run_wizard
+
+    replies = {
+        **{key: [str(value)] for key, value in SHARED.items()},
+        "structure.same_parametrization": ["false"],
+        "ligand.b_akg_898.net_charge": ["-2"],
+        "ligand.b_akg_898.smiles": [AKG_SMILES],
+        "ligand.b_akg_898.charge_method": ["am1bcc"],
+        # Bonded first, as proposed: refused there and then; nonbonded next.
+        "metal.b_fe2_899_site.model": ["bonded_mcpb", "nonbonded"],
+    }
+    asked: list[str] = []
+    told: list[str] = []
+
+    def prompt(decision):
+        asked.append(decision.id)
+        queue = replies.get(decision.id)
+        return queue.pop(0) if queue else ""
+
+    with pytest.raises(DecisionError, match="both called AKG but differ in charge_method"):
+        run_wizard(DEPOSITION, output_path=tmp_path / "system.yaml", prompt=prompt, notify=told.append)
+
+    assert asked.count("metal.b_fe2_899_site.model") == 2
+    assert told and "A:FE2900 and B:FE2899 would each need a bonded MCPB fit" in told[0]

@@ -82,6 +82,7 @@ from mdprep.config.decisions import (
 )
 from mdprep.workflows.wizard import render_manifest_yaml
 from mdprep.config.decisions import (
+    answer_conflicts,
     unresolved_mcpb_sites,
     ligands_needing_hydrogens,
     proposed_answers,
@@ -149,6 +150,14 @@ def mdprep_proposals(answers_json):
                        for key, value in values.items()})
 
 
+def mdprep_conflicts(answers_json):
+    """A refusal the answers so far already make certain, and its question."""
+    conflict = answer_conflicts(_PLAN["plan"], json.loads(answers_json))
+    if conflict is None:
+        return "null"
+    return json.dumps({"error": str(conflict), "decision": conflict.decision_id})
+
+
 def _readable_build_error(exc):
     """One line a student can act on, out of whatever was raised."""
 
@@ -174,7 +183,9 @@ def mdprep_build(answers_json, mdprep_spec):
         text = render_manifest_yaml(plan, answers, mcpb_sites=tuple(sites))
         manifest = build_manifest(plan, answers)
     except DecisionError as exc:
-        return json.dumps({"ok": False, "error": str(exc)})
+        # The question to go back to, when mdprep can name it.
+        return json.dumps({"ok": False, "error": str(exc),
+                           "decision": getattr(exc, "decision_id", None)})
     except Exception as exc:
         # Anything else, and there is plenty: the manifest is validated by
         # pydantic on the way out, and a ValidationError is not a
@@ -345,6 +356,7 @@ function renderFindings() {
     ["Protein residues", f.protein_residues],
     ["Waters", f.water_residues],
     ["Chains", f.chains.join(", ") || "none"],
+    ["Copies of one protein", copiesSummary(f.oligomer)],
     ["Ligands", f.ligands.join(", ") || "none"],
     ["Metal ions", f.metal_ions.join(", ") || "none"],
     ["Histidines", f.histidines.length ? `${f.histidines.length}` : "none"],
@@ -357,6 +369,21 @@ function renderFindings() {
     (f.structure_warnings.length
       ? `<p class="warn">${f.structure_warnings.map(escapeHtml).join("<br>")}</p>`
       : "");
+}
+
+// Which protein chains are copies of one protein: what decides whether the
+// page will offer to parameterise them once.
+function copiesSummary(oligomer) {
+  const groups = ((oligomer && oligomer.groups) || []).filter((group) => group.length > 1);
+  if (!groups.length) return "none";
+  return groups
+    .map((group) => {
+      const renumbered = group
+        .slice(1)
+        .some((chain) => oligomer.alignments[chain] && oligomer.alignments[chain].numbering_differs);
+      return `chains ${group.join(", ")}` + (renumbered ? " (numbered differently)" : "");
+    })
+    .join("; ");
 }
 
 /*
@@ -400,6 +427,14 @@ function targetSelector(target) {
   return selector;
 }
 
+// Chain letters included: in an oligomer AKG1 is in every copy, and a
+// prediction gives each ligand a chain of its own.
+function targetList(targets) {
+  return targets
+    .map((t) => `${t.chain ? `${t.chain}:` : ""}${t.resname}${t.resid}`)
+    .join(", ");
+}
+
 function focusOn(decision) {
   const viewer = state.viewer;
   if (!viewer) return;
@@ -425,11 +460,26 @@ function focusOn(decision) {
       viewer.zoomTo(selectors[0]);
       caption.push(
         decision.targets.length
-          ? `Highlighted: ${decision.targets
-              .map((t) => `${t.resname}${t.resid}`)
-              .join(", ")}`
+          ? `Highlighted: ${targetList(decision.targets)}`
           : `Highlighted: all ${decision.target_resnames.join("/")} residues`,
       );
+    }
+  } else if (decision.focus === "chains") {
+    // Which chains to keep, and which copies match: the whole assembly, each
+    // chain its own colour, with the residues the question is about picked
+    // out in every copy at once.
+    viewer.setStyle({}, { cartoon: { colorscheme: "chain" } });
+    // Drawn larger than a single site's: the whole assembly is in view.
+    decision.targets.map(targetSelector).forEach((selector) => {
+      viewer.setStyle(selector, {
+        stick: { radius: 0.4, colorscheme: "greenCarbon" },
+        sphere: { radius: 1.0, colorscheme: "greenCarbon" },
+      });
+    });
+    viewer.zoomTo();
+    caption.push("Each chain in its own colour.");
+    if (decision.targets.length) {
+      caption.push(`Highlighted: ${targetList(decision.targets)}.`);
     }
   } else if (decision.focus === "structure") {
     viewer.setStyle({}, { cartoon: { color: "spectrum" } });
@@ -617,8 +667,29 @@ function onNext() {
   } else {
     state.answers[decision.id] = raw;
   }
+  // Some answers rule the build out at once -- a second bonded metal site
+  // that would need an MCPB fit of its own. Say so here, at the question that
+  // did it, rather than at Finish after a spin question nobody can answer.
+  const conflict = conflictAt(decision);
+  if (conflict) {
+    el("answer-error").textContent = conflict;
+    return;
+  }
   state.index += 1;
   renderCurrentQuestion();
+}
+
+function conflictAt(decision) {
+  if (!state.pyodide) return null;
+  try {
+    const fn = state.pyodide.globals.get("mdprep_conflicts");
+    const result = JSON.parse(fn(JSON.stringify(state.answers)));
+    fn.destroy();
+    return result && result.decision === decision.id ? result.error : null;
+  } catch {
+    // A convenience: the same refusal still comes from Finish.
+    return null;
+  }
 }
 
 function onBack() {
@@ -658,11 +729,12 @@ function buildManifest() {
     // question the engine is complaining about rather than the last one --
     // it can be twenty questions back -- and write the message after the
     // render, not before.
-    const offending = applicableDecisions().findIndex((decision) =>
-      result.error.includes(decision.id),
-    );
-    state.index =
-      offending >= 0 ? offending : Math.max(0, applicableDecisions().length - 1);
+    const decisions = applicableDecisions();
+    let offending = decisions.findIndex((decision) => decision.id === result.decision);
+    if (offending < 0) {
+      offending = decisions.findIndex((decision) => result.error.includes(decision.id));
+    }
+    state.index = offending >= 0 ? offending : Math.max(0, decisions.length - 1);
     renderCurrentQuestion();
     el("answer-error").textContent = result.error;
     return;

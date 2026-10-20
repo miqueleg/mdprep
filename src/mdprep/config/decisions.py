@@ -46,11 +46,22 @@ DecisionKind = Literal["choice", "integer", "number", "text", "boolean"]
 #   none      -- the question has no structural aspect (a project name, a step count)
 #   targets   -- emphasise and frame `targets` / `target_resnames`
 #   structure -- show the whole system (force field, solvation, box)
-FocusMode = Literal["none", "targets", "structure"]
+#   chains    -- the whole system with each chain in its own colour, and the
+#                targets emphasised: which chains to keep, which copies match
+FocusMode = Literal["none", "targets", "structure", "chains"]
 
 
 class DecisionError(ValueError):
-    """Raised when a decision plan cannot be built or answered."""
+    """Raised when a decision plan cannot be built or answered.
+
+    ``decision_id`` names the question whose answer would resolve it, when
+    there is one, so a front end can take the user back to it rather than
+    leave them to find it.
+    """
+
+    def __init__(self, message: str, *, decision_id: str | None = None):
+        super().__init__(message)
+        self.decision_id = decision_id
 
 
 class ReservedResidueNameError(DecisionError):
@@ -674,7 +685,7 @@ def _chain_decision(summary: InspectionSummary) -> list[Decision]:
                     else ()
                 ),
             ),
-            focus="structure",
+            focus="chains",
         )
     ]
 
@@ -803,7 +814,9 @@ def _same_parametrization_decision(
             for pair in shared
             for residue in pair
         ),
-        focus="targets",
+        # Both copies at once, each its own colour: the question is whether
+        # they are alike, which a view of one of them cannot show.
+        focus="chains",
     )
 
 
@@ -1967,7 +1980,8 @@ def resolve_answers(
     if missing:
         raise DecisionError(
             "These decisions have no safe default and must be answered: "
-            + ", ".join(missing)
+            + ", ".join(missing),
+            decision_id=missing[0],
         )
     return resolved
 
@@ -1995,7 +2009,8 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
         raise DecisionError(
             f"You declined {listed} as a ligand but answered no to removing "
             "unconfigured heterogens, so the build would stop on it. Either "
-            "include it, or answer yes to removing unconfigured heterogens."
+            "include it, or answer yes to removing unconfigured heterogens.",
+            decision_id="structure.remove_unknown_heterogens",
         )
 
     bonded_sites = [
@@ -2006,12 +2021,14 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
         and resolved.get(decision.id) == "bonded_mcpb"
     ]
     _require_one_bonded_fit(plan, resolved, bonded_sites)
+    _require_a_fit_for_fitted_cofactors(plan, resolved)
     if bonded_sites and get("structure.keep_crystal_waters", True) is False:
         raise DecisionError(
             "A bonded metal site is refined with QM/MM, which protonates and "
             "includes the active-site waters, so the crystal waters have to be "
             "kept. Answer yes to keeping them, or model "
-            f"{', '.join(bonded_sites)} nonbonded."
+            f"{', '.join(bonded_sites)} nonbonded.",
+            decision_id="structure.keep_crystal_waters",
         )
 
     # A water bound to a bonded metal joins the MCPB quantum model, and a
@@ -2031,7 +2048,8 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
                 f"{', '.join(waters_on_metal)} is a water bound to a bonded metal, "
                 "which makes it part of the MCPB quantum model. That needs a "
                 f"three-point water, and {get('protein.water_model')} has an extra "
-                "point with no nucleus. Choose ff14SB with TIP3P for this system."
+                "point with no nucleus. Choose ff14SB with TIP3P for this system.",
+                decision_id="protein.water_model",
             )
 
     ligand_blocks = _link_ligand_copies(plan, resolved, _ligand_blocks(plan, resolved))
@@ -2116,6 +2134,52 @@ def share_answers(plan: DecisionPlan, resolved: Mapping[str, Any]) -> dict[str, 
             continue
         shared[decision.id] = shared[decision.copy_of]
     return shared
+
+
+def answer_conflicts(plan: DecisionPlan, answers: Mapping[str, Any]) -> DecisionError | None:
+    """A refusal the answers given so far already make certain, if any.
+
+    ``build_manifest`` refuses two bonded sites that would each need a fit of
+    their own -- but only at the end, after asking for the spin of a QM region
+    that would span them both, which nobody can answer. A front end that
+    checks this as each answer is given can say so at the question that
+    caused it. Answers to questions no longer reachable do not count, and
+    nothing here insists on questions not yet answered.
+    """
+
+    # Every question up to the last one answered has been passed, and one
+    # passed without an answer took its default -- as a front end records
+    # it. Questions further on have not been reached, so their defaults say
+    # nothing yet.
+    last = max(
+        (index for index, decision in enumerate(plan.decisions) if decision.id in answers),
+        default=-1,
+    )
+    reachable: dict[str, Any] = {}
+    for decision in plan.decisions[: last + 1]:
+        if not decision.is_applicable(reachable):
+            continue
+        raw = answers.get(decision.id, decision.default)
+        if raw is None or raw == "":
+            continue
+        try:
+            reachable[decision.id] = coerce_answer(decision, raw)
+        except DecisionError:
+            continue
+    shared = share_answers(plan, reachable)
+    bonded = [
+        decision.id.split(".")[1]
+        for decision in plan.decisions
+        if decision.section == "metals"
+        and decision.id.endswith(".model")
+        and shared.get(decision.id) == "bonded_mcpb"
+    ]
+    try:
+        _require_one_bonded_fit(plan, shared, bonded)
+        _require_a_fit_for_fitted_cofactors(plan, shared)
+    except DecisionError as exc:
+        return exc
+    return None
 
 
 def _kept_chains(plan: DecisionPlan, chosen: str) -> list[str]:
@@ -2203,12 +2267,16 @@ def _link_ligand_copies(
         if atom_names.get(block["id"]) != atom_names.get(first["id"]):
             differing.append("atom names")
         if differing:
+            asked = f"ligand.{block['id']}.{differing[0]}"
             raise DecisionError(
                 f"{_selector_label(block['selector'])} and "
                 f"{_selector_label(first['selector'])} are both called {name} but "
                 f"differ in {', '.join(differing)}. tleap builds every residue of one "
                 "name from one template, so they cannot both be built as they are. "
-                "Give them the same answers, or rename one of them in the input."
+                "Give them the same answers, or rename one of them in the input.",
+                decision_id=asked
+                if any(decision.id == asked for decision in plan.decisions)
+                else f"ligand.{block['id']}.include",
             )
         block["parameters_from"] = first["id"]
     return blocks
@@ -2259,7 +2327,8 @@ def _link_metal_copies(
                     raise DecisionError(
                         f"{block['id']} has no bond to the counterpart of "
                         f"{_selector_label(item[key])} {item[key]['atom_name']}, so it is "
-                        f"not a copy of {source}; answer no to sharing parameters"
+                        f"not a copy of {source}; answer no to sharing parameters",
+                        decision_id="structure.same_parametrization",
                     )
                 ordered.append(by_residue[counterpart])
             return ordered
@@ -2305,11 +2374,59 @@ def _require_one_bonded_fit(
         )
     else:
         advice = "Model all but one of them nonbonded."
+    labels = [_residue_id_of(plan.by_id(f"metal.{site}.model").subject).display() for site in independent]
     raise DecisionError(
-        f"{', '.join(independent)} would each need a bonded MCPB fit of their own, "
-        "and mdprep builds one fit per preparation: MCPB.py gives every fit the same "
-        f"residue and atom-type names, so two cannot be loaded together. {advice}"
+        f"The metals at {' and '.join(labels)} would each need a bonded MCPB fit of "
+        "their own, and mdprep builds one fit per preparation: MCPB.py gives every "
+        "fit the same residue and atom-type names, so two cannot be loaded together. "
+        f"{advice}",
+        decision_id=f"metal.{independent[-1]}.model",
     )
+
+
+def _require_a_fit_for_fitted_cofactors(
+    plan: DecisionPlan, resolved: Mapping[str, Any]
+) -> None:
+    """A cofactor whose charges come from an MCPB fit needs a site to be fitted.
+
+    A ligand on a metal defaults to taking its charges from the site's fit,
+    and its question comes before the site's. Modelling the site nonbonded
+    afterwards left it pointing at a fit that would never run, which the
+    schema caught only at the end, as an error the page could not place.
+    """
+
+    for decision in plan.decisions:
+        if decision.section != "metals" or not decision.id.endswith(".confirm_donors"):
+            continue
+        site = decision.id.split(".")[1]
+        model = resolved.get(f"metal.{site}.model")
+        confirmed = resolved.get(decision.id)
+        if model is None or (model == "bonded_mcpb" and confirmed is not False):
+            continue
+        donors = {(target.chain, target.resid, target.icode) for target in decision.targets[1:]}
+        for ligand in plan.decisions:
+            if ligand.section != "ligands" or not ligand.id.endswith(".charge_method"):
+                continue
+            if resolved.get(ligand.id) != "mcpb_resp_pyscf":
+                continue
+            subject = ligand.subject
+            if (subject.chain, subject.resid, subject.icode) not in donors:
+                continue
+            metal = _residue_id_of(decision.subject).display()
+            cofactor = _residue_id_of(subject).display()
+            why = (
+                "is modelled nonbonded, so there is no fit"
+                if model != "bonded_mcpb"
+                else "has its coordination shell written by hand, so mdprep fits nothing"
+            )
+            raise DecisionError(
+                f"{cofactor}'s charges were to come from the MCPB fit of the site at "
+                f"{metal}, which {why}. Go back and give {cofactor} another charge "
+                "method, such as AM1-BCC, or model the site bonded.",
+                decision_id=f"metal.{site}.model"
+                if model != "bonded_mcpb"
+                else decision.id,
+            )
 
 
 def _require_one_template_per_metal_name(blocks: list[dict[str, Any]]) -> None:
@@ -2337,7 +2454,8 @@ def _require_one_template_per_metal_name(blocks: list[dict[str, Any]]) -> None:
                     f"{_selector_label(ion['selector'])} and {previous[1]} are both "
                     f"called {name} but differ in charge or ion parameter set, and "
                     "tleap builds every residue of one name from one template. "
-                    "Give them the same answers, or rename one of them in the input."
+                    "Give them the same answers, or rename one of them in the input.",
+                    decision_id=f"metal.{block['id']}.charge",
                 )
             seen[name] = (signature, _selector_label(ion["selector"]))
 
@@ -2663,16 +2781,18 @@ def _refinement_block(
 def ligands_needing_hydrogens(
     plan: DecisionPlan, answers: Mapping[str, Any]
 ) -> list[str]:
-    """Included ligands whose hydrogens the structure never resolved.
+    """Included ligands with no hydrogens and no SMILES to place them from.
 
     mdprep will not guess a ligand's protonation -- a carboxylate and a
     carboxylic acid are the same heavy atoms -- so one of these needs a
-    `smiles:` added to its block, or hydrogens added to the input before the
-    run. The builder reports them rather than asking, because a SMILES typed
-    into a form is not something it can check against the residue it is for.
+    `smiles:` in its block, or hydrogens added to the input, before the run.
+    The planner asks for the SMILES of every such ligand, so this is empty
+    once its questions are answered. It used to list them regardless, and
+    the builder then told a student who had just typed the SMILES to go and
+    add one.
     """
 
-    resolved = resolve_answers(plan, answers)
+    resolved = share_answers(plan, resolve_answers(plan, answers))
     needing: list[str] = []
     for decision in plan.decisions:
         if decision.section != "ligands" or not decision.id.endswith(".include"):
@@ -2680,7 +2800,9 @@ def ligands_needing_hydrogens(
         if not resolved.get(decision.id):
             continue
         ligand_id = decision.id.split(".")[1]
-        if ligand_id in plan.findings.get("ligands_without_hydrogens", ()):
+        if ligand_id not in plan.findings.get("ligands_without_hydrogens", ()):
+            continue
+        if not resolved.get(f"ligand.{ligand_id}.smiles"):
             needing.append(ligand_id)
     return needing
 

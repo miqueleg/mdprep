@@ -38,27 +38,38 @@ ANSWERS = {
 
 
 @pytest.fixture(scope="module")
-def report(tmp_path_factory):
+def page(tmp_path_factory):
+    """Drive the page once per structure and answers; the wheel is built once."""
+
     chrome = find_chrome()
     if chrome is None:
         pytest.skip("a Chromium/Chrome binary is required for the browser test")
     if not has_puppeteer():
         pytest.skip("puppeteer-core is required: npm install puppeteer-core")
-
     subprocess.run([sys.executable, str(WEB / "build.py")], check=True, capture_output=True, cwd=REPO)
-    answers = tmp_path_factory.mktemp("answers") / "answers.json"
-    answers.write_text(json.dumps(ANSWERS), encoding="utf-8")
-    with serve(WEB) as url:
-        result = subprocess.run(
-            ["node", str(DRIVER), url, str(STRUCTURE), chrome, str(answers)],
-            capture_output=True,
-            text=True,
-            cwd=REPO,
-            timeout=900,
-        )
-    if result.returncode != 0:
-        pytest.fail(f"browser driver failed: {result.stderr[-2000:]}")
-    return json.loads(result.stdout)
+    work = tmp_path_factory.mktemp("answers")
+
+    def drive(structure, answers):
+        path = work / f"answers_{len(list(work.iterdir()))}.json"
+        path.write_text(json.dumps(answers), encoding="utf-8")
+        with serve(WEB) as url:
+            result = subprocess.run(
+                ["node", str(DRIVER), url, str(structure), chrome, str(path)],
+                capture_output=True,
+                text=True,
+                cwd=REPO,
+                timeout=900,
+            )
+        if result.returncode != 0:
+            pytest.fail(f"browser driver failed: {result.stderr[-2000:]}")
+        return json.loads(result.stdout)
+
+    return drive
+
+
+@pytest.fixture(scope="module")
+def report(page):
+    return page(STRUCTURE, ANSWERS)
 
 
 @pytest.fixture(scope="module")
@@ -104,3 +115,51 @@ def test_the_manifest_is_one_mdprep_accepts(manifest, tmp_path):
     candidate["project"]["output_dir"] = str(tmp_path / "prepared")
 
     ManifestConfig.model_validate(candidate)
+
+
+def test_a_second_fit_is_refused_at_the_iron_that_asks_for_it(page):
+    """Not sharing, and chain B's iron left bonded as proposed: the page
+    stops on that question with the reason, rather than at Finish after a
+    spin question for a QM region spanning both irons."""
+
+    report = page(
+        STRUCTURE,
+        {
+            **ANSWERS,
+            "structure.same_parametrization": "false",
+            "ligand.b_akg_898.net_charge": "-2",
+            "ligand.b_akg_898.smiles": "[O-]C(=O)CCC(=O)C(=O)[O-]",
+        },
+    )
+
+    assert report["errors"] == []
+    [stuck] = report["unanswered"]
+    assert stuck.startswith("stuck on metal.b_fe2_899_site.model: The metals at A:FE2900 and B:FE2899")
+    assert "Answer yes to giving every copy the same parameters" in stuck
+
+
+def test_keeping_one_copy_of_a_prediction_keeps_its_own_ligand_chains(page, tmp_path):
+    from tests.test_oligomers import prediction_layout
+    from mdprep.structure.pdb import read_pdb
+    from mdprep.structure.writer import write_pdb
+
+    model = tmp_path / "predicted_dimer.pdb"
+    write_pdb(prediction_layout(read_pdb(STRUCTURE)), model)
+    report = page(
+        model,
+        {
+            "structure.chains": "B",
+            "structure.remove_unknown_heterogens": "false",
+            "structure.repair.add_missing_heavy_atoms": "true",
+            "ligand.j_akg_1.net_charge": "-2",
+            "ligand.j_akg_1.smiles": "[O-]C(=O)CCC(=O)C(=O)[O-]",
+            "metal.g_fe2_1_site.confirm_donors": "true",
+            "metal.g_fe2_1_site.multiplicity": "5",
+        },
+    )
+
+    assert report["errors"] == [] and report["unanswered"] == []
+    manifest = yaml.safe_load(report["manifest"])
+    # B's iron, chlorides and cofactor, each a chain of its own; none of A's.
+    assert manifest["structure"]["keep_chains"] == ["B", "G", "H", "I", "J"]
+    assert [ligand["id"] for ligand in manifest["ligands"]] == ["j_akg_1"]

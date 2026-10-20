@@ -124,8 +124,11 @@ Each decision also says what a viewer should put on screen while it is being
 answered:
 
 - `focus` is `none` (no structural aspect, such as a project name),
-  `targets` (emphasise and frame the residues below), or `structure` (show the
-  whole system, as for the force field or the solvent box).
+  `targets` (emphasise and frame the residues below), `structure` (show the
+  whole system, as for the force field or the solvent box), or `chains` (the
+  whole system with each chain in its own colour and the residues below
+  emphasised in every copy, as for which chains to keep and whether copies
+  match).
 - `targets` lists the residues to highlight, each with `chain`, `resname`,
   `resid`, `icode`, and `element`/`atom_name` where they apply. **`targets[0]`
   is the subject of the decision** -- the ligand being charged, the ion being
@@ -159,3 +162,12 @@ manifest = build_manifest(plan, answers)  # raises if a blocking answer is missi
 `build_manifest` returns a plain dictionary, and raises `DecisionError` rather
 than defaulting anything a user was supposed to decide. That guarantee is what
 makes it safe to put a graphical front end in front of mdprep at all.
+
+A `DecisionError` carries `decision_id`, the question whose answer would
+resolve it, when there is one; the web builder takes the user back to it.
+Some refusals are certain before the last question -- a second bonded metal
+site that would need an MCPB fit of its own, or a cofactor whose charges were
+to come from a site that is no longer bonded. `answer_conflicts(plan,
+answers)` returns that refusal as soon as the answers given make it certain,
+so a front end can say so at the question that caused it, as the web builder
+and `mdprep init --interactive` do.

@@ -209,6 +209,13 @@ def _render_plan(plan) -> None:
         findings.add_row(
             key.replace("_", " "), ", ".join(str(value) for value in values) or "none"
         )
+    copies = [
+        group for group in plan.findings.get("oligomer", {}).get("groups", []) if len(group) > 1
+    ]
+    findings.add_row(
+        "copies of one protein",
+        "; ".join(f"chains {', '.join(group)}" for group in copies) or "none",
+    )
     console.print(findings)
 
     table = Table(title="Decisions required by this structure")
@@ -222,18 +229,25 @@ def _render_plan(plan) -> None:
             if decision.requires_user_input or decision.default is None
             else decision.default
         )
-        condition = (
-            ", ".join(
-                f"{item.decision_id}={'|'.join(item.values)}" for item in decision.when
-            )
-            or "-"
+        condition = ", ".join(
+            f"{item.decision_id}={'|'.join(item.values)}" for item in decision.when
         )
+        if decision.when_any:
+            either = " or ".join(
+                f"{item.decision_id}={'|'.join(item.values)}" for item in decision.when_any
+            )
+            condition = f"{condition}, and {either}" if condition else either
+        if decision.copy_of:
+            condition += f" (else as {decision.copy_of})"
+        condition = condition or "-"
         if decision.focus == "targets":
             shown = ", ".join(
-                f"{target.resname}{target.resid}" for target in decision.targets
+                f"{target.chain}:{target.resname}{target.resid}" for target in decision.targets
             ) or ", ".join(decision.target_resnames)
         elif decision.focus == "structure":
             shown = "whole structure"
+        elif decision.focus == "chains":
+            shown = "each chain"
         else:
             shown = "-"
         table.add_row(decision.id, default, shown, condition)
@@ -341,6 +355,7 @@ def _run_interactive_init(
             prompt=prompt,
             overwrite=overwrite,
             preset=preset,
+            notify=lambda message: console.print(f"  [red]{escape(message)}[/red]"),
         )
     except (FileExistsError, FileNotFoundError, PdbParseError, DecisionError, ValueError) as exc:
         console.print(f"[red]Error:[/red] {escape(str(exc))}")

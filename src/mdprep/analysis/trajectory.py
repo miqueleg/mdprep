@@ -126,6 +126,48 @@ def residues_near(
     return sorted(near)
 
 
+def residue_clusters(
+    topology: AmberTopology,
+    positions: np.ndarray,
+    residues: Sequence[int],
+    cutoff: float = 12.0,
+) -> list[list[int]]:
+    """``residues`` gathered into groups that sit together, nearest first.
+
+    Two residues belong together when any of their atoms are within
+    ``cutoff`` of each other, and groups are joined through any member -- so
+    a metal, its cofactor and the substrate beside them make one group, and
+    each copy of a dimer's active site makes its own. A view framed on all of
+    them at once would put the copies so far apart that neither can be read.
+    """
+
+    residues = list(residues)
+    parent = list(range(len(residues)))
+
+    def root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    coordinates = [positions[list(topology.residues[index].atom_indices)] for index in residues]
+    for first in range(len(residues)):
+        for second in range(first + 1, len(residues)):
+            gap = np.min(
+                np.linalg.norm(
+                    coordinates[first][:, None, :] - coordinates[second][None, :, :], axis=-1
+                )
+            )
+            if gap <= cutoff:
+                a, b = root(first), root(second)
+                if a != b:
+                    parent[max(a, b)] = min(a, b)
+    groups: dict[int, list[int]] = {}
+    for index, residue in enumerate(residues):
+        groups.setdefault(root(index), []).append(residue)
+    return sorted(groups.values(), key=lambda group: group[0])
+
+
 def display_atoms(
     topology: AmberTopology,
     positions: np.ndarray,

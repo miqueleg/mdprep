@@ -173,8 +173,9 @@ def test_the_structure_viewer_renders(report):
 def test_each_question_frames_what_it_is_about(report):
     captions = {step["text"]: step["caption"] for step in report["steps"]}
 
-    assert captions["Formal net charge of B:SUB501"] == "Highlighted: SUB501"
-    assert captions["Formal net charge of C:COF601"] == "Highlighted: COF601"
+    # With the chain: in an oligomer, AKG1 names a residue in every copy.
+    assert captions["Formal net charge of B:SUB501"] == "Highlighted: B:SUB501"
+    assert captions["Formal net charge of C:COF601"] == "Highlighted: C:COF601"
     assert "SUB501" in captions[
         "Remove heterogens that are not configured as ligands or metal sites?"
     ]
