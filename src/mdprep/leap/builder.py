@@ -149,7 +149,7 @@ def run_tleap_stage(
             if ligand.charge_method == "mcpb_resp_pyscf"
         }
         refitted_ligands = (
-            list(metal_result.mcpb_site.refitted_ligands)
+            list(metal_result.mcpb_site.all_refitted_ligands)
             if bonded_mcpb_complete
             and metal_result is not None
             and metal_result.mcpb_site is not None

@@ -57,6 +57,29 @@ MCPB.py would treat an N/O/S/halogen atom inside `mcpb.cutoff_angstrom` as a
 coordinator. Add every intended pair to `mcpb.bonds`, or reduce the cutoff
 after reviewing the site. Do not use the cutoff to hide an intended bond.
 
+## Two Bonded Sites Would Each Need A Fit
+
+mdprep fits one bonded MCPB site per preparation. In an oligomer, give every
+copy the same parameters: the other copies' sites then reuse the one fit
+(`parameters_from`). A copy whose site is not a copy of the first -- one donor
+more or less, or a carboxylate bound through the oxygen named the other way
+round -- has to be modelled nonbonded. See [oligomers.md](oligomers.md).
+
+## Two Residues With One Name Differ
+
+tleap builds every residue of one name from one template, so two ligands
+called AKG, or two metals called FE2, cannot carry different charges or
+parameters. Give them the same answers -- mdprep then parameterises the name
+once -- or rename one of them in the input.
+
+## A Copy Cannot Take The Template
+
+A copy of a bonded site takes the residue templates fitted for the first copy,
+atom for atom. A copy residue protonated differently, with a different
+residue beside a coordinating side chain, or with other atom names, is
+refused; make the copies alike, or answer no to sharing parameters and model
+that copy's metal nonbonded.
+
 ## MCPB Workflow Is Incomplete
 
 Run with `workflow: prepare_inputs` and `--stop-after metals`, complete the

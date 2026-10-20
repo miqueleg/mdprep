@@ -8,6 +8,8 @@
 - [Protonation](protonation.md)
 - [Ligands](ligands.md)
 - [Metal centers](metals.md)
+- [Dimers, trimers and tetramers](oligomers.md)
+- [Predicted structures](predicted_structures.md)
 - [MCPB Hessian-method benchmark](mcpb_xtb_benchmark.md)
 - [7E07 Fe(III) bonded-site tutorial](../examples/tutorials/7E07_bonded_fe3/README.md)
 - [QMMESP charges with PySCF](qmmesp_pyscf.md)

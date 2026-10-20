@@ -4,6 +4,32 @@
 
 ### Added
 
+- Dimers, trimers and tetramers. Every protein chain can be prepared in one
+  system, and when the chains are copies of one protein the builder asks
+  whether every copy should get the same parameters. If so it asks about the
+  first copy only and gives each answer to the matching residue of the others,
+  matched by sequence and by position rather than by residue number, which
+  copies often do not share (2FCT numbers its two alpha-ketoglutarates 897 and
+  898). A ligand is parameterised once; a bonded metal site is fitted once with
+  MCPB.py, and each copy's residues take the fit's templates and its metal the
+  fit's bonds. A copy whose site differs -- 6NIE's chains B and C bind
+  alpha-ketoglutarate through the other carboxylate oxygen -- is reported and
+  asked about on its own. See `docs/oligomers.md`.
+- `parameters_from` on ligands and metal sites: a block built with another
+  block's parameters, checked by `config-check` to repeat its settings and, for
+  a bonded site, to list its residues in the reference's order.
+- `examples/18_syrb2_dimer_shared_mcpb.yaml`: both copies of SyrB2, one fit.
+- `mdprep.analysis.charges.metal_sites`: each metal site's charge on its own,
+  which the official notebook now shows one table per site.
+- The web builder lists which chains are copies of one protein, shows the
+  chain and copy questions with each chain in its own colour, and names
+  residues with their chain.
+- Refusals the answers already make certain are given at the question that
+  causes them, in the web builder and in `mdprep init --interactive`: a second
+  bonded metal site needing a fit of its own, or a cofactor whose charges were
+  to come from a site made nonbonded. Every `DecisionError` names the question
+  to go back to (`decision_id`), and the page goes there.
+
 - The official Colab notebook, `examples/mdprep_colab.ipynb`: takes a bundle
   from the web builder (or runs the SyrB2 example), prepares and equilibrates
   the system, and shows every step -- the structure after each stage, the
@@ -42,6 +68,21 @@
   listed in the structure report either way.
 
 ### Fixed
+
+- Keeping one chain of a predicted oligomer kept every ligand chain too, so the
+  other copy's iron and cofactor floated in the box. A chain holding only
+  heterogens now goes with the protein chain it sits against.
+- The spin of the QM region was asked of any structure with two metals, even
+  when neither turned out bonded; it is now asked once a bonded site is
+  confirmed, whichever site that is.
+- `DecisionPlan.applicable` counted an answer whose own question was no longer
+  reachable -- a shell confirmed before the site was switched to nonbonded.
+- The ligand coordinate check after tleap could not tell two copies of one
+  cofactor apart, since tleap renumbers residues; it now takes the copy nearest
+  the ligand it checks.
+- The web builder and the wizard told a student to add a SMILES to a ligand
+  without hydrogens after asking for it and being given it.
+- `mdprep init --interactive` re-asked a rejected answer without saying why.
 
 - A residue name mdprep assigned (a predicted iron called `LIG1` read as `FE`)
   lost that record when the structure was written and read back, and `FE` read

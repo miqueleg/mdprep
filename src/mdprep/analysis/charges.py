@@ -106,13 +106,67 @@ def summary(topology: AmberTopology) -> dict[str, object]:
     }
 
 
+def metal_sites(topology: AmberTopology) -> list[dict[str, object]]:
+    """Each metal site on its own, as ``metal_site`` lays one out.
+
+    A dimer has one site per copy, and each is a separate integer charge:
+    added together, two -1 sites read as one site of -2. A metal joins the
+    residues bound to it, and two metals sharing a residue are one site.
+    """
+
+    residues = {residue.index: residue for residue in residue_charges(topology)}
+    parent = {index: index for index in _site_residues(topology)}
+
+    def root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for metal, partner in topology.metal_bonds():
+        first = root(topology.atoms[metal].residue_index)
+        second = root(topology.atoms[partner].residue_index)
+        if first != second:
+            parent[max(first, second)] = min(first, second)
+    groups: dict[int, set[int]] = {}
+    for index in parent:
+        groups.setdefault(root(index), set()).add(index)
+    sites = []
+    for members in sorted(groups.values(), key=min):
+        bonds = [
+            (metal, donor)
+            for metal, donor in topology.metal_bonds()
+            if topology.atoms[metal].residue_index in members
+        ]
+        sites.append(_site_table(topology, sorted(members), bonds, residues))
+    return sites
+
+
 def metal_site(topology: AmberTopology) -> dict[str, object]:
-    """The bonded site: each residue's charge, and each atom bound to a metal."""
+    """Every metal site together: each residue's charge, each metal bond.
+
+    For one site that is the site; with several, see ``metal_sites``.
+    """
 
     site = sorted(_site_residues(topology))
     bonds = topology.metal_bonds()
     residues = {residue.index: residue for residue in residue_charges(topology)}
+    return _site_table(topology, site, bonds, residues)
+
+
+def _site_table(
+    topology: AmberTopology,
+    site: list[int],
+    bonds: list[tuple[int, int]],
+    residues: dict[int, ResidueCharge],
+) -> dict[str, object]:
     return {
+        "metals": [
+            topology.label(atom)
+            for index in site
+            for atom in topology.residues[index].atom_indices
+            if topology.is_metal(atom)
+        ],
         "residues": [
             {
                 "residue": residues[index].label,

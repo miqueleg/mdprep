@@ -17,6 +17,7 @@ from typing import Any, Callable, Mapping
 import yaml
 
 from mdprep.config.decisions import (
+    answer_conflicts,
     Decision,
     DecisionError,
     DecisionPlan,
@@ -74,6 +75,7 @@ def collect_answers(
     *,
     preset: Mapping[str, Any] | None = None,
     max_attempts: int = MAX_ATTEMPTS_PER_DECISION,
+    notify: Callable[[str], None] | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Walk the plan, asking only the questions the answers keep reachable.
 
@@ -82,7 +84,10 @@ def collect_answers(
 
     A question that must be answered is re-asked until it is, but only
     ``max_attempts`` times: a front end that cannot supply a value has to fail
-    rather than spin, which matters for every non-interactive caller.
+    rather than spin, which matters for every non-interactive caller. An
+    answer that rules the build out on its own -- a second bonded metal site
+    needing a fit of its own -- is refused at its question, as an invalid one
+    is, rather than after the last question. ``notify`` is told why.
     """
 
     preset = dict(preset or {})
@@ -115,6 +120,15 @@ def collect_answers(
                 answers[decision.id] = _coerce(decision, raw)
             except DecisionError as exc:
                 last_error = str(exc)
+                if notify is not None:
+                    notify(last_error)
+                continue
+            conflict = answer_conflicts(plan, answers)
+            if conflict is not None and conflict.decision_id == decision.id:
+                del answers[decision.id]
+                last_error = str(conflict)
+                if notify is not None:
+                    notify(last_error)
                 continue
             asked += 1
             break
@@ -158,6 +172,19 @@ def render_manifest_yaml(
             "#       file. A bonded MCPB site needs external QM artifacts; add it by"
         )
         header.append("#       hand following docs/metals.md before preparing.")
+    # Copies of the protein built with another copy's parameters, named up
+    # front: the blocks repeat every setting, so the one line that makes them
+    # copies is easy to miss further down.
+    shared = [
+        f"#   {block['id']} <- {block['parameters_from']}"
+        for block in (*manifest["ligands"], *manifest["metals"])
+        if "parameters_from" in block
+    ]
+    if shared:
+        header.append(
+            "# Built with another block's parameters (parameters_from), see docs/oligomers.md:"
+        )
+        header.extend(shared)
     body = yaml.safe_dump(manifest, sort_keys=False, default_flow_style=False)
     return "\n".join(header) + "\n\n" + body
 
@@ -172,6 +199,7 @@ def run_wizard(
     altloc_policy: AltlocPolicy = "highest_occupancy",
     disulfide_cutoff_angstrom: float = 2.2,
     max_attempts: int = MAX_ATTEMPTS_PER_DECISION,
+    notify: Callable[[str], None] | None = None,
 ) -> WizardResult:
     """Plan, ask, and write a validated manifest."""
 
@@ -186,7 +214,7 @@ def run_wizard(
         disulfide_cutoff_angstrom=disulfide_cutoff_angstrom,
     )
     answers, asked = collect_answers(
-        plan, prompt, preset=preset, max_attempts=max_attempts
+        plan, prompt, preset=preset, max_attempts=max_attempts, notify=notify
     )
     mcpb_sites = tuple(unresolved_mcpb_sites(plan, answers))
     hydrogenless = tuple(ligands_needing_hydrogens(plan, answers))

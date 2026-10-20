@@ -323,6 +323,13 @@ class LigandConfig(StrictModel):
     allow_atom_renaming: bool = False
     allow_coordinate_changes: bool = False
     qmmesp: QmmespConfig | None = None
+    # The id of another ligand whose parameters this one is built with: one
+    # residue of the same name, parameterised once, in another copy of the
+    # protein. tleap builds every residue of a name from one template, so
+    # two residues sharing a name share their parameters whether a manifest
+    # says so or not; this says so, and says which one they come from. The
+    # settings above must repeat that ligand's, so the file reads true.
+    parameters_from: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def validate_charge_inputs(self) -> "LigandConfig":
@@ -762,6 +769,13 @@ class MetalSiteConfig(StrictModel):
     coordinating_ions: list[CoordinatingIonConfig] = Field(default_factory=list)
     nonbonded: NonbondedMetalConfig | None = None
     mcpb: McpbConfig | None = None
+    # The id of the site in another copy of the protein whose parameters
+    # this one reuses. A bonded copy is not fitted: it takes the reference
+    # site's MCPB.py templates and bond parameters, residue for residue, so
+    # its ions, coordinating ions, bonds and additional residues are listed in
+    # the same order as the reference's, each the counterpart of the one in
+    # the same place. Every other setting repeats the reference's.
+    parameters_from: str | None = Field(default=None, min_length=1)
 
     @model_validator(mode="after")
     def validate_model_settings(self) -> "MetalSiteConfig":
@@ -1051,6 +1065,20 @@ class ManifestConfig(StrictModel):
         ]
         if len(ion_selectors) != len(set(ion_selectors)):
             raise ValueError("a metal ion atom may belong to only one metal site")
+        fitted = [
+            site.id
+            for site in self.metals
+            if site.model == "bonded_mcpb" and site.parameters_from is None
+        ]
+        if len(fitted) > 1:
+            raise ValueError(
+                f"Bonded metal sites {fitted} would each need an MCPB fit of their own; "
+                "mdprep fits one site per preparation, because MCPB.py gives every fit "
+                "the same residue and atom-type names. A site in another copy of the "
+                "protein can reuse that fit with parameters_from; otherwise model all "
+                "but one nonbonded"
+            )
+        self._validate_shared_parameters()
         self._validate_refinement(ligand_ids=ligand_ids, metal_ids=metal_ids)
         self._validate_mcpb_refinement_geometry()
         if any(ligand.charge_method == "qmmesp_pyscf" for ligand in self.ligands):
@@ -1118,9 +1146,79 @@ class ManifestConfig(StrictModel):
                 )
         return self
 
+    def _validate_shared_parameters(self) -> None:
+        """A block that takes another's parameters must be able to.
+
+        The reference must exist and not itself borrow, every setting must
+        repeat the reference's, and a bonded copy must list its residues in
+        the order of the reference's, each the counterpart of the one in the
+        same place -- residue numbers may differ, the chemistry may not.
+        """
+
+        ligands = {ligand.id: ligand for ligand in self.ligands}
+        for ligand in self.ligands:
+            if ligand.parameters_from is None:
+                continue
+            reference = ligands.get(ligand.parameters_from)
+            label = f"Ligand {ligand.id!r} takes its parameters from {ligand.parameters_from!r}"
+            if reference is None:
+                raise ValueError(f"{label}, which is not a configured ligand")
+            if reference.id == ligand.id or reference.parameters_from is not None:
+                raise ValueError(
+                    f"{label}; parameters_from must name a ligand that is parameterised "
+                    "itself"
+                )
+            if reference.selector.resname != ligand.selector.resname:
+                raise ValueError(
+                    f"{label}, but they are {ligand.selector.resname} and "
+                    f"{reference.selector.resname}; tleap shares a template by residue "
+                    "name, so only residues of one name can share parameters"
+                )
+            mine = ligand.model_dump(exclude={"id", "selector", "parameters_from"})
+            theirs = reference.model_dump(exclude={"id", "selector", "parameters_from"})
+            differing = sorted(key for key in mine if mine[key] != theirs[key])
+            if differing:
+                raise ValueError(
+                    f"{label} but differs from it in {', '.join(differing)}; repeat "
+                    "the reference's settings, or parameterise it on its own"
+                )
+
+        sites = {site.id: site for site in self.metals}
+        for site in self.metals:
+            if site.parameters_from is None:
+                continue
+            reference = sites.get(site.parameters_from)
+            label = f"Metal site {site.id!r} takes its parameters from {site.parameters_from!r}"
+            if reference is None:
+                raise ValueError(f"{label}, which is not a configured metal site")
+            if reference.id == site.id or reference.parameters_from is not None:
+                raise ValueError(
+                    f"{label}; parameters_from must name a site that is parameterised "
+                    "itself"
+                )
+            _require_same_site_chemistry(site, reference, label)
+
+        # A cofactor whose charges come from a bonded site's fit can only
+        # share them with the matching cofactor of a copy of that site.
+        for ligand in self.ligands:
+            if ligand.parameters_from is None or ligand.charge_method != "mcpb_resp_pyscf":
+                continue
+            own = _bonded_site_of(self.metals, ligand)
+            source = _bonded_site_of(self.metals, ligands[ligand.parameters_from])
+            if own is None or source is None or own.parameters_from != source.id:
+                raise ValueError(
+                    f"Ligand {ligand.id!r} takes its MCPB-fitted charges from "
+                    f"{ligand.parameters_from!r}, so it has to coordinate a copy of "
+                    f"that ligand's site, a metal site with parameters_from: "
+                    f"{source.id if source is not None else '<its site>'}"
+                )
+
     def _validate_mcpb_refinement_geometry(self) -> None:
         for site in self.metals:
             if site.model != "bonded_mcpb" or site.mcpb is None:
+                continue
+            # A copy reuses its reference's fit; its own geometry is not fitted.
+            if site.parameters_from is not None:
                 continue
             pyscf = site.mcpb.pyscf
             if pyscf is None or pyscf.geometry_source != "qmmm_refinement":
@@ -1233,3 +1331,128 @@ class ManifestConfig(StrictModel):
                 f"refinement.total_qm_multiplicity; found {labels}. State the "
                 "multiplicity of the whole QM region, not of its parts"
             )
+
+
+# Residue names one chemistry goes by: a histidine may be HIS in one copy and
+# HID in another, a water HOH or WAT.
+_SAME_RESIDUE = (
+    frozenset({"HIS", "HID", "HIE", "HIP"}),
+    frozenset({"ASP", "ASH"}),
+    frozenset({"GLU", "GLH"}),
+    frozenset({"CYS", "CYM", "CYX"}),
+    frozenset({"LYS", "LYN"}),
+    frozenset({"HOH", "WAT", "H2O", "TIP3", "OPC"}),
+)
+
+
+def _residue_family(resname: str) -> frozenset[str]:
+    for family in _SAME_RESIDUE:
+        if resname in family:
+            return family
+    return frozenset({resname})
+
+
+def _require_same_site_chemistry(
+    site: "MetalSiteConfig", reference: "MetalSiteConfig", label: str
+) -> None:
+    if site.model != reference.model:
+        raise ValueError(f"{label} but is {site.model}, where it is {reference.model}")
+    if len(site.ions) != len(reference.ions):
+        raise ValueError(f"{label} but lists {len(site.ions)} ions to its {len(reference.ions)}")
+    for own, theirs in zip(site.ions, reference.ions):
+        if (own.element, own.charge, own.multiplicity) != (
+            theirs.element,
+            theirs.charge,
+            theirs.multiplicity,
+        ):
+            raise ValueError(
+                f"{label} but its ion {own.selector.resname}{own.selector.resid} differs "
+                f"from {theirs.selector.resname}{theirs.selector.resid} in element, charge "
+                "or multiplicity"
+            )
+    if len(site.coordinating_ions) != len(reference.coordinating_ions) or any(
+        (own.element, own.charge, own.parameter_set)
+        != (theirs.element, theirs.charge, theirs.parameter_set)
+        for own, theirs in zip(site.coordinating_ions, reference.coordinating_ions)
+    ):
+        raise ValueError(
+            f"{label} but its coordinating ions are not the reference's, in the same order"
+        )
+    if site.model == "nonbonded":
+        if site.nonbonded != reference.nonbonded:
+            raise ValueError(f"{label} but uses another ion parameter set")
+        return
+    assert site.mcpb is not None and reference.mcpb is not None
+    mine = site.mcpb.model_dump(exclude={"bonds", "additional_residues"})
+    theirs = reference.mcpb.model_dump(exclude={"bonds", "additional_residues"})
+    differing = sorted(key for key in mine if mine[key] != theirs[key])
+    if differing:
+        raise ValueError(
+            f"{label} but its mcpb settings differ in {', '.join(differing)}; a copy "
+            "repeats the reference's settings and lists only its own residues"
+        )
+    if len(site.mcpb.bonds) != len(reference.mcpb.bonds):
+        raise ValueError(
+            f"{label} but has {len(site.mcpb.bonds)} bonds to the reference's "
+            f"{len(reference.mcpb.bonds)}"
+        )
+    if len(site.mcpb.additional_residues) != len(reference.mcpb.additional_residues):
+        raise ValueError(f"{label} but lists a different number of additional residues")
+    own_ion_index = {ion.selector.model_dump_json(): index for index, ion in enumerate(site.ions)}
+    reference_ion_index = {
+        ion.selector.model_dump_json(): index for index, ion in enumerate(reference.ions)
+    }
+    pairing: dict[tuple[str, int, str | None], tuple[str, int, str | None]] = {}
+    for number, (own, theirs) in enumerate(zip(site.mcpb.bonds, reference.mcpb.bonds), start=1):
+        if own_ion_index.get(own.ion.model_dump_json()) != reference_ion_index.get(
+            theirs.ion.model_dump_json()
+        ):
+            raise ValueError(
+                f"{label} but its bond {number} is to a different ion of the site than "
+                "the reference's bond in the same place"
+            )
+        if own.coordinator.atom_name != theirs.coordinator.atom_name or _residue_family(
+            own.coordinator.resname
+        ) != _residue_family(theirs.coordinator.resname):
+            raise ValueError(
+                f"{label} but its bond {number} is to {own.coordinator.resname} "
+                f"{own.coordinator.atom_name} where the reference's is to "
+                f"{theirs.coordinator.resname} {theirs.coordinator.atom_name}; list the "
+                "bonds in the reference's order"
+            )
+        key = (own.coordinator.chain, own.coordinator.resid, own.coordinator.icode)
+        source = (theirs.coordinator.chain, theirs.coordinator.resid, theirs.coordinator.icode)
+        if pairing.setdefault(key, source) != source:
+            raise ValueError(
+                f"{label} but its bond {number} pairs residue {own.coordinator.resname}"
+                f"{own.coordinator.resid} with two different residues of the reference"
+            )
+    if len(set(pairing.values())) != len(pairing):
+        raise ValueError(
+            f"{label} but pairs two of its residues with one residue of the reference"
+        )
+    for own, theirs in zip(site.mcpb.additional_residues, reference.mcpb.additional_residues):
+        if _residue_family(own.resname) != _residue_family(theirs.resname):
+            raise ValueError(
+                f"{label} but its additional residue {own.resname}{own.resid} is not the "
+                f"counterpart of {theirs.resname}{theirs.resid}"
+            )
+
+
+def _bonded_site_of(
+    sites: list["MetalSiteConfig"], ligand: "LigandConfig"
+) -> "MetalSiteConfig | None":
+    key = (ligand.selector.chain, ligand.selector.resid, ligand.selector.icode)
+    for site in sites:
+        if site.model != "bonded_mcpb" or site.mcpb is None:
+            continue
+        residues = {
+            (bond.coordinator.chain, bond.coordinator.resid, bond.coordinator.icode)
+            for bond in site.mcpb.bonds
+        } | {
+            (item.chain, item.resid, item.icode) for item in site.mcpb.additional_residues
+        }
+        if key in residues:
+            return site
+    return None
+

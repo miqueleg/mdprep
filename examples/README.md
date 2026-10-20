@@ -23,6 +23,7 @@ to real systems.
 | `14_qmmm_refinement_mace_polar1_mechanical.yaml` | Method-specific MACE-POLAR-1/OpenMM mechanical-embedding refinement | Requires AmberTools and an ASH environment containing OpenMM, geomeTRIC, and licensed MACE-POLAR-1 dependencies |
 | `15_roe_brooks_openmm.yaml` | Roe--Brooks equilibration and a manifest-sized OpenMM production run | Uses a GPU when available and falls back to CPU |
 | `17_syrb2_bound_water_mcpb.yaml` | SyrB2 (PDB 2FCT): bonded Fe(II) with a water and a chloride on the iron, a free crystal chloride, a missing loop | Requires the example 11 tools; the official Colab notebook runs it as its example |
+| `18_syrb2_dimer_shared_mcpb.yaml` | Both copies of SyrB2 (PDB 2FCT): chain A's iron site fitted once, chain B's site and cofactor built from that fit with `parameters_from` | Requires the example 11 tools; see [docs/oligomers.md](../docs/oligomers.md) |
 
 The `tutorials/minimal_user_mol2/` directory contains a tiny toy example with
 input PDB, ligand mol2, frcmod, and manifest. It is intended only for checking

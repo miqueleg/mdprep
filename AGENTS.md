@@ -65,8 +65,9 @@ Explicitly unsupported for v0.2:
 - covalent ligands
 - ORCA backend
 - Multiwfn dependency
-- multiple independent bonded MCPB sites
-- multi-chain MCPB protein inputs
+- multiple independent bonded MCPB sites (copies of one site in an oligomer
+  share a single fit through `parameters_from`; see `docs/oligomers.md`)
+- bonded MCPB sites bound by more than one protein chain
 
 ## Required Checks
 

@@ -1,0 +1,345 @@
+# SyrB2 as the dimer in the crystal (PDB 2FCT, chains A and B).
+#
+# Both copies of the halogenase, each with its Fe(II), alpha-ketoglutarate, a
+# chloride and a water on the iron. The copies number their heterogens
+# differently -- chain A's cofactor is AKG897 and chain B's AKG898, A's iron
+# FE2900 and B's FE2899 -- so chain B's residues were matched to chain A's by
+# sequence and position, not by number. See docs/oligomers.md.
+#
+# Written by the decision engine (mdprep init --interactive) with the answers
+# of examples/17_syrb2_bound_water_mcpb.yaml, plus:
+#   * structure.chains: all            prepare the dimer
+#   * same_parametrization: yes        chain B takes chain A's parameters
+#
+# Chain A's site is fitted once with MCPB.py. Chain B's site and cofactor carry
+# parameters_from: they reuse that fit -- its residue templates, atom types,
+# charges and bond parameters -- with their own residues, listed in chain A's
+# order. Only chain A's site goes through the QM/MM refinement and the quantum
+# calculations, so the dimer costs one fit.
+project:
+  name: syrb2_2fct_dimer
+  input_structure: tutorials/syrb2_2fct/2FCT.pdb
+  output_dir: prepared/syrb2_2fct_dimer
+structure:
+  keep_chains: []
+  keep_crystal_waters: true
+  keep_crystal_ions: true
+  altloc_policy: highest_occupancy
+  remove_unknown_heterogens: true
+  preserve_chain_ids: true
+  remove_input_hydrogens: true
+  repair:
+    backend: pdbfixer
+    add_missing_heavy_atoms: true
+    unresolved_residues: leave_absent
+protein:
+  forcefield: ff14SB
+  water_model: TIP3P
+protonation:
+  ph: 7.0
+  method: propka_xtb_his
+  overrides: []
+  histidine:
+    neutral_tautomer_method: xtb
+    xtb:
+      model: gfn2
+      mode: sp
+      num_threads: 1
+disulfides:
+  auto_detect: true
+  detection_cutoff_angstrom: 2.2
+  force: []
+  forbid: []
+ligands:
+- id: a_akg_897
+  selector:
+    chain: A
+    resname: AKG
+    resid: 897
+    icode: null
+  net_charge: -2
+  multiplicity: 1
+  atom_types: gaff2
+  charge_method: mcpb_resp_pyscf
+  smiles: '[O-]C(=O)CCC(=O)C(=O)[O-]'
+- id: b_akg_898
+  selector:
+    chain: B
+    resname: AKG
+    resid: 898
+    icode: null
+  net_charge: -2
+  multiplicity: 1
+  atom_types: gaff2
+  charge_method: mcpb_resp_pyscf
+  smiles: '[O-]C(=O)CCC(=O)C(=O)[O-]'
+  parameters_from: a_akg_897
+metals:
+- id: a_fe2_900_site
+  model: bonded_mcpb
+  ions:
+  - selector:
+      chain: A
+      resname: FE2
+      resid: 900
+      icode: null
+      atom_name: FE
+    element: Fe
+    charge: 2
+    multiplicity: 5
+  coordinating_ions:
+  - selector:
+      chain: A
+      resname: CL
+      resid: 901
+      icode: null
+      atom_name: CL
+    element: Cl
+    charge: -1
+  mcpb:
+    workflow: pyscf
+    provisional_nonbonded_parameter_set: '12_6'
+    cutoff_angstrom: 2.6
+    bonds:
+    - ion:
+        chain: A
+        resname: FE2
+        resid: 900
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: A
+        resname: AKG
+        resid: 897
+        icode: null
+        atom_name: O2
+    - ion:
+        chain: A
+        resname: FE2
+        resid: 900
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: A
+        resname: HIS
+        resid: 116
+        icode: null
+        atom_name: NE2
+    - ion:
+        chain: A
+        resname: FE2
+        resid: 900
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: A
+        resname: AKG
+        resid: 897
+        icode: null
+        atom_name: O5
+    - ion:
+        chain: A
+        resname: FE2
+        resid: 900
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: A
+        resname: HIS
+        resid: 235
+        icode: null
+        atom_name: NE2
+    - ion:
+        chain: A
+        resname: FE2
+        resid: 900
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: A
+        resname: HOH
+        resid: 1072
+        icode: null
+        atom_name: O
+    - ion:
+        chain: A
+        resname: FE2
+        resid: 900
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: A
+        resname: CL
+        resid: 901
+        icode: null
+        atom_name: CL
+    additional_residues: []
+    force_constant_method: seminario
+    charge_restraint: backbone_heavy
+    software_version: gau
+    small_model_charge: -1
+    small_model_spin: 5
+    large_model_charge: -1
+    large_model_spin: 5
+    pyscf:
+      geometry_source: qmmm_refinement
+      hessian_backend: xtb
+      esp_backend: xtb
+      method: B3LYP
+      basis: 6-31G*
+      xtb:
+        model: gxtb
+        num_threads: 8
+- id: b_fe2_899_site
+  model: bonded_mcpb
+  ions:
+  - selector:
+      chain: B
+      resname: FE2
+      resid: 899
+      icode: null
+      atom_name: FE
+    element: Fe
+    charge: 2
+    multiplicity: 5
+  coordinating_ions:
+  - selector:
+      chain: B
+      resname: CL
+      resid: 902
+      icode: null
+      atom_name: CL
+    element: Cl
+    charge: -1
+  mcpb:
+    workflow: pyscf
+    provisional_nonbonded_parameter_set: '12_6'
+    cutoff_angstrom: 2.6
+    bonds:
+    - ion:
+        chain: B
+        resname: FE2
+        resid: 899
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: B
+        resname: AKG
+        resid: 898
+        icode: null
+        atom_name: O2
+    - ion:
+        chain: B
+        resname: FE2
+        resid: 899
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: B
+        resname: HIS
+        resid: 116
+        icode: null
+        atom_name: NE2
+    - ion:
+        chain: B
+        resname: FE2
+        resid: 899
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: B
+        resname: AKG
+        resid: 898
+        icode: null
+        atom_name: O5
+    - ion:
+        chain: B
+        resname: FE2
+        resid: 899
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: B
+        resname: HIS
+        resid: 235
+        icode: null
+        atom_name: NE2
+    - ion:
+        chain: B
+        resname: FE2
+        resid: 899
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: B
+        resname: HOH
+        resid: 1019
+        icode: null
+        atom_name: O
+    - ion:
+        chain: B
+        resname: FE2
+        resid: 899
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: B
+        resname: CL
+        resid: 902
+        icode: null
+        atom_name: CL
+    additional_residues: []
+    force_constant_method: seminario
+    charge_restraint: backbone_heavy
+    software_version: gau
+    small_model_charge: -1
+    small_model_spin: 5
+    large_model_charge: -1
+    large_model_spin: 5
+    pyscf:
+      geometry_source: qmmm_refinement
+      hessian_backend: xtb
+      esp_backend: xtb
+      method: B3LYP
+      basis: 6-31G*
+      xtb:
+        model: gxtb
+        num_threads: 8
+  parameters_from: a_fe2_900_site
+refinement:
+  enabled: true
+  backend: openmm
+  qm_method: gfn2_xtb
+  qm_components:
+    ligands:
+    - a_akg_897
+    metal_sites:
+    - a_fe2_900_site
+    metal_coordinating_residues: {}
+  active_region_cutoff_angstrom: 4.0
+  active_water_cutoff_angstrom: 8.0
+  include_contact_waters: true
+  movable_atoms: active_region_hydrogens
+  post_refinement_protonation: reuse_initial
+  total_qm_multiplicity: 5
+  ash:
+    python_executable: python
+    xtb_executable: xtb
+    allow_unusual_link_boundaries: true
+    num_cores: 4
+    platform: CPU
+solvation:
+  enabled: true
+  box: truncated_octahedron
+  buffer_angstrom: 10.0
+  neutralize: true
+  salt_concentration_molar: 0.15
+  positive_ion: Na+
+  negative_ion: Cl-
+validation:
+  run_openmm_energy_check: true
+  fail_on_warnings: false
+  fail_on_missing_parameters: true
+  fail_on_noninteger_ligand_charge: true
+molecular_dynamics:
+  enabled: false

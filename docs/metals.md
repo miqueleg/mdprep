@@ -632,10 +632,15 @@ silently choosing one charge model.
 
 ## Current bonded-workflow limits
 
-- One bonded MCPB site per preparation; a single site may contain multiple
-  interacting ions.
-- One protein chain in the MCPB input. MCPB.py discards chain identifiers,
-  making automatic multi-chain peptide reconstruction unsafe.
+- One bonded MCPB fit per preparation; a single site may contain multiple
+  interacting ions. The same site in other copies of the protein -- a dimer,
+  a tetramer -- reuses that fit through `parameters_from` rather than being
+  fitted again; see [oligomers.md](oligomers.md). Two sites that would each
+  need a fit of their own are refused.
+- A bonded site sits within one protein chain. The structure may hold any
+  number of chains, but MCPB.py caps each coordinating residue from its
+  neighbours in one numbering, which is wrong across a chain boundary, so a
+  metal bound between two chains has to be modelled nonbonded.
 - Metal charges are limited to +1 through +4 because the mandatory provisional
   hydrogenation/QMMESP environment uses Amber Li/Merz ion models.
 - No metal-metal bond inference, covalent ligands, noncanonical polymer

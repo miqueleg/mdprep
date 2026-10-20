@@ -30,10 +30,11 @@ relative executable path when needed.
 
 ## structure
 
-- `keep_chains`: chains to build; empty keeps all. Naming one chain is required
-  for a bonded MCPB metal site, whose inputs are single-chain, and is how a
-  crystal structure containing several copies of a complex is reduced to one.
-  Chains holding only heterogens or water are kept regardless.
+- `keep_chains`: chains to build; empty keeps all, which is how a dimer,
+  trimer or tetramer is prepared whole. Naming chains is how a crystal
+  structure holding several copies of a complex is reduced to one. A chain
+  holding only heterogens -- a prediction's ligand, say -- is listed with the
+  protein chain it belongs to; see [oligomers.md](oligomers.md).
 - `keep_crystal_waters`: keep waters in the input PDB. A water bound to a
   metal the build keeps -- bonded or nonbonded, within 2.6 A -- stays with it
   regardless, and a bonded site with QM/MM refinement requires `true`.
@@ -115,6 +116,10 @@ Each ligand has:
 - optional `user_frcmod`
 - preservation controls for names and coordinates
 - optional `qmmesp` block for PySCF charge workflows
+- optional `parameters_from`: the id of a ligand with the same residue name
+  whose parameters this one is built with -- the same cofactor in another copy
+  of the protein, parameterised once. Every other setting must repeat that
+  ligand's. See [oligomers.md](oligomers.md).
 
 ## qmmesp
 
@@ -147,6 +152,15 @@ Each site has:
   - `charge`: explicit +1 through +4 formal ion charge.
   - `multiplicity`: optional for ordinary metal parameterization, but mandatory
     when the ion's site is selected for QM/MM refinement.
+
+- `parameters_from`: optional; the id of the site in another copy of the
+  protein whose parameters this site reuses. A bonded copy is not fitted: it
+  takes the reference's MCPB.py templates and bond parameters residue by
+  residue, so it lists its ions, coordinating ions, bonds and additional
+  residues in the reference's order, each the counterpart of the one in the
+  same place. Every other setting repeats the reference's. Only one bonded site
+  per preparation may be fitted, that is, have no `parameters_from`. See
+  [oligomers.md](oligomers.md).
 
 For `model: nonbonded`, `nonbonded.parameter_set` is mandatory and must be
 `12_6`, `cm`, `hfe`, `iod`, or `12_6_4`. Availability is checked against the

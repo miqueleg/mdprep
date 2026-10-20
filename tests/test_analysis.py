@@ -156,6 +156,48 @@ def test_the_metal_site_is_shown_as_a_whole(tmp_path):
     assert {entry["residue"] for entry in totals["fractional_residues"]} == {"HD1 1", "FE1 2"}
 
 
+def test_each_copy_of_a_metal_site_is_its_own_integer_charge():
+    """A dimer has a site per copy. Summed, two -1 sites read as one of -2."""
+
+    from mdprep.analysis.prmtop import AmberAtom, AmberResidue, AmberTopology
+
+    atoms, residues, bonds = [], [], []
+    for copy in range(2):
+        start = len(atoms)
+        for name, element, charge in (("NE2", 7, -0.4), ("CE1", 6, -0.6)):
+            atoms.append(AmberAtom(len(atoms), name, "Y1", charge, 14.0, element, len(residues)))
+        residues.append(AmberResidue(len(residues), "HD1", start, len(atoms)))
+        atoms.append(AmberAtom(len(atoms), "FE", "M1", 0.0, 55.8, 26, len(residues)))
+        residues.append(AmberResidue(len(residues), "FE1", len(atoms) - 1, len(atoms)))
+        bonds.append((start, len(atoms) - 1))
+    topology = AmberTopology(atoms=atoms, residues=residues, bonds=bonds, periodic=False)
+
+    sites = charges.metal_sites(topology)
+
+    assert [site["metals"] for site in sites] == [["FE1 2:FE"], ["FE1 4:FE"]]
+    assert [site["total"] for site in sites] == [-1.0, -1.0]
+    assert [len(site["bonds"]) for site in sites] == [1, 1]
+    assert charges.metal_site(topology)["total"] == -2.0
+
+
+def test_active_sites_are_grouped_by_where_they_sit():
+    """A metal, its cofactor and the substrate beside it are one view; each
+    copy of a dimer's site is another."""
+
+    from mdprep.analysis.prmtop import AmberAtom, AmberResidue, AmberTopology
+
+    atoms, residues = [], []
+    for name, x in (("FE1", 0.0), ("AG1", 2.0), ("SUB", 9.0), ("FE1", 40.0), ("AG1", 42.0)):
+        atoms.append(AmberAtom(len(atoms), "X", "X", 0.0, 1.0, 6, len(residues)))
+        residues.append(AmberResidue(len(residues), name, len(atoms) - 1, len(atoms)))
+    topology = AmberTopology(atoms=atoms, residues=residues, bonds=[], periodic=False)
+    positions = np.array([[x, 0.0, 0.0] for x in (0.0, 2.0, 9.0, 40.0, 42.0)])
+
+    groups = tr.residue_clusters(topology, positions, [4, 0, 1, 2, 3])
+
+    assert groups == [[0, 1, 2], [4, 3]]
+
+
 # --------------------------------------------------------------------------
 # DCD and the trajectory
 # --------------------------------------------------------------------------

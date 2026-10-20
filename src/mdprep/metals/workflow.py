@@ -88,6 +88,9 @@ def run_metal_stage(
 
     provisional_setup_commands: list[str] = []
     bonded_site: ResolvedMetalSite | None = None
+    # Sites in other copies of the protein that reuse the fitted site's
+    # parameters. They are built like it until the fit, then from it.
+    bonded_copies: list[ResolvedMetalSite] = []
     for site in sites:
         site_dir = output / _safe_dir_name(site.config.id)
         if site.config.model == "nonbonded":
@@ -115,9 +118,12 @@ def run_metal_stage(
             setup_commands.extend(result.leap_commands)
             provisional_setup_commands.extend(result.leap_commands)
         else:
-            if bonded_site is not None:
-                raise MetalWorkflowError("Only one bonded MCPB.py site may be prepared per system.")
-            bonded_site = site
+            if site.config.parameters_from is not None:
+                bonded_copies.append(site)
+            elif bonded_site is not None:
+                raise MetalWorkflowError("Only one bonded MCPB.py site may be fitted per system.")
+            else:
+                bonded_site = site
             assert site.config.mcpb is not None
             family = site.config.mcpb.provisional_nonbonded_parameter_set
             if family is None:
@@ -161,14 +167,26 @@ def run_metal_stage(
             manifest,
             validate_mcpb_cutoff=True,
         )
-        hydrated_bonded = next(
-            (site for site in hydrated_sites if site.config.id == bonded_site.config.id),
-            None,
-        )
+        hydrated_by_id = {site.config.id: site for site in hydrated_sites}
+        hydrated_bonded = hydrated_by_id.get(bonded_site.config.id)
         if hydrated_bonded is None:
             raise MetalWorkflowError(
                 f"Bonded site {bonded_site.config.id!r} could not be resolved after hydrogenation."
             )
+        hydrated_copies = []
+        for copy in bonded_copies:
+            if copy.config.parameters_from != bonded_site.config.id:
+                raise MetalWorkflowError(
+                    f"Bonded site {copy.config.id!r} takes its parameters from "
+                    f"{copy.config.parameters_from!r}, which is not the fitted site "
+                    f"{bonded_site.config.id!r}."
+                )
+            hydrated_copy = hydrated_by_id.get(copy.config.id)
+            if hydrated_copy is None:
+                raise MetalWorkflowError(
+                    f"Bonded site {copy.config.id!r} could not be resolved after hydrogenation."
+                )
+            hydrated_copies.append(hydrated_copy)
         mcpb_result = run_mcpb_site(
             hydrated_bonded,
             structure=hydrogenation_result.structure,
@@ -178,12 +196,14 @@ def run_metal_stage(
             provisional_prmtop=hydrogenation_result.prmtop_path,
             provisional_inpcrd=hydrogenation_result.inpcrd_path,
             refinement_result=refinement_result,
+            copies=hydrated_copies,
         )
         if mcpb_result.complete:
-            assert mcpb_result.restored_final_pdb_path is not None
-            final_structure = read_pdb(mcpb_result.restored_final_pdb_path)
+            final_pdb = mcpb_result.final_pdb_path or mcpb_result.restored_final_pdb_path
+            assert final_pdb is not None
+            final_structure = read_pdb(final_pdb)
             setup_commands.extend(mcpb_result.leap_setup_commands)
-            bond_commands.extend(mcpb_result.leap_bond_commands)
+            bond_commands.extend(mcpb_result.all_leap_bond_commands)
         if (
             mcpb_result.pyscf_result is not None
             and mcpb_result.pyscf_result.small.scientific_warning is not None
@@ -214,7 +234,7 @@ def promote_mcpb_resp_ligands(
     site = metal_result.mcpb_site
     if site is None or not site.complete:
         return ligand_result
-    artifacts = {item.ligand_id: item for item in site.refitted_ligands}
+    artifacts = {item.ligand_id: item for item in site.all_refitted_ligands}
     promoted = []
     for item in ligand_result.ligands:
         artifact = artifacts.get(item.ligand_id)

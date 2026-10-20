@@ -444,12 +444,26 @@ def test_sections_are_reported_in_presentation_order():
 
 
 def test_every_decision_declares_a_focus_mode():
-    plan = plan_decisions(DATA / "protein_histidine_zinc.pdb")
+    for structure in (DATA / "protein_histidine_zinc.pdb", Path("examples/tutorials/syrb2_2fct/2FCT.pdb")):
+        plan = plan_decisions(structure)
 
-    assert all(
-        decision.focus in {"none", "targets", "structure"}
-        for decision in plan.decisions
-    )
+        assert all(
+            decision.focus in {"none", "targets", "structure", "chains"}
+            for decision in plan.decisions
+        )
+
+
+def test_the_chain_questions_show_each_chain_in_its_own_colour():
+    """Which chains to keep, and whether the copies match, are questions
+    about the whole assembly: a rainbow per chain makes two copies look
+    like one, and a close-up of one cofactor shows neither."""
+
+    plan = plan_decisions("examples/tutorials/syrb2_2fct/2FCT.pdb")
+
+    assert plan.by_id("structure.chains").focus == "chains"
+    sharing = plan.by_id("structure.same_parametrization")
+    assert sharing.focus == "chains"
+    assert {target.chain for target in sharing.targets} == {"A", "B"}
 
 
 def test_targeted_decisions_actually_carry_something_to_show():
@@ -646,10 +660,11 @@ def test_hetero_only_chains_are_kept_whichever_protein_chain_is_chosen():
     assert manifest["structure"]["keep_chains"] == []
 
 
-def test_a_ligand_without_hydrogens_is_asked_for_a_smiles_and_reported():
+def test_a_ligand_without_hydrogens_is_asked_for_a_smiles_and_not_nagged_after():
     """A net charge does not determine a molecule, so the protonation has to
-    be stated. It is both asked for and reported, so a manifest written by
-    hand from the plan still shows the gap."""
+    be stated, and it is asked for. Once it has been given, the builder must
+    not then tell the student to go and add a SMILES -- which it did, to
+    every student whose ligand came without hydrogens."""
 
     from mdprep.config.decisions import ligands_needing_hydrogens
 
@@ -664,10 +679,8 @@ def test_a_ligand_without_hydrogens_is_asked_for_a_smiles_and_reported():
         "c_cof_601",
     }
     answers = answer_blocking(plan)
-    assert set(ligands_needing_hydrogens(plan, answers)) == {
-        "b_sub_501",
-        "c_cof_601",
-    }
+    assert answers["ligand.b_sub_501.smiles"]
+    assert ligands_needing_hydrogens(plan, answers) == []
 
 
 def test_a_ligand_that_already_has_hydrogens_is_neither_asked_nor_reported():

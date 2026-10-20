@@ -9,7 +9,7 @@ import os
 import re
 import shutil
 import sys
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Sequence
 
 from mdprep.ambertools.mol2 import Mol2Error, read_mol2
 from mdprep.config.models import ManifestConfig
@@ -114,6 +114,31 @@ class McpbRefittedLigand:
 
 
 @dataclass(frozen=True)
+class McpbSiteCopy:
+    """A copy of the fitted site, built from the fit's templates.
+
+    Not fitted: the copy's residues take the names -- and with them the
+    atom types and charges -- of the reference residues they correspond to,
+    and its metal is bonded to its own donors with the same terms.
+    """
+
+    site_id: str
+    parameters_from: str
+    residue_renames: tuple[dict[str, object], ...]
+    leap_bond_commands: tuple[str, ...]
+    refitted_ligands: tuple[McpbRefittedLigand, ...] = ()
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "site_id": self.site_id,
+            "parameters_from": self.parameters_from,
+            "residue_renames": list(self.residue_renames),
+            "leap_bond_commands": list(self.leap_bond_commands),
+            "refitted_ligands": [item.to_dict() for item in self.refitted_ligands],
+        }
+
+
+@dataclass(frozen=True)
 class McpbSiteResult:
     site_id: str
     workflow: str
@@ -134,6 +159,35 @@ class McpbSiteResult:
     refitted_ligands: tuple[McpbRefittedLigand, ...] = ()
     pyscf_result: "McpbPySCFResult | None" = None
     parameter_comparison: "McpbParameterComparisonResult | None" = None
+    # Copies of this site in other copies of the protein, and the structure
+    # with their residues renamed as well; the fit's own is above.
+    copies: tuple[McpbSiteCopy, ...] = ()
+    final_pdb_path: Path | None = None
+
+    @property
+    def all_refitted_ligands(self) -> tuple[McpbRefittedLigand, ...]:
+        return self.refitted_ligands + tuple(
+            item for copy in self.copies for item in copy.refitted_ligands
+        )
+
+    @property
+    def all_residue_renames(self) -> tuple[dict[str, object], ...]:
+        copied = {
+            (rename["chain"], rename["resid"], rename["icode"])
+            for copy in self.copies
+            for rename in copy.residue_renames
+        }
+        return tuple(
+            rename
+            for rename in self.residue_renames
+            if (rename["chain"], rename["resid"], rename["icode"]) not in copied
+        ) + tuple(rename for copy in self.copies for rename in copy.residue_renames)
+
+    @property
+    def all_leap_bond_commands(self) -> tuple[str, ...]:
+        return self.leap_bond_commands + tuple(
+            command for copy in self.copies for command in copy.leap_bond_commands
+        )
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -165,6 +219,8 @@ class McpbSiteResult:
                 if self.parameter_comparison is not None
                 else None
             ),
+            "copies": [copy.to_dict() for copy in self.copies],
+            "final_pdb_path": str(self.final_pdb_path) if self.final_pdb_path else None,
         }
 
 
@@ -178,7 +234,15 @@ def run_mcpb_site(
     provisional_prmtop: str | Path | None = None,
     provisional_inpcrd: str | Path | None = None,
     refinement_result: "RefinementResult | None" = None,
+    copies: Sequence[ResolvedMetalSite] = (),
 ) -> McpbSiteResult:
+    """Fit one bonded site with MCPB.py, and build its copies from the fit.
+
+    ``copies`` are the sites of other copies of the protein that reuse this
+    site's parameters (``parameters_from``). They are not fitted; after the
+    fit their residues are given its templates and their metals its bonds.
+    """
+
     if site.config.model != "bonded_mcpb" or site.config.mcpb is None:
         raise McpbWorkflowError(f"Metal site {site.config.id!r} is not configured for MCPB.py.")
     mcpb = site.config.mcpb
@@ -191,7 +255,8 @@ def run_mcpb_site(
         raise McpbWorkflowError(str(exc)) from exc
     mcpb_environment = dict(os.environ)
     mcpb_environment["AMBERHOME"] = str(amberhome)
-    _validate_mcpb_structure_scope(structure)
+    for item in (site, *copies):
+        _validate_site_in_one_chain(item)
     _validate_nonstandard_site_residues(site, manifest)
 
     work = Path(output_dir)
@@ -375,7 +440,7 @@ def run_mcpb_site(
             )
         except McpbParameterComparisonError as exc:
             raise McpbWorkflowError(str(exc)) from exc
-    return McpbSiteResult(
+    result = McpbSiteResult(
         site_id=site.config.id,
         workflow=mcpb.workflow,
         complete=True,
@@ -395,7 +460,303 @@ def run_mcpb_site(
         refitted_ligands=tuple(refitted_ligands),
         pyscf_result=pyscf_result,
         parameter_comparison=parameter_comparison,
+        final_pdb_path=restored_pdb,
     )
+    if not copies:
+        return result
+    return apply_mcpb_site_copies(
+        result,
+        site=site,
+        copies=copies,
+        structure=structure,
+        manifest=manifest,
+        numbering=numbering,
+        output_path=work / f"{group_name}_mcpbpy.with_copies.pdb",
+    )
+
+
+def apply_mcpb_site_copies(
+    result: McpbSiteResult,
+    *,
+    site: ResolvedMetalSite,
+    copies: Sequence[ResolvedMetalSite],
+    structure: PdbStructure,
+    manifest: ManifestConfig,
+    numbering: McpbNumberingMap,
+    output_path: str | Path,
+) -> McpbSiteResult:
+    """Give each copy of a fitted site the fit's templates and bonds.
+
+    The fit renamed the reference site's residues -- each histidine, the
+    cofactor, the bound water and halide, the metal -- to templates carrying
+    its atom types and charges, and bonded the metal to its donors. A copy
+    reuses all of it: each of its residues takes the name of the reference
+    residue it corresponds to, and its metal is bonded to its own donors
+    with the same atom names. Correspondence is by position in the site's
+    lists, which a copy states in the reference's order, never by residue
+    number, because copies are often numbered differently.
+
+    Anything that would make the copy something other than the reference --
+    a residue whose atoms are not the template's, a template bond to a
+    residue the copy does not list -- is refused rather than adapted.
+    """
+
+    templates = {
+        command.split(" = loadmol2 ", 1)[0].strip()
+        for command in result.leap_setup_commands
+        if " = loadmol2 " in command
+    }
+    reference_residues = _site_residues(site)
+    reference_keys = {id(residue) for residue in reference_residues}
+    renames_by_key = {
+        (rename["chain"], rename["resid"], rename["icode"]): rename
+        for rename in result.residue_renames
+    }
+    if result.restored_final_pdb_path is None:
+        raise McpbWorkflowError("The MCPB.py fit has no restored structure to copy from.")
+    restored = read_pdb(result.restored_final_pdb_path)
+    restored_by_serial = {atom.serial: atom for atom in restored.atoms}
+    index_of = {id(residue): index for index, residue in enumerate(structure.residues, start=1)}
+
+    # What the fit made of each reference residue: its new name, if a
+    # template, and the name of each of its atoms afterwards.
+    template_of: dict[int, str] = {}
+    atom_names_of: dict[int, dict[str, str]] = {}
+    for residue in reference_residues:
+        rename = renames_by_key.get((residue.id.chain_id, residue.id.resid, residue.id.icode))
+        if rename is not None and rename["final_resname"] in templates:
+            template_of[id(residue)] = str(rename["final_resname"])
+        atom_names_of[id(residue)] = {
+            atom.name: restored_by_serial[atom.serial].name
+            for atom in residue.atoms
+            if atom.serial in restored_by_serial
+        }
+
+    # The fit's bonds that belong to the site: the metal's to its donors, and
+    # the peptide links MCPB.py writes between a renamed amino acid and the
+    # residues either side of it, since a template loaded from mol2 knows
+    # nothing of the chain it sits in. A link is carried to a copy as a step
+    # along its chain, and the residue it lands on has to be the
+    # counterpart of the one the fit linked to. Bonds between two residues
+    # outside the site -- disulfides -- are the whole system's already.
+    site_bonds: list[tuple[ResidueRecord, str, ResidueRecord, str]] = []
+    links: list[tuple[ResidueRecord, str, int, str, ResidueRecord, bool]] = []
+    for command in result.leap_bond_commands:
+        ends = _bond_command_ends(command)
+        if ends is None:
+            continue
+        (first_index, first_atom), (second_index, second_atom) = ends
+        first = numbering.original_by_mcpb_resid.get(first_index)
+        second = numbering.original_by_mcpb_resid.get(second_index)
+        if first is None or second is None:
+            raise McpbWorkflowError(f"MCPB.py bond command names an unknown residue: {command}")
+        first_in = id(first) in reference_keys
+        second_in = id(second) in reference_keys
+        if first_in and second_in:
+            site_bonds.append((first, first_atom, second, second_atom))
+        elif first_in or second_in:
+            linked, linked_atom, other, other_atom = (
+                (first, first_atom, second, second_atom)
+                if first_in
+                else (second, second_atom, first, first_atom)
+            )
+            step = index_of[id(other)] - index_of[id(linked)]
+            if (
+                abs(step) != 1
+                or other.id.chain_id != linked.id.chain_id
+                or not is_standard_protein_residue(other)
+            ):
+                raise McpbWorkflowError(
+                    f"MCPB.py bonded the site to a residue it does not list: {command}"
+                )
+            links.append((linked, linked_atom, step, other_atom, other, first_in))
+
+    atoms = list(restored.atoms)
+    position = {atom.serial: index for index, atom in enumerate(atoms)}
+    built: list[McpbSiteCopy] = []
+    for copy in copies:
+        copy_residues = _site_residues(copy)
+        if len(copy_residues) != len(reference_residues):
+            raise McpbWorkflowError(
+                f"Metal site {copy.config.id!r} lists {len(copy_residues)} residues where "
+                f"{site.config.id!r} lists {len(reference_residues)}; a copy names the "
+                "counterpart of every residue of the site it copies."
+            )
+        counterpart: dict[int, ResidueRecord] = {}
+        for reference, own in zip(reference_residues, copy_residues):
+            previous = counterpart.setdefault(id(reference), own)
+            if previous is not own:
+                raise McpbWorkflowError(
+                    f"Metal site {copy.config.id!r} pairs {reference.id.display()} with "
+                    f"both {previous.id.display()} and {own.id.display()}."
+                )
+        renames: list[dict[str, object]] = []
+        for reference in reference_residues:
+            own = counterpart[id(reference)]
+            names = atom_names_of[id(reference)]
+            expected = set(names.values())
+            observed = {names.get(atom.name, atom.name) for atom in own.atoms}
+            if observed != expected:
+                raise McpbWorkflowError(
+                    f"{own.id.display()} cannot take the template fitted for "
+                    f"{reference.id.display()}: it has atoms {sorted(observed - expected)} "
+                    f"that the template lacks and lacks {sorted(expected - observed)}. A "
+                    "copy has to be the same residue, protonated the same way."
+                )
+            final_name = template_of.get(id(reference))
+            for atom in own.atoms:
+                index = position.get(atom.serial)
+                if index is None:
+                    raise McpbWorkflowError(
+                        f"{own.id.display()} is missing from the MCPB.py output structure."
+                    )
+                atoms[index] = replace(
+                    atoms[index],
+                    resname=final_name or atoms[index].resname,
+                    name=names.get(atom.name, atom.name),
+                )
+            if final_name is not None:
+                renames.append(
+                    {
+                        "chain": own.id.chain_id,
+                        "resid": own.id.resid,
+                        "icode": own.id.icode,
+                        "original_resname": own.id.resname,
+                        "final_resname": final_name,
+                        "source": (
+                            f"mdprep: the MCPB.py template fitted for "
+                            f"{reference.id.display()} in site {site.config.id}"
+                        ),
+                    }
+                )
+        bonds = [
+            f"bond system.{index_of[id(counterpart[id(first)])]}.{first_atom} "
+            f"system.{index_of[id(counterpart[id(second)])]}.{second_atom}"
+            for first, first_atom, second, second_atom in site_bonds
+        ]
+        for site_residue, site_atom, step, other_atom, other, site_first in links:
+            own = counterpart[id(site_residue)]
+            own_index = index_of[id(own)]
+            neighbour_index = own_index + step
+            neighbour = (
+                structure.residues[neighbour_index - 1]
+                if 1 <= neighbour_index <= len(structure.residues)
+                else None
+            )
+            if (
+                neighbour is None
+                or neighbour.id.chain_id != own.id.chain_id
+                or not is_standard_protein_residue(neighbour)
+                or _one_letter(neighbour.id.resname) != _one_letter(other.id.resname)
+            ):
+                raise McpbWorkflowError(
+                    f"The fit links {site_residue.id.display()} to its neighbour "
+                    f"{other.id.display()}, and the residue in that place next to "
+                    f"{own.id.display()} is "
+                    f"{neighbour.id.display() if neighbour is not None else 'missing'}; "
+                    "a copy of the site needs the same chain around it."
+                )
+            ends_in_order = (
+                (f"system.{own_index}.{site_atom}", f"system.{neighbour_index}.{other_atom}")
+                if site_first
+                else (f"system.{neighbour_index}.{other_atom}", f"system.{own_index}.{site_atom}")
+            )
+            bonds.append(f"bond {ends_in_order[0]} {ends_in_order[1]}")
+        bonds = tuple(bonds)
+        built.append(
+            McpbSiteCopy(
+                site_id=copy.config.id,
+                parameters_from=site.config.id,
+                residue_renames=tuple(renames),
+                leap_bond_commands=bonds,
+                refitted_ligands=tuple(
+                    _copied_refits(result, manifest, counterpart, reference_residues, structure)
+                ),
+            )
+        )
+
+    copied = PdbStructure(
+        path=Path(output_path),
+        atoms=atoms,
+        residues=build_residues(atoms),
+        model_count=1,
+        used_model=1,
+    )
+    write_pdb(copied, output_path)
+    return replace(result, copies=tuple(built), final_pdb_path=Path(output_path))
+
+
+def _one_letter(resname: str) -> str:
+    from mdprep.structure.oligomer import ONE_LETTER
+
+    return ONE_LETTER.get(resname, resname)
+
+
+def _site_residues(site: ResolvedMetalSite) -> list[ResidueRecord]:
+    """The site's residues in a fixed order: ions, coordinators, additional."""
+
+    found: list[ResidueRecord] = []
+    for residue in (
+        *(ion.residue for ion in site.ions),
+        *(bond.coordinator_residue for bond in site.bonds),
+        *site.additional_residues,
+    ):
+        if all(residue is not seen for seen in found):
+            found.append(residue)
+    return found
+
+
+_BOND_COMMAND = re.compile(r"^bond system\.(\d+)\.(\S+) system\.(\d+)\.(\S+)$")
+
+
+def _bond_command_ends(command: str) -> tuple[tuple[int, str], tuple[int, str]] | None:
+    match = _BOND_COMMAND.match(command.strip())
+    if match is None:
+        return None
+    return (int(match[1]), match[2]), (int(match[3]), match[4])
+
+
+def _copied_refits(
+    result: McpbSiteResult,
+    manifest: ManifestConfig,
+    counterpart: dict[int, ResidueRecord],
+    reference_residues: list[ResidueRecord],
+    structure: PdbStructure,
+) -> list[McpbRefittedLigand]:
+    """The fitted cofactor template, for each copy of the cofactor."""
+
+    refits = {item.ligand_id: item for item in result.refitted_ligands}
+    copied: list[McpbRefittedLigand] = []
+    for ligand in manifest.ligands:
+        source = refits.get(ligand.parameters_from or "")
+        if source is None:
+            continue
+        own = None
+        for reference in reference_residues:
+            candidate = counterpart[id(reference)]
+            if (
+                candidate.id.chain_id == ligand.selector.chain
+                and candidate.id.resid == ligand.selector.resid
+                and candidate.id.icode == ligand.selector.icode
+                and candidate.id.resname == ligand.selector.resname
+            ):
+                own = candidate
+        if own is None:
+            continue
+        if own.atom_names() != list(source.atom_names):
+            raise McpbWorkflowError(
+                f"Ligand {ligand.id!r} cannot take {source.ligand_id!r}'s fitted charges: "
+                f"its atoms are {own.atom_names()}, the template's {list(source.atom_names)}."
+            )
+        copied.append(
+            replace(
+                source,
+                ligand_id=ligand.id,
+                original_resname=ligand.selector.resname,
+                maximum_coordinate_deviation_angstrom=0.0,
+            )
+        )
+    return copied
 
 
 def collect_mcpb_refitted_ligands(
@@ -409,10 +770,12 @@ def collect_mcpb_refitted_ligands(
 ) -> list[McpbRefittedLigand]:
     """Validate and expose MCPB's RESP-fitted mol2 for configured cofactors."""
 
+    # A copy takes its reference's fitted template after the fit, and MCPB.py
+    # renamed nothing of it.
     configured = [
         ligand
         for ligand in manifest.ligands
-        if ligand.charge_method == "mcpb_resp_pyscf"
+        if ligand.charge_method == "mcpb_resp_pyscf" and ligand.parameters_from is None
     ]
     if not configured:
         return []
@@ -866,6 +1229,9 @@ def _stage_ligand_parameters(
     frcmod_paths: list[Path] = []
     seen_resnames: set[str] = set()
     for ligand in manifest.ligands:
+        # A copy's template is its reference's, staged once under the name.
+        if ligand.parameters_from is not None:
+            continue
         item = by_id.get(ligand.id)
         if item is None or item.final_mol2_path is None or item.final_frcmod_path is None:
             raise McpbWorkflowError(f"Ligand {ligand.id!r} has no final parameters for MCPB.py.")
@@ -1368,17 +1734,31 @@ def _validate_nonstandard_site_residues(
         )
 
 
-def _validate_mcpb_structure_scope(structure: PdbStructure) -> None:
-    protein_chains = {
+def _validate_site_in_one_chain(site: ResolvedMetalSite) -> None:
+    """Refuse a site whose protein donors come from more than one chain.
+
+    MCPB.py reads one long chain: mdprep renumbers the structure for it, and
+    MCPB.py caps each coordinating residue with the residues numbered either
+    side of it, treating two donors a few numbers apart as one stretch of
+    backbone. Inside one chain those are real neighbours; across a chain
+    boundary they are not, so a site at an interface between two copies is
+    not something MCPB.py can model correctly here.
+    """
+
+    chains = {
         residue.id.chain_id
-        for residue in structure.residues
+        for residue in (
+            *(bond.coordinator_residue for bond in site.bonds),
+            *site.additional_residues,
+        )
         if is_standard_protein_residue(residue)
     }
-    if len(protein_chains) > 1:
+    if len(chains) > 1:
         raise McpbWorkflowError(
-            "Bonded MCPB.py preparation currently supports one protein chain because MCPB.py "
-            "discards PDB chain IDs while constructing capped QM models. Use the nonbonded model "
-            "or prepare a reviewed one-chain MCPB input."
+            f"Metal site {site.config.id!r} is bound by residues of chains "
+            f"{', '.join(sorted(chains))}. A bonded MCPB site has to sit within one "
+            "protein chain, because MCPB.py caps its residues from their neighbours in "
+            "one numbering; model this interface site nonbonded."
         )
 
 

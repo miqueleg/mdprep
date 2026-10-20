@@ -135,7 +135,9 @@ def test_the_cutoff_excludes_the_carbons_behind_the_carboxylate():
 def test_choosing_one_chain_prunes_the_other_copies(besd_structure):
     plan = plan_decisions(besd_structure)
 
-    everything = plan.applicable({"structure.chains": "all"})
+    everything = plan.applicable(
+        {"structure.chains": "all", "structure.same_parametrization": False}
+    )
     chain_a = plan.applicable({"structure.chains": "A"})
 
     ligands_all = [d for d in everything if d.id.endswith(".include")]
@@ -143,6 +145,45 @@ def test_choosing_one_chain_prunes_the_other_copies(besd_structure):
     assert len(ligands_all) == 8  # four chains x two parameterised heterogens
     assert len(ligands_a) == 2  # the chloride belongs to the metal site
     assert all(".a_" in d.id for d in ligands_a)
+
+
+@needs_structure
+def test_sharing_parameters_asks_only_what_differs_between_the_copies(besd_structure):
+    """Four copies, asked about once -- except where a copy really differs.
+
+    Chains B and C hold alpha-ketoglutarate on the iron through O2 where A
+    and D use O1: the two oxygens of one carboxylate, named the other way
+    round. A template is by atom name, so those two are not copies of A's
+    site and are asked about on their own. B's second, surface iron has no
+    counterpart at all."""
+
+    plan = plan_decisions(besd_structure)
+    asked = plan.applicable(
+        {"structure.chains": "all", "structure.same_parametrization": True}
+    )
+
+    ligands = sorted(d.id for d in asked if d.id.endswith(".include"))
+    sites = sorted(d.id for d in asked if d.id.endswith(".model"))
+    assert ligands == [
+        "ligand.a_akg_304.include",
+        "ligand.a_lig_301.include",
+        "ligand.b_akg_304.include",
+        "ligand.c_akg_304.include",
+    ]
+    assert sites == [
+        "metal.a_fe2_302_site.model",
+        "metal.b_fe2_302_site.model",
+        "metal.b_fe_305_site.model",
+        "metal.c_fe2_302_site.model",
+    ]
+    shared = plan.by_id("structure.same_parametrization")
+    assert "D:FE2302 would share A:FE2302's parameters" in shared.evidence
+    assert any(
+        line.startswith("Asked about on its own either way: B:FE2302")
+        and "A:AKG304 O1" in line
+        and "B:AKG304 O2" in line
+        for line in shared.evidence
+    )
 
 
 @needs_structure

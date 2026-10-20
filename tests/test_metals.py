@@ -600,6 +600,7 @@ def test_mcpb_joint_resp_mol2_is_validated_and_promoted(tmp_path):
             mcpb_site=SimpleNamespace(
                 complete=True,
                 refitted_ligands=tuple(artifacts),
+                all_refitted_ligands=tuple(artifacts),
                 final_frcmod_path=final_frcmod,
             )
         ),
