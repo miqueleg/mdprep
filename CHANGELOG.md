@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 - 2026-10-20
 
 ### Added
 
@@ -66,6 +66,18 @@
 - `structure.keep_crystal_ions` and its question: free monatomic ions resolved
   in the crystal (Cl-, Na+, Br-, ...) are kept or removed as a group, and
   listed in the structure report either way.
+
+### Changed
+
+- **Free crystal ions are kept by default.** A free monatomic ion in the input
+  used to count as an unknown heterogen, so a manifest with
+  `structure.remove_unknown_heterogens: true` dropped it. It is now governed by
+  `structure.keep_crystal_ions`, which defaults to `true`, so the same manifest
+  builds with the ion in place: 2FCT's free chloride, for one. Add
+  `keep_crystal_ions: false` to keep the old result. Every ion kept or removed
+  is listed in `reports/structure_report.md`.
+- Two bonded metal sites are refused by `mdprep config-check`, where 0.3.0
+  refused them only once a run had started.
 
 ### Fixed
 
