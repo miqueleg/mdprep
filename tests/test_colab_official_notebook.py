@@ -126,3 +126,39 @@ def test_the_web_builder_links_to_this_notebook():
 
     assert url.endswith("/examples/mdprep_colab.ipynb")
     assert app.count("COLAB_NOTEBOOK_URL") >= 2, "declared but never used"
+
+
+def _cell(title: str) -> str:
+    return next(source for source in code_cells() if source.startswith(title))
+
+
+def test_the_final_structure_is_drawn_from_the_topology():
+    """tleap's PDB has no element column, and a viewer then guesses elements
+    from atom names -- HG21, a hydrogen, as mercury -- and draws bonds from
+    them to everything near. The topology has every element exactly."""
+
+    e3 = _cell("#@title E3.")
+
+    final = e3[e3.index('if STAGE == "final":'):e3.index("else:")]
+    assert "tr.load_structure(" in final and "tr.pdb_models(" in final
+    assert 'system.pdb' not in final
+
+
+def test_a_lone_ion_is_drawn_and_the_added_salt_is_not():
+    """A chloride on a halogenase's iron is one atom with no bond to draw as a
+    stick, so it needs a sphere; the hundreds of counterions tleap adds do not."""
+
+    helpers = _cell("#@title Helper functions")
+
+    assert 'view.addStyle({"elem": IONS, "hetflag": True, "not": {"resn": ADDED_IONS}}' in helpers
+    assert '"Cl-"' in helpers and '"Na+"' in helpers
+
+
+def test_reinstalling_caps_the_cuda_runtime_at_the_driver():
+    """Rerunning section C is what repairs a session whose CUDA platform would
+    not start, so the existing-environment path has to apply the cap too."""
+
+    c = _cell("#@title C.")
+
+    assert "micromamba_install_commands(manifest_data" in c
+    assert "micromamba_setup_commands(manifest_data" in c

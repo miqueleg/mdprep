@@ -24,7 +24,7 @@ from mdprep.structure.classify import COORDINATING_METAL_ELEMENTS
 from mdprep.structure.inspect import InspectionSummary
 from mdprep.structure.normalize import StructureNormalizationError
 from mdprep.structure.pdb import PdbParseError, VALID_ALTLOC_POLICIES
-from mdprep.workflows.doctor import ash_note, gxtb_note, run_doctor
+from mdprep.workflows.doctor import ash_note, cuda_note, gxtb_note, run_doctor
 from mdprep.workflows.init import generate_starter_manifest
 from mdprep.workflows.wizard import format_question, run_wizard
 from mdprep.workflows.inspect import inspect_structure
@@ -477,6 +477,13 @@ def run_md_command(
     except (FileNotFoundError, RoeBrooksError, ValueError) as exc:
         console.print(f"[red]Error:[/red] {escape(str(exc))}")
         raise typer.Exit(1) from exc
+    # Say when an accelerator was passed over, and why: OpenCL instead of
+    # CUDA on a GPU is several times slower and otherwise silent.
+    for name, reason in result.platform_failures.items():
+        console.print(
+            f"[yellow]{escape(name)} could not start, so it was not used:[/yellow] "
+            f"{escape(reason)}"
+        )
     console.print(
         f"MD completed on {result.platform}; final coordinates: {result.final_pdb}"
     )
@@ -582,7 +589,9 @@ def doctor_command(
         scope = str(manifest)
 
     report = run_doctor(data, scope=scope)
-    notes = [note for note in (gxtb_note(data), ash_note(data)) if note is not None]
+    notes = [
+        note for note in (gxtb_note(data), ash_note(data), cuda_note(data)) if note is not None
+    ]
 
     if json_output:
         payload = report.to_dict()

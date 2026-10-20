@@ -240,3 +240,24 @@ def test_the_hydrogenated_environment_brings_pdbfixer_whichever_embedding():
         )
     )
     assert "pdbfixer" not in off
+
+
+def test_no_cuda_check_without_an_nvidia_driver(monkeypatch):
+    from mdprep.workflows import doctor, runtime
+
+    monkeypatch.setattr(runtime, "driver_cuda_version", lambda: None)
+
+    assert doctor.cuda_note(None) is None
+
+
+def test_no_cuda_check_for_a_job_that_never_runs_openmm(monkeypatch):
+    from mdprep.workflows import doctor, runtime
+
+    monkeypatch.setattr(runtime, "driver_cuda_version", lambda: "12.4")
+    manifest = {
+        "protonation": {"method": "manual_only"},
+        "validation": {"run_openmm_energy_check": False},
+        "molecular_dynamics": {"enabled": False},
+    }
+
+    assert doctor.cuda_note(manifest) is None

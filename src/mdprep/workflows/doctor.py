@@ -247,3 +247,58 @@ def ash_note(manifest: Mapping[str, Any] | None) -> str | None:
         "on PYTHONPATH. Do not `pip install ash`, which is unrelated software. "
         "refinement.backend: openmm is the default and needs none of this."
     )
+
+
+def cuda_note(manifest: Mapping[str, Any] | None) -> str | None:
+    """Whether OpenMM's CUDA platform actually starts on this machine's GPU.
+
+    Finding OpenMM says nothing about it: the CUDA platform loads, and only
+    fails on its first kernel when the CUDA runtime installed with it is newer
+    than the GPU driver -- which is what a Colab T4 got from conda-forge, while
+    OpenCL worked. A two-atom context answers the question in a second.
+    """
+
+    if manifest is not None and "openmm" not in conda_packages_for(manifest):
+        return None
+    from mdprep.workflows.runtime import driver_cuda_version, explain_cuda_failure
+
+    if driver_cuda_version() is None:
+        return None
+    if importlib.util.find_spec("openmm") is None:
+        return None
+    try:
+        import openmm
+
+        names = [
+            openmm.Platform.getPlatform(index).getName()
+            for index in range(openmm.Platform.getNumPlatforms())
+        ]
+        if "CUDA" not in names:
+            return (
+                "This machine has an NVIDIA GPU but this OpenMM has no CUDA platform, "
+                "so the MD will use OpenCL or the CPU. Install OpenMM from conda-forge "
+                "to get its CUDA build."
+            )
+        # Nonbonded and bonded forces, as an MD system has: the kernels that
+        # fail to load are the nonbonded ones, and a system without them
+        # starts without ever reaching that step.
+        system = openmm.System()
+        nonbonded = openmm.NonbondedForce()
+        for charge in (0.5, -0.5):
+            system.addParticle(12.0)
+            nonbonded.addParticle(charge, 0.3, 0.5)
+        system.addForce(nonbonded)
+        bond = openmm.HarmonicBondForce()
+        bond.addBond(0, 1, 0.1, 1000.0)
+        system.addForce(bond)
+        context = openmm.Context(
+            system,
+            openmm.VerletIntegrator(0.001),
+            openmm.Platform.getPlatformByName("CUDA"),
+        )
+        context.setPositions([openmm.Vec3(0, 0, 0), openmm.Vec3(0.12, 0, 0)])
+        context.getState(getEnergy=True, getForces=True)
+    except Exception as exc:  # OpenMM raises several exception types
+        return f"OpenMM's CUDA platform does not start: {exc}. {explain_cuda_failure(str(exc))}"
+    return None
+

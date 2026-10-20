@@ -62,6 +62,30 @@ properties are recorded in `md_report.json`. An explicit platform does not
 fall back silently. `device_index` selects an accelerator device;
 `cpu_threads` controls the OpenMM CPU platform.
 
+### CUDA and the GPU driver
+
+OpenMM's CUDA platform compiles its kernels when the MD starts, with the NVRTC
+compiler that comes with the conda CUDA runtime, and the GPU driver then loads
+them. A driver older than that runtime refuses them:
+`CUDA_ERROR_UNSUPPORTED_PTX_VERSION`. The CUDA platform loads but cannot start,
+while OpenCL, compiled by the driver itself, works. conda-forge installs the
+newest runtime the driver's major version allows, which can be newer than
+the driver itself: on Colab's T4 runtime, CUDA never started.
+
+The environments mdprep sets up cap the runtime at what the driver supports:
+the official notebook's section C, and the setup cell the web builder writes.
+They read the driver's CUDA version from `nvidia-smi` and install with
+`cuda-version<=X.Y`. To repair an environment by hand:
+
+```bash
+micromamba install -n mdprep-runtime -c conda-forge "cuda-version<=12.4"
+```
+
+using the CUDA version `nvidia-smi` prints. `mdprep doctor` starts a small
+CUDA system to check, and both `doctor` and the MD say what to do when it
+fails. With `platform: auto`, the MD says which platform it passed over, and why.
+
+
 Step 10 stops only after its final density window passes both the configured
 slope and half-window mean-difference tests. `maximum_duration_ns` prevents an
 unbounded calculation: failure to converge by that limit is an explicit error,

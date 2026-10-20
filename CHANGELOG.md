@@ -69,6 +69,22 @@
 
 ### Fixed
 
+- CUDA did not start on Colab's T4 GPUs (OpenCL did):
+  - conda-forge installed a CUDA runtime newer than the GPU driver, whose
+    kernels the driver refused (`CUDA_ERROR_UNSUPPORTED_PTX_VERSION`);
+  - the setup the notebook and the web builder run now caps `cuda-version`
+    at the driver's version, and rerunning section C repairs an existing
+    environment;
+  - `mdprep doctor` starts a CUDA system to check;
+  - a CUDA failure in the MD says what to do, and `auto` says which
+    platform it passed over.
+- The official notebook drew the final structure (E3) from tleap's PDB, which
+  has no elements, so the viewer read hydrogens such as HG21 as mercury and
+  bonded them to everything near. It is now drawn from the topology, as E8
+  and H are. Each protein molecule is now its own chain in every view, so no
+  cartoon runs from one copy of a dimer into the next or across a missing
+  loop. A chloride on the iron, one atom with no bond to draw, now shows as a
+  sphere.
 - Keeping one chain of a predicted oligomer kept every ligand chain too, so the
   other copy's iron and cofactor floated in the box. A chain holding only
   heterogens now goes with the protein chain it sits against.

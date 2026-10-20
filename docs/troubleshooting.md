@@ -122,6 +122,14 @@ hard error; do not loosen the tolerance until atom order, float64 inference,
 checkpoint identity, and geometry have been reviewed. License acceptance must
 remain explicit in the manifest.
 
+## CUDA Fails But OpenCL Works
+
+`CUDA_ERROR_UNSUPPORTED_PTX_VERSION` means the CUDA runtime installed with
+OpenMM is newer than the GPU's driver. Install one no newer than the version
+`nvidia-smi` prints, `micromamba install -n mdprep-runtime -c conda-forge
+"cuda-version<=12.4"`, or rerun section C of the official notebook, which does
+it. See [Roe--Brooks OpenMM MD](molecular_dynamics.md#cuda-and-the-gpu-driver).
+
 ## 12-6-4 In OpenMM
 
 Load the final Amber `.prmtop` with `AmberPrmtopFile`. OpenMM represents the

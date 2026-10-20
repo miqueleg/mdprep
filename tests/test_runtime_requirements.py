@@ -394,3 +394,121 @@ def test_the_manifest_the_builder_produces_installs_what_that_run_invokes():
         ("parmed", "topology and charge validation"),
     ]:
         assert needed in packages, f"{needed} is missing, and this run needs it for {why}"
+
+
+# --------------------------------------------------------------------------
+# A CUDA runtime the GPU's driver can run
+# --------------------------------------------------------------------------
+
+
+def _run_setup(tmp_path, commands, *, driver_cuda):
+    """Run setup lines in bash with a fake nvidia-smi and micromamba.
+
+    The fake micromamba records its arguments and fails a solve that asks for
+    more than ``solvable`` allows, the way a pin nothing satisfies would.
+    """
+
+    import os
+    import subprocess
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir(exist_ok=True)
+    log = tmp_path / "calls.log"
+    (bin_dir / "micromamba").write_text(
+        "#!/bin/bash\n"
+        f'printf "%s\\n" "$*" >> {log}\n'
+        'case "$*" in *"cuda-version<=11"*) exit 1 ;; esac\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    if driver_cuda is not None:
+        (bin_dir / "nvidia-smi").write_text(
+            "#!/bin/bash\n"
+            f'echo "| NVIDIA-SMI 550.54.15   Driver Version: 550.54.15   CUDA Version: {driver_cuda}     |"\n',
+            encoding="utf-8",
+        )
+    for path in bin_dir.iterdir():
+        path.chmod(0o755)
+    script = "\n".join(
+        line.replace("/content/bin/micromamba", str(bin_dir / "micromamba"))
+        for line in commands
+        if "curl" not in line and "mkdir" not in line
+    )
+    result = subprocess.run(
+        ["/bin/bash", "-c", script],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin" if driver_cuda else f"{bin_dir}:/nonexistent",
+             "HOME": os.environ.get("HOME", "/tmp")},
+        capture_output=True,
+        text=True,
+    )
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return result, calls
+
+
+def test_the_cuda_runtime_is_capped_at_what_the_driver_supports(tmp_path):
+    """conda-forge picks the newest CUDA runtime the driver's major release
+    allows; OpenMM then compiles kernels an older driver cannot load, and
+    only OpenCL works -- what Colab's T4 runtime ran into."""
+
+    commands = micromamba_setup_commands(manifest())
+    result, calls = _run_setup(tmp_path, commands, driver_cuda="12.4")
+
+    assert result.returncode == 0, result.stderr
+    create = next(call for call in calls if call.startswith("create"))
+    assert create.endswith("cuda-version<=12.4")
+    assert "supports CUDA 12.4" in result.stdout
+
+
+def test_without_a_gpu_nothing_is_capped(tmp_path):
+    commands = micromamba_setup_commands(manifest())
+    result, calls = _run_setup(tmp_path, commands, driver_cuda=None)
+
+    assert result.returncode == 0, result.stderr
+    create = next(call for call in calls if call.startswith("create"))
+    assert "cuda-version" not in create
+
+
+def test_a_driver_no_build_fits_still_gets_an_environment(tmp_path):
+    commands = micromamba_setup_commands(manifest())
+    result, calls = _run_setup(tmp_path, commands, driver_cuda="11.2")
+
+    assert result.returncode == 0, result.stderr
+    creates = [call for call in calls if call.startswith("create")]
+    assert creates[0].endswith("cuda-version<=11.2") and "cuda-version" not in creates[1]
+    assert "will use OpenCL" in result.stdout
+
+
+def test_a_job_without_openmm_is_not_capped():
+    commands = micromamba_setup_commands(
+        manifest(validation={"run_openmm_energy_check": False})
+    )
+
+    assert "openmm" not in "\n".join(commands)
+    assert "MDPREP_CUDA_PIN" not in "\n".join(commands)
+
+
+def test_an_existing_environment_is_installed_with_the_cap(tmp_path):
+    """Rerunning the notebook's section C on an environment built before the
+    cap brings its CUDA runtime down to the driver's."""
+
+    from mdprep.workflows.runtime import micromamba_install_commands
+
+    commands = micromamba_install_commands(manifest())
+    result, calls = _run_setup(tmp_path, commands, driver_cuda="12.2")
+
+    assert result.returncode == 0, result.stderr
+    [install] = calls
+    assert install.startswith("install -y -q -n mdprep-runtime") and install.endswith("cuda-version<=12.2")
+
+
+def test_a_cuda_runtime_newer_than_the_driver_is_explained(monkeypatch):
+    from mdprep.workflows import runtime
+
+    monkeypatch.setattr(runtime, "driver_cuda_version", lambda: "12.4")
+
+    advice = runtime.explain_cuda_failure(
+        "Error loading CUDA module: CUDA_ERROR_UNSUPPORTED_PTX_VERSION (222)"
+    )
+
+    assert '"cuda-version<=12.4"' in advice
+    assert "section C" in advice and "OpenCL works meanwhile" in advice
