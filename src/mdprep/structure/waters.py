@@ -42,6 +42,7 @@ from mdprep.structure.classify import (
     WATER_RESIDUES,
     is_standard_protein_residue,
 )
+from mdprep.structure.coordination import COORDINATION_CUTOFF_ANGSTROM
 from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 from mdprep.structure.reader import read_structure
 from mdprep.structure.writer import write_pdb
@@ -55,8 +56,10 @@ CLASH_APOLAR = 2.9
 # Farther than this from every atom of the model is bulk solvent, which the
 # solvation box provides anyway.
 WITHIN = 6.0
-# A water oxygen this close to a metal is one of its ligands.
-METAL_BOND = 2.6
+# A water oxygen this close to a metal is one of its ligands -- the same
+# distance the decision engine proposes donors from, so a water reported here
+# as bound is the one the builder then offers as part of the shell.
+METAL_BOND = COORDINATION_CUTOFF_ANGSTROM
 # A crystal metal stands for a model metal of the same element up to this far
 # away once the structures are superposed.
 METAL_MATCH = 3.0
