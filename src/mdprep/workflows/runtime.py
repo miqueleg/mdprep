@@ -13,6 +13,7 @@ never invoke, and it does not omit one the run will fail without.
 
 from __future__ import annotations
 
+import shutil
 from typing import Any, Mapping
 
 
@@ -222,6 +223,121 @@ def micromamba_run_command(
     )
 
 
+# OpenMM's CUDA platform compiles its kernels at run time with NVRTC, which
+# comes with the conda CUDA runtime, and hands the result to the GPU driver.
+# A driver older than that NVRTC refuses it: CUDA_ERROR_UNSUPPORTED_PTX_VERSION
+# on the first kernel, while OpenCL -- compiled by the driver itself -- works.
+# conda-forge resolves to the newest runtime the driver's major release allows,
+# which can be newer than the driver: on Colab's T4 runtime the CUDA platform
+# never started, and a CUDA 13.0 driver here was given NVRTC 13.4. Capping
+# cuda-version at what the driver reports keeps the two in step. Without a GPU
+# nothing is capped.
+CUDA_PIN_VARIABLE = "MDPREP_CUDA_PIN"
+
+
+def cuda_pin_commands() -> list[str]:
+    """Shell lines that set MDPREP_CUDA_PIN to ``cuda-version<=X.Y``.
+
+    X.Y is the CUDA version the installed driver supports, as nvidia-smi
+    reports it; the variable is empty on a machine without an NVIDIA GPU.
+    Safe under ``set -euo pipefail``.
+    """
+
+    return [
+        f'{CUDA_PIN_VARIABLE}=""',
+        "if command -v nvidia-smi >/dev/null 2>&1; then",
+        (
+            "  DRIVER_CUDA=\"$(nvidia-smi 2>/dev/null | sed -n "
+            "'s/.*CUDA Version: *\\([0-9][0-9]*\\.[0-9][0-9]*\\).*/\\1/p' || true)\""
+        ),
+        '  if [ -n "$DRIVER_CUDA" ]; then',
+        f'    {CUDA_PIN_VARIABLE}="cuda-version<=$DRIVER_CUDA"',
+        '    echo "The GPU driver supports CUDA $DRIVER_CUDA: installing a CUDA runtime no newer."',
+        "  fi",
+        "fi",
+    ]
+
+
+def with_cuda_pin(command: str) -> str:
+    """``command`` with the CUDA cap, and without it if nothing fits the cap.
+
+    A driver too old for any OpenMM build with a matching runtime still gets
+    a working environment, whose MD then runs on OpenCL.
+    """
+
+    return (
+        f'{command} ${{{CUDA_PIN_VARIABLE}:+"${CUDA_PIN_VARIABLE}"}} || '
+        f'{{ echo "No OpenMM build matches this driver; installing without the cap, '
+        f'so the MD will use OpenCL."; {command}; }}'
+    )
+
+
+def micromamba_install_commands(
+    manifest: Mapping[str, Any],
+    *,
+    environment_name: str = "mdprep-runtime",
+    prefix: str = "/content",
+) -> list[str]:
+    """Shell lines that add what a manifest needs to an existing environment.
+
+    For a second manifest in the same Colab session -- and to repair an
+    environment built before the CUDA cap, whose CUDA platform cannot start:
+    installing with the cap brings its CUDA runtime down to the driver's.
+    """
+
+    packages = conda_packages_for(manifest)
+    install = (
+        f"{prefix}/bin/micromamba install -y -q -n {environment_name} "
+        f"-c conda-forge {' '.join(packages)}"
+    )
+    commands = ["set -euo pipefail", f"export MAMBA_ROOT_PREFIX={prefix}/mamba-root"]
+    if "openmm" in packages:
+        commands.extend(cuda_pin_commands())
+        commands.append(with_cuda_pin(install))
+    else:
+        commands.append(install)
+    return commands
+
+
+def driver_cuda_version() -> str | None:
+    """The CUDA version this machine's NVIDIA driver supports, if there is one."""
+
+    import re
+    import subprocess
+
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi is None:
+        return None
+    try:
+        output = subprocess.run(
+            [nvidia_smi], capture_output=True, text=True, timeout=30, check=False
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return None
+    match = re.search(r"CUDA Version:\s*([0-9]+\.[0-9]+)", output)
+    return match.group(1) if match else None
+
+
+def explain_cuda_failure(message: str) -> str:
+    """What to do about an OpenMM CUDA platform that will not start."""
+
+    driver = driver_cuda_version()
+    cap = f'"cuda-version<={driver}"' if driver else '"cuda-version<=X.Y"'
+    if "UNSUPPORTED_PTX_VERSION" in message or "PTX" in message:
+        return (
+            "The CUDA runtime installed with OpenMM is newer than this GPU's "
+            f"driver{f' (CUDA {driver})' if driver else ''} can run. Install one no "
+            f"newer: micromamba install -n mdprep-runtime -c conda-forge {cap} -- "
+            "rerunning section C of the official notebook does this. OpenCL "
+            "works meanwhile."
+        )
+    return (
+        "OpenMM's CUDA platform did not start on this GPU. If the driver is "
+        f"older than the CUDA runtime, install with {cap}; OpenCL may work "
+        "meanwhile."
+    )
+
+
 def micromamba_setup_commands(
     manifest: Mapping[str, Any],
     *,
@@ -237,7 +353,12 @@ def micromamba_setup_commands(
     have to restart and the rest of the notebook keeps working.
     """
 
-    packages = " ".join([f"python={python_version}", *conda_packages_for(manifest)])
+    needed = conda_packages_for(manifest)
+    packages = " ".join([f"python={python_version}", *needed])
+    create = (
+        f"{prefix}/bin/micromamba create -y -n {environment_name} "
+        f"-c conda-forge {packages}"
+    )
     commands = [
         # Without this the cell cannot fail. It is %%bash, so every line runs
         # whatever the one before it did: a 404 from the release URL pipes
@@ -252,10 +373,8 @@ def micromamba_setup_commands(
             f"| tar -xj -C {prefix}/bin --strip-components=1 bin/micromamba"
         ),
         f"export MAMBA_ROOT_PREFIX={prefix}/mamba-root",
-        (
-            f"{prefix}/bin/micromamba create -y -n {environment_name} "
-            f"-c conda-forge {packages}"
-        ),
+        *(cuda_pin_commands() if "openmm" in needed else []),
+        with_cuda_pin(create) if "openmm" in needed else create,
         (
             f"{prefix}/bin/micromamba run -n {environment_name} "
             f"pip install -q {mdprep_spec}"

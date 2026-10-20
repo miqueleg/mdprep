@@ -12,7 +12,7 @@ import json
 import secrets
 import math
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
 from typing import Any, Sequence
@@ -61,12 +61,15 @@ class RoeBrooksResult:
     state_log: Path
     report_path: Path
     equilibration_log: Path | None = None
+    # Platforms tried before the one used, and why each would not start.
+    platform_failures: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, object]:
         return {
             "protocol": "roe_brooks_2020",
             "output_dir": str(self.output_dir),
             "platform": self.platform,
+            "platform_failures": dict(self.platform_failures),
             "step10_elapsed_ps": self.step10_elapsed_ps,
             "production_steps": self.production_steps,
             "final_pdb": str(self.final_pdb),
@@ -434,10 +437,17 @@ def run_roe_brooks(
             if not math.isfinite(energy):
                 raise RoeBrooksError("initial energy is not finite")
         except Exception as exc:  # OpenMM plugins raise several exception types
-            platform_failures[candidate] = str(exc)
+            reason = str(exc)
+            if candidate == "CUDA":
+                # Most often a CUDA runtime newer than the GPU driver, which
+                # says nothing about how to fix it on its own.
+                from mdprep.workflows.runtime import explain_cuda_failure
+
+                reason = f"{reason} {explain_cuda_failure(reason)}"
+            platform_failures[candidate] = reason
             if config.platform != "auto":
                 raise RoeBrooksError(
-                    f"Requested OpenMM platform {candidate!r} failed: {exc}"
+                    f"Requested OpenMM platform {candidate!r} failed: {reason}"
                 ) from exc
             continue
         selected_platform = candidate_platform
@@ -878,4 +888,5 @@ def run_roe_brooks(
         state_log=state_log,
         report_path=report_path,
         equilibration_log=equilibration_path,
+        platform_failures=dict(platform_failures),
     )

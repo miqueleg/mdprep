@@ -276,13 +276,42 @@ def test_the_viewer_pdb_has_its_columns_where_readers_expect_them(tmp_path):
 
     assert text.count("MODEL") == 2 and text.count("ENDMDL") == 2
     first = text.splitlines()[1]
-    assert first[17:20] == "HD1" and first[21] == "A" and first[22:26] == "   1"
+    # No protein in this system, so no chain letter: chains are for proteins.
+    assert first[17:20] == "HD1" and first[21] == " " and first[22:26] == "   1"
     # Not protein (no backbone), so drawn as a ligand.
     assert first.startswith("HETATM")
     assert float(first[60:66]) == pytest.approx(-0.52)
     (tmp_path / "frames.pdb").write_text(text, encoding="utf-8")
     parsed = read_pdb(tmp_path / "frames.pdb")
     assert [atom.name for atom in parsed.atoms] == ["NE2", "FE", "O"]
+
+
+def test_each_protein_molecule_is_its_own_chain_in_the_viewer_pdb():
+    """A prmtop has no chains. Written as one, a viewer runs the cartoon from
+    one copy of a dimer straight into the next, or across a missing loop."""
+
+    from mdprep.analysis.prmtop import AmberAtom, AmberResidue, AmberTopology
+
+    atoms, residues, bonds = [], [], []
+    for name in ("ALA", "ALA", "ALA", "WAT"):
+        start = len(atoms)
+        for atom_name, number in (("N", 7), ("CA", 6), ("C", 6)) if name == "ALA" else (("O", 8),):
+            atoms.append(AmberAtom(len(atoms), atom_name, "X", 0.0, 1.0, number, len(residues)))
+        residues.append(AmberResidue(len(residues), name, start, len(atoms)))
+        bonds += [(start, start + 1), (start + 1, start + 2)] if name == "ALA" else []
+    bonds.append((2, 3))  # residues 1 and 2 are peptide-bonded; residue 3 is apart
+    topology = AmberTopology(atoms=atoms, residues=residues, bonds=bonds, periodic=False)
+    trajectory = tr.Trajectory(
+        topology=topology,
+        positions=np.zeros((1, len(atoms), 3)),
+        cells=None,
+        times_ps=np.zeros(1),
+    )
+
+    lines = [line for line in tr.pdb_models(trajectory, range(len(atoms))).splitlines()
+             if line.startswith(("ATOM", "HETATM"))]
+
+    assert [line[21] for line in lines] == ["A"] * 6 + ["B"] * 3 + [" "]
 
 
 # --------------------------------------------------------------------------

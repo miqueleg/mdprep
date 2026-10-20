@@ -9,6 +9,7 @@ atoms, which is what RMSD and RMSF are measured after.
 
 from __future__ import annotations
 
+import string
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable, Sequence
@@ -293,6 +294,31 @@ def _pdb_name(name: str, element: str) -> str:
     return f"{name:<4s}"[:4]
 
 
+def _chain_letters(topology: AmberTopology, protein: set[int]) -> dict[int, str]:
+    """A chain letter for every residue of each molecule with protein in it.
+
+    A prmtop numbers residues straight through, with no chains. Written all
+    as one chain, a viewer runs the cartoon on from the last residue of one
+    copy of a dimer into the first of the next, and across any loop the
+    structure never resolved -- both are separate molecules to Amber, and
+    each gets its own letter here. Ligands, waters and ions not bonded to a
+    protein are left without one.
+    """
+
+    letters = string.ascii_uppercase + string.ascii_lowercase + string.digits
+    chains: dict[int, str] = {}
+    count = 0
+    for molecule in topology.molecules():
+        residues = {topology.atoms[index].residue_index for index in molecule}
+        if not residues & protein:
+            continue
+        letter = letters[count % len(letters)]
+        count += 1
+        for residue in residues:
+            chains[residue] = letter
+    return chains
+
+
 def pdb_models(
     trajectory: Trajectory,
     atoms: Sequence[int],
@@ -315,6 +341,7 @@ def pdb_models(
     protein = {
         topology.atoms[index].residue_index for index in protein_atoms(topology, {"CA"})
     }
+    chains = _chain_letters(topology, protein)
     lines: list[str] = []
     for model, frame in enumerate(chosen, start=1):
         lines.append(f"MODEL     {model:4d}\n")
@@ -329,7 +356,8 @@ def pdb_models(
             # coordinates from 31, B-factor 61-66, element 77-78.
             lines.append(
                 f"{record}{serial % 100000:5d} {_pdb_name(atom.name, element)} "
-                f"{residue.name[:3]:>3s} A{(residue.index + 1) % 10000:4d}    "
+                f"{residue.name[:3]:>3s} {chains.get(residue.index, ' ')}"
+                f"{(residue.index + 1) % 10000:4d}    "
                 f"{x:8.3f}{y:8.3f}{z:8.3f}{1.0:6.2f}{bfactor:6.2f}          {element.upper():>2s}\n"
             )
         lines.append("ENDMDL\n")
