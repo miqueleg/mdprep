@@ -112,6 +112,17 @@ BOND_LENGTH_ANGSTROM: dict[tuple[str, str, int], float] = {
     ("N", "O", 1): 1.40, ("N", "O", 2): 1.21,
 }
 
+# A single bond between two conjugated centres is shorter than one between
+# saturated atoms, because the pi system reaches across it: an amide C-N
+# refines near 1.33 A and an adenine's C6-N6 near 1.34, against 1.47 for an
+# amine; the C4a-C10a bond inside a flavin near 1.39, against 1.52 for a
+# C-C single bond. Measured against the saturated lengths, every amide,
+# every amino-heterocycle and every flavin looked like a wrong tautomer.
+CONJUGATED_SINGLE_BOND_ANGSTROM: dict[tuple[str, str], float] = {
+    ("C", "C"): 1.46,
+    ("C", "N"): 1.36,
+}
+
 # A bond has to miss its own order by this much before it is questioned, and
 # be this much closer to a different one, before the geometry is taken to
 # contradict the SMILES rather than merely to be loosely refined.
@@ -170,6 +181,8 @@ def geometry_contradicts_bond_orders(
         assigned = BOND_LENGTH_ANGSTROM.get((*pair, order))
         if assigned is None:
             continue
+        if order == 1 and _conjugated_single_bond(begin, end):
+            assigned = CONJUGATED_SINGLE_BOND_ANGSTROM[pair]
         start = conformer.GetAtomPosition(begin.GetIdx())
         finish = conformer.GetAtomPosition(end.GetIdx())
         observed = (
@@ -197,6 +210,34 @@ def geometry_contradicts_bond_orders(
             f"({assigned:.2f} A)"
         )
     return complaints
+
+
+def _conjugated_single_bond(begin: object, end: object) -> bool:
+    """A C-C or C-N single bond that a pi system reaches across.
+
+    C-C between two sp2 carbons; C-N between an sp2 carbon and a neutral
+    nitrogen with three neighbours, whose lone pair conjugates -- an amide,
+    an amino group on a ring, the ring nitrogen of a dihydropyridine. Not
+    C-O: an enol's C-OH against a ketone's C=O is the tautomer error the
+    check exists to catch.
+    """
+
+    from rdkit import Chem
+
+    def sp2(atom: object) -> bool:
+        return atom.GetIsAromatic() or atom.GetHybridization() == Chem.HybridizationType.SP2
+
+    symbols = {begin.GetSymbol(), end.GetSymbol()}
+    if symbols == {"C"}:
+        return sp2(begin) and sp2(end)
+    if symbols == {"C", "N"}:
+        carbon, nitrogen = (begin, end) if begin.GetSymbol() == "C" else (end, begin)
+        return (
+            sp2(carbon)
+            and nitrogen.GetFormalCharge() == 0
+            and nitrogen.GetDegree() + nitrogen.GetTotalNumHs() == 3
+        )
+    return False
 
 
 def _atom_label(atom: object) -> str:

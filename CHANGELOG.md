@@ -22,8 +22,42 @@
 - A residue still holding several metal atoms (an iron-sulfur cluster) and
   heme c, a covalent ligand, are refused with the reason before any question
   is asked.
+- Heterogens that are not ligands. mdprep reads the bonds a deposition
+  declares (PDB LINK, mmCIF `_struct_conn`) and its modified residues (MODRES,
+  `_pdbx_struct_mod_residue`), and sorts the heterogens before asking about
+  ligands: modified residues in a chain, glycans, other heterogens bonded to
+  the protein, and crystallisation additives. Each group is one question with
+  every member listed. Glycans and additives are proposed for removal, a
+  selenomethionine for replacement by methionine; anything else is asked
+  without a proposal, and keeping what cannot be built stops at the question.
+  See `docs/heterogens.md`.
+- `structure.remove_residues`: residues left out on purpose, each with its
+  reason, applied before anything else looks at the structure and reported.
+- `structure.repair.replace_modified_residues`: modified residues replaced by
+  their standard parents through PDBFixer, exactly the ones listed.
+- A metal that is not inside a cofactor can be removed on its model question
+  (a nickel from a His-tag purification). Magnesium and calcium are proposed
+  nonbonded.
+- The SMILES and net charge of FAD, FMN, SAM, SAH, NAD+, NADH, NADP+ and NADPH
+  are proposed, at pH 7, with the protonation stated; each is tested against
+  a deposited cofactor.
+- `examples/20_upo_5oxu_heme_glycans.yaml` (an unspecific peroxygenase:
+  heme-thiolate, magnesium, N-glycans, additives) and
+  `examples/21_prna_fad_halogenase.yaml` (a flavin-dependent halogenase),
+  with their depositions. `docs/enzyme_families.md` lists what mdprep does
+  with each family of halogenating and dehalogenating enzymes.
+- Refused when the structure is loaded, with the reason: a cofactor bonded to
+  the protein that holds a metal (myeloperoxidase's heme), an oxoanion such as
+  vanadate, a modified residue with no standard parent, and a declared bond
+  between protein residues that is neither a peptide bond nor a disulfide.
 
 ### Changed
+
+- The spin is asked once, for the QM region. The per-metal multiplicity
+  question is gone; the QM region's answer is also the bonded site's
+  `ions[].multiplicity` and MCPB model spins.
+- Crystallisation additives are no longer offered one by one as ligands
+  unless their removal is declined.
 
 - The protonation of a titratable side chain on a metal is asked right after
   the coordination shell is confirmed, before the spin and the model charge.
@@ -39,6 +73,15 @@
   cysteine stated as CYM counted as neutral and an aspartate stated as ASH as
   -1. It now counts the state given, and proposes nothing until it is given.
 - The builder named a residue once per highlighted atom.
+- The ligand bond-order check measured conjugated single bonds against
+  saturated lengths, so every amide, amino-heterocycle and flavin looked like
+  a wrong tautomer and a SMILES for FAD, NAD or SAM could not be applied.
+- A heme on both a bonded iron and a nonbonded magnesium, as in a
+  peroxygenase, was refused for taking its charges from the magnesium's
+  non-existent fit.
+- QM/MM refinement stopped on a nonbonded metal or a crystal ion next to the
+  QM region; both are MM environment with known parameters.
+- A vanadate was split into a vanadium and four unbonded oxygens.
 
 ## 0.4.0 - 2026-10-20
 

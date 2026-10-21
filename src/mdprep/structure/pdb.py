@@ -114,6 +114,13 @@ def read_pdb(
     # CONECT records conventionally follow ENDMDL, so inspect the complete
     # file while filtering endpoints to the selected first model/altloc.
     conect_bonds = _parse_conect_bonds(lines, present_serials)
+    from mdprep.structure.links import (
+        parse_pdb_links,
+        parse_pdb_modres,
+        resolve_links,
+        resolve_residue_keys,
+    )
+
     return PdbStructure(
         path=pdb_path,
         atoms=atoms,
@@ -124,6 +131,8 @@ def read_pdb(
         conect_bonds=conect_bonds,
         ter_after_serials=ter_after_serials,
         assigned_resnames=assigned_resnames,
+        links=resolve_links(parse_pdb_links(lines), raw_atoms, atoms),
+        modified_residue_parents=resolve_residue_keys(parse_pdb_modres(lines), raw_atoms, atoms),
     )
 
 

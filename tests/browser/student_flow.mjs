@@ -75,11 +75,18 @@ try {
       const input = document.getElementById("answer-input");
       return input ? input.value : null;
     });
+    // A yes/no or a choice is a set of radios: which one the page selected
+    // before the student touched it is that question's default or proposal.
+    const selected = await page.evaluate(() => {
+      const checked = document.querySelector('input[name="answer"]:checked');
+      return checked ? checked.value : null;
+    });
     report.asked.push({
       id: q.id,
       answered: answer !== undefined ? String(answer) : null,
       note,
       prefilled,
+      selected,
     });
     if (answer !== undefined) {
       const ok = await page.evaluate((value) => {

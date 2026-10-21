@@ -8,6 +8,8 @@
 - [Protonation](protonation.md)
 - [Ligands](ligands.md)
 - [Metal centers](metals.md)
+- [Heterogens that are not ligands](heterogens.md)
+- [Halogenating and dehalogenating enzymes](enzyme_families.md)
 - [Dimers, trimers and tetramers](oligomers.md)
 - [Predicted structures](predicted_structures.md)
 - [MCPB Hessian-method benchmark](mcpb_xtb_benchmark.md)

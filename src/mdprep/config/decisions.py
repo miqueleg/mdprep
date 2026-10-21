@@ -21,7 +21,12 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
-from mdprep.ligands.cofactors import KNOWN_METAL_FREE_COFACTORS, known_metal_free_cofactor
+from mdprep.ligands.cofactors import (
+    KNOWN_METAL_FREE_COFACTORS,
+    KNOWN_ORGANIC_COFACTORS,
+    known_metal_free_cofactor,
+    known_organic_cofactor,
+)
 from mdprep.structure.classify import (
     COORDINATING_METAL_ELEMENTS,
     LEAP_RESERVED_RESIDUE_NAMES,
@@ -35,6 +40,12 @@ from mdprep.structure.coordination import (
     COORDINATION_CUTOFF_ANGSTROM,
     metal_bound_waters,
     metal_donor_atoms,
+)
+from mdprep.structure.heterogens import (
+    CRYSTALLISATION_ADDITIVES,
+    LABELLING_MODIFICATIONS,
+    HeterogenGroups,
+    classify_heterogens,
 )
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
 from mdprep.structure.models import ResidueId, ResidueRecord
@@ -423,15 +434,38 @@ def plan_decisions(
         for donor, _, _ in metal_donor_atoms(summary.structure.residues, metal)
         if len(donor.atoms) == 1
     }
+    # A ligand that coordinates a metal belongs to that site's quantum model.
+    donor_residue_ids = {
+        donor.id
+        for metal in summary.metal_ions
+        for donor, _, _ in metal_donor_atoms(summary.structure.residues, metal)
+    }
+    # Heterogens that are not ligands: a modified residue of a chain, a
+    # glycan, anything else bonded to the protein, a crystallisation
+    # additive. Each group is asked about as a group, not as ligands.
+    groups = classify_heterogens(
+        summary.structure.residues,
+        getattr(summary.structure, "links", ()),
+        getattr(summary.structure, "modified_residue_parents", {}),
+        metal_donor_ids=frozenset(donor_residue_ids),
+    )
     ligands = [
         residue
         for residue in summary.likely_ligands
-        if not is_metal_ion_residue(residue) and residue.id not in monatomic_donors
+        if not is_metal_ion_residue(residue)
+        and residue.id not in monatomic_donors
+        and residue.id not in groups.not_ligands
     ]
     # What mdprep cannot parameterise is refused before anything is asked,
     # with the reason, rather than failing in antechamber or tleap later --
     # or worse, building.
     unsupported = unsupported_ligands(ligands, summary.structure.residues)
+    unsupported += unsupported_heterogens(
+        groups,
+        summary,
+        donor_residue_ids,
+        getattr(summary.structure, "assigned_resnames", frozenset()),
+    )
     if unsupported:
         raise DecisionError(" ".join(unsupported))
 
@@ -481,21 +515,20 @@ def plan_decisions(
     decisions: list[Decision] = []
     decisions.extend(_project_decisions(path))
     decisions.extend(_chain_decision(summary))
-    decisions.extend(_structure_decisions(summary))
-    decisions.extend(_repair_decisions(summary))
+    decisions.extend(_structure_decisions(summary, groups))
+    decisions.extend(_repair_decisions(summary, groups))
     decisions.extend(_protein_decisions())
     decisions.extend(_protonation_decisions(summary))
     decisions.extend(_disulfide_decisions(summary))
-    # A ligand that coordinates a metal belongs to that site's quantum model.
-    donor_residue_ids = {
-        donor.id
-        for metal in summary.metal_ions
-        for donor, _, _ in metal_donor_atoms(summary.structure.residues, metal)
-    }
+    additive_ids = {residue.id for residue in groups.additives}
     for residue in ligands:
         decisions.extend(
             _ligand_decisions(
-                residue, coordinates_metal=residue.id in donor_residue_ids
+                residue,
+                coordinates_metal=residue.id in donor_residue_ids,
+                # An additive is only offered as a ligand once the user has
+                # chosen to keep the additives.
+                additive=residue.id in additive_ids,
             )
         )
     for residue in summary.metal_ions:
@@ -571,8 +604,28 @@ def plan_decisions(
             item.describe() for item in incomplete_residues(summary.structure.residues)
         ],
         "chain_breaks": [
-            item.describe() for item in chain_breaks(summary.structure.residues)
+            item.describe()
+            for item in chain_breaks(
+                summary.structure.residues,
+                also_in_chain={item.residue.id for item in groups.modified_residues},
+            )
         ],
+        "modified_residues": [item.describe() for item in groups.modified_residues],
+        # What replacing them means, residue by residue, for the manifest.
+        "modified_residue_replacements": [
+            {
+                "chain": item.residue.id.chain_id,
+                "resname": item.residue.id.resname,
+                "resid": item.residue.id.resid,
+                "icode": item.residue.id.icode,
+                "parent": item.parent,
+            }
+            for item in groups.modified_residues
+            if item.parent is not None
+        ],
+        "glycans": [item.residue.id.display() for item in groups.glycans],
+        "covalent_heterogens": [item.residue.id.display() for item in groups.covalent],
+        "additives": [residue.id.display() for residue in groups.additives],
         "structure_warnings": list(summary.structure.warnings),
         "oligomer": oligomer.to_dict(),
         # The atoms each ligand is written with, so a manifest can only let
@@ -586,6 +639,13 @@ def plan_decisions(
             ligand_id_for(residue): entry.resname
             for residue in ligands
             if (entry := known_metal_free_cofactor(residue)) is not None
+        },
+        # Organic cofactors -- a flavin, SAM, a nicotinamide -- whose SMILES
+        # and charge their names fix, so they can be proposed too.
+        "known_organic_cofactors": {
+            ligand_id_for(residue): entry.resname
+            for residue in ligands
+            if (entry := known_organic_cofactor(residue)) is not None
         },
     }
     return DecisionPlan(
@@ -623,6 +683,17 @@ def unsupported_ligands(
             atom for atom in ligand.atoms
             if (atom.element or "").strip().upper() in COORDINATING_METAL_ELEMENTS
         ]
+        if len(metals) == 1:
+            # The reader takes a lone metal out of its cofactor unless what
+            # remains would fall apart: an oxoanion.
+            problems.append(
+                f"{ligand.id.display()} holds a {(metals[0].element or '').strip().capitalize()} "
+                "bonded to atoms that are bonded to nothing else -- an oxoanion "
+                "such as vanadate. It is neither a metal site mdprep can build "
+                "around a one-atom metal nor a ligand antechamber can "
+                "parameterise, so mdprep cannot prepare it."
+            )
+            continue
         if metals:
             elements = sorted({(atom.element or "").strip().capitalize() for atom in metals})
             problems.append(
@@ -638,6 +709,60 @@ def unsupported_ligands(
                 f"{ligand.id.display()} is {covalent}: a covalently attached "
                 "ligand, which mdprep does not support."
             )
+    return problems
+
+
+def unsupported_heterogens(
+    groups: HeterogenGroups,
+    summary: InspectionSummary,
+    donor_residue_ids: set[ResidueId],
+    assigned_resnames: frozenset[str] = frozenset(),
+) -> list[str]:
+    """Why each non-ligand heterogen cannot be prepared, if it cannot.
+
+    A modified residue with no standard parent cannot be replaced, and
+    cannot be built as it is. A bonded cofactor that held a metal cannot be
+    removed without the metal site it carries, nor built bonded. A bonded
+    heterogen on a metal cannot be removed without changing the site. And a
+    crosslink between two protein residues is a bond tleap never makes.
+    """
+
+    problems: list[str] = []
+    for item in groups.modified_residues:
+        if item.parent is None:
+            problems.append(
+                f"{item.residue.id.display()} is a residue of a protein chain "
+                "that is not one of the twenty standard amino acids, and mdprep "
+                "knows no standard one it is a modified form of: noncanonical "
+                "amino acids inside a chain are not supported."
+            )
+    bonded = {item.residue.id: item for item in groups.glycans + groups.covalent}
+    for metal in summary.metal_ions:
+        cofactor = source_cofactor(metal, summary.structure.residues, assigned_resnames)
+        if cofactor is not None and cofactor.id in bonded:
+            problems.append(
+                f"{cofactor.id.display()} is bonded to the protein "
+                f"({'; '.join(bonded[cofactor.id].bonds)}) and holds the metal "
+                f"{metal.id.display()}: a covalently attached cofactor, which "
+                "mdprep does not support. It cannot be left out either without "
+                "taking its metal site with it."
+            )
+            del bonded[cofactor.id]
+    for residue_id, item in bonded.items():
+        if residue_id in donor_residue_ids:
+            problems.append(
+                f"{residue_id.display()} is bonded to the protein "
+                f"({'; '.join(item.bonds)}) and coordinates a metal: removing it "
+                "would change the metal site, and keeping it needs a covalent "
+                "ligand, which mdprep does not support."
+            )
+    for crosslink in groups.crosslinks:
+        problems.append(
+            f"The structure declares a bond between two protein residues, "
+            f"{crosslink}, that is neither a peptide bond nor a disulfide. "
+            "tleap would build the two residues unbonded, so mdprep does not "
+            "prepare it."
+        )
     return problems
 
 
@@ -891,7 +1016,168 @@ def coordinating_water_residues(summary: InspectionSummary) -> list[ResidueRecor
     return metal_bound_waters(summary.structure.residues, summary.metal_ions)
 
 
-def _structure_decisions(summary: InspectionSummary) -> list[Decision]:
+def _listed(lines: Sequence[str], limit: int = 12) -> tuple[str, ...]:
+    """Evidence lines, the first ``limit`` of them and a count of the rest."""
+
+    shown = tuple(lines[:limit])
+    if len(lines) > limit:
+        shown += (f"... and {len(lines) - limit} more",)
+    return shown
+
+
+def _heterogen_group_decisions(groups: HeterogenGroups) -> list[Decision]:
+    """What to do with each group of heterogens that are not ligands.
+
+    Each is one question about the group, with every member named in its
+    evidence and its targets: the manifest it produces lists each residue,
+    so the targets must be all of them, not a sample.
+    """
+
+    decisions: list[Decision] = []
+    if groups.modified_residues:
+        labelling = all(
+            item.residue.id.resname.strip().upper() in LABELLING_MODIFICATIONS
+            for item in groups.modified_residues
+        )
+        decisions.append(
+            Decision(
+                id="structure.replace_modified_residues",
+                section="structure",
+                question=(
+                    "Replace the modified residues in the protein chains by their "
+                    "standard amino acids?"
+                ),
+                kind="boolean",
+                # A selenomethionine is how a methionine was labelled to solve
+                # the phases; anything else may be the chemistry of the
+                # protein, and losing it is the user's call.
+                default="true" if labelling else None,
+                requires_user_input=not labelling,
+                why=(
+                    "No force field template bonds a modified amino acid into a "
+                    "chain, so mdprep cannot build one as it is. Replacing it by "
+                    "its standard parent keeps the backbone and the atoms the two "
+                    "share and builds the rest -- the methionine a "
+                    "selenomethionine stands for, but also a serine where a "
+                    "phosphoserine was, whose phosphate is then gone from the "
+                    "simulation. Answering no stops the build. "
+                    + (
+                        "Proposed yes: these are selenomethionines, the label a "
+                        "methionine is given to solve the phases, not chemistry of "
+                        "the protein."
+                        if labelling
+                        else "Nothing is proposed: whether the modification matters "
+                        "to what you are simulating is yours to say."
+                    )
+                ),
+                evidence=_listed(
+                    [
+                        f"{item.describe()}, from {item.parent_source}"
+                        for item in groups.modified_residues
+                    ]
+                ),
+                targets=tuple(_target_for(item.residue) for item in groups.modified_residues),
+                focus="targets",
+            )
+        )
+    if groups.glycans:
+        decisions.append(
+            Decision(
+                id="structure.remove_glycans",
+                section="structure",
+                question="Remove the glycans bonded to the protein?",
+                kind="boolean",
+                # Keeping them cannot be built, so the only other answer stops.
+                default="true",
+                why=(
+                    "These sugars are bonded to the protein, most through an "
+                    "asparagine, serine or threonine. mdprep does not build "
+                    "glycans -- their force field, GLYCAM, is not part of it -- and "
+                    "a sugar built as a free molecule would sit at bond length from "
+                    "the residue it was attached to. Removing them prepares the "
+                    "protein as if deglycosylated, which is the usual choice when "
+                    "they are far from the site you study: check that none is near "
+                    "yours. Answering no stops the build."
+                ),
+                evidence=_listed(
+                    [
+                        item.residue.id.display()
+                        + (f", bonded {item.bonds[0]}" if item.bonds else "")
+                        for item in groups.glycans
+                    ]
+                ),
+                targets=tuple(_target_for(item.residue) for item in groups.glycans),
+                focus="targets",
+            )
+        )
+    if groups.covalent:
+        decisions.append(
+            Decision(
+                id="structure.remove_covalent_heterogens",
+                section="structure",
+                question="Remove the heterogens bonded to the protein?",
+                kind="boolean",
+                # A covalent intermediate may be the reason for the structure.
+                default=None,
+                requires_user_input=True,
+                why=(
+                    "The structure declares these bonded to the protein: a "
+                    "covalent intermediate, an inhibitor, a cofactor attached to a "
+                    "side chain. mdprep does not build covalent ligands, and one "
+                    "built as a free molecule would sit at bond length from the "
+                    "residue it is attached to. Removing it may remove what the "
+                    "structure was solved to show, so nothing is proposed. "
+                    "Answering no stops the build."
+                ),
+                evidence=_listed(
+                    [
+                        f"{item.residue.id.display()}: {'; '.join(item.bonds)}"
+                        if item.bonds
+                        else f"{item.residue.id.display()}: bonded to one of the above"
+                        for item in groups.covalent
+                    ]
+                ),
+                targets=tuple(_target_for(item.residue) for item in groups.covalent),
+                focus="targets",
+            )
+        )
+    if groups.additives:
+        decisions.append(
+            Decision(
+                id="structure.remove_additives",
+                section="structure",
+                question="Remove the crystallisation additives?",
+                kind="boolean",
+                default="true",
+                why=(
+                    "These are components of the buffer, cryoprotectant or "
+                    "precipitant the crystal was grown in. They are not part of "
+                    "the protein in solution, and each one kept is a ligand that "
+                    "needs a SMILES, a charge and parameters of its own. Some are "
+                    "not artefacts -- a sulfate can sit where a substrate's "
+                    "phosphate binds, an alcohol in a substrate tunnel -- so check "
+                    "the list against your active site. Answer no to be asked about "
+                    "each one as a ligand instead. A heterogen that coordinates a "
+                    "metal is never on this list."
+                ),
+                evidence=_listed(
+                    [
+                        f"{residue.id.display()} "
+                        f"({CRYSTALLISATION_ADDITIVES[residue.id.resname.strip().upper()]})"
+                        for residue in groups.additives
+                    ]
+                ),
+                targets=tuple(_target_for(residue) for residue in groups.additives),
+                focus="targets",
+            )
+        )
+    return decisions
+
+
+def _structure_decisions(
+    summary: InspectionSummary, groups: HeterogenGroups | None = None
+) -> list[Decision]:
+    groups = groups if groups is not None else HeterogenGroups()
     decisions: list[Decision] = []
     # A water bound to a metal is part of that site and is kept with it
     # whatever the answer here (normalisation sees to that, from the same
@@ -967,12 +1253,19 @@ def _structure_decisions(summary: InspectionSummary) -> list[Decision]:
                 focus="targets",
             )
         )
+    decisions.extend(_heterogen_group_decisions(groups))
+    # A heterogen asked about in a group above is not an unknown one.
     unknown = [
         residue
         for residue in summary.heterogen_residues
-        if not is_metal_ion_residue(residue) and residue not in summary.crystal_ions
+        if not is_metal_ion_residue(residue)
+        and residue not in summary.crystal_ions
+        and residue.id not in groups.not_ligands
     ]
     if unknown:
+        additive_ids = {residue.id for residue in groups.additives}
+        others = [residue for residue in unknown if residue.id not in additive_ids]
+        kept_additives = [residue for residue in unknown if residue.id in additive_ids]
         decisions.append(
             Decision(
                 id="structure.remove_unknown_heterogens",
@@ -992,19 +1285,39 @@ def _structure_decisions(summary: InspectionSummary) -> list[Decision]:
                     "dropped without your say. If you will keep all of them, answer "
                     "false."
                 ),
-                evidence=tuple(residue.id.display() for residue in unknown),
+                evidence=tuple(residue.id.display() for residue in others)
+                + (
+                    (
+                        "The crystallisation additives, now that you are keeping "
+                        "them: " + ", ".join(residue.id.display() for residue in kept_additives),
+                    )
+                    if kept_additives
+                    else ()
+                ),
                 targets=tuple(_target_for(residue) for residue in unknown),
                 focus="targets",
+                # Only additives, and they are going: nothing is left to decline.
+                when=()
+                if others
+                else (Condition("structure.remove_additives", ("false",)),),
             )
         )
     return decisions
 
 
-def _repair_decisions(summary: InspectionSummary) -> list[Decision]:
+def _repair_decisions(
+    summary: InspectionSummary, groups: HeterogenGroups | None = None
+) -> list[Decision]:
     """Ask about incomplete residues before any expensive stage runs."""
 
     incomplete = incomplete_residues(summary.structure.residues)
-    breaks = chain_breaks(summary.structure.residues)
+    # A modified residue is part of its chain, not a gap in it.
+    breaks = chain_breaks(
+        summary.structure.residues,
+        also_in_chain={
+            item.residue.id for item in (groups.modified_residues if groups else ())
+        },
+    )
     if not incomplete and not breaks:
         return []
 
@@ -1233,7 +1546,7 @@ def _ligand_has_hydrogens(residue: ResidueRecord) -> bool:
 
 
 def _ligand_decisions(
-    residue: ResidueRecord, *, coordinates_metal: bool = False
+    residue: ResidueRecord, *, coordinates_metal: bool = False, additive: bool = False
 ) -> list[Decision]:
     ligand_id = ligand_id_for(residue)
     display = residue.id.display()
@@ -1254,6 +1567,8 @@ def _ligand_decisions(
             evidence=evidence,
             targets=targets,
             focus="targets",
+            # An additive is a ligand only once the additives are kept.
+            when=(Condition("structure.remove_additives", ("false",)),) if additive else (),
         ),
         Decision(
             id=f"ligand.{ligand_id}.net_charge",
@@ -1453,6 +1768,9 @@ def proposed_oxidation_state(
     )
 
 
+# Closed-shell metals bound by electrostatics, which an ion model describes.
+ELECTROSTATIC_METALS = frozenset({"MG", "CA"})
+
 METAL_NAMES = {
     "FE": "iron", "ZN": "zinc", "CU": "copper", "MN": "manganese",
     "CO": "cobalt", "NI": "nickel", "MG": "magnesium", "CA": "calcium",
@@ -1568,6 +1886,35 @@ def _metal_decisions(
     model_id = f"metal.{site_id}.model"
     bonded = (Condition(model_id, ("bonded_mcpb",)),)
     nonbonded = (Condition(model_id, ("nonbonded",)),)
+    kept = (Condition(model_id, ("bonded_mcpb", "nonbonded")),)
+    # Magnesium and calcium are closed-shell ions held by electrostatics:
+    # an ion model describes them, and a quantum calculation adds cost and
+    # nothing else. Every other metal with a shell is proposed bonded.
+    electrostatic = element.upper() in ELECTROSTATIC_METALS
+    if not donors:
+        proposed_model = "nonbonded"
+        model_reason = (
+            "No donor atom was found within bonding distance, so there is no "
+            "coordination sphere to hold together."
+        )
+    elif electrostatic:
+        proposed_model = "nonbonded"
+        model_reason = (
+            f"{len(donors)} donor atom(s) were found within bonding distance, but "
+            f"{METAL_NAMES.get(element.upper(), element.capitalize())} is a closed-shell "
+            "ion held by electrostatics, which an ion model describes; the "
+            "nonbonded model is proposed."
+        )
+    else:
+        proposed_model = "bonded_mcpb"
+        model_reason = (
+            f"{len(donors)} donor atom(s) were found within bonding distance, which "
+            "is why the bonded model is proposed here."
+        )
+    # A metal read out of a cofactor is that cofactor's; one that is free
+    # may be an artefact -- a nickel from the purification tag -- and can be
+    # left out. Its cofactor's metal cannot, without the cofactor.
+    removable = cofactor is None
     confirm_id = f"metal.{site_id}.confirm_donors"
     confirmed = bonded + (Condition(confirm_id, ("true",)),)
 
@@ -1586,18 +1933,19 @@ def _metal_decisions(
             # then has to confirm its donors, its spin and its model charge,
             # none of which can be defaulted, so a metal that should have been
             # nonbonded is three questions away from being noticed.
-            default="bonded_mcpb" if donors else "nonbonded",
+            default=proposed_model,
             why=(
                 "A nonbonded model keeps the ion free and suits a structural or "
                 "loosely bound metal. A bonded MCPB model holds the coordination "
                 "sphere together and is what a catalytic centre needs; it costs a "
                 "quantum chemistry calculation. "
+                + model_reason
                 + (
-                    f"{len(donors)} donor atom(s) were found within bonding "
-                    "distance, which is why the bonded model is proposed here."
-                    if donors
-                    else "No donor atom was found within bonding distance, so "
-                    "there is no coordination sphere to hold together."
+                    " A metal that is not part of the system -- a nickel from a "
+                    "His-tag purification, a cadmium from the crystallisation "
+                    "buffer -- can be removed instead."
+                    if removable
+                    else ""
                 )
             ),
             choices=(
@@ -1611,12 +1959,24 @@ def _metal_decisions(
                     "Nonbonded (Li/Merz)",
                     "Cheap. Pick an Amber ion parameter set below.",
                 ),
+            )
+            + (
+                (
+                    Choice(
+                        "remove",
+                        "Remove it",
+                        "Leave this metal out of the build: an artefact of "
+                        "purification or crystallisation, not part of the system.",
+                    ),
+                )
+                if removable
+                else ()
             ),
             evidence=evidence + donor_evidence,
             targets=targets,
             focus="targets",
         ),
-        # Needed by both models, so it carries no condition.
+        # Needed by both models, and by neither once the metal is removed.
         Decision(
             id=f"metal.{site_id}.charge",
             section="metals",
@@ -1641,6 +2001,7 @@ def _metal_decisions(
             evidence=evidence,
             targets=targets,
             focus="targets",
+            when=kept,
         ),
         Decision(
             id=f"metal.{site_id}.parameter_set",
@@ -2133,6 +2494,7 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
             decision_id="structure.remove_unknown_heterogens",
         )
 
+    _require_buildable_heterogens(resolved)
     bonded_sites = [
         decision.id.split(".")[1]
         for decision in plan.decisions
@@ -2175,6 +2537,22 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
     ligand_blocks = _link_ligand_copies(plan, resolved, _ligand_blocks(plan, resolved))
     metal_blocks = _link_metal_copies(plan, resolved, _metal_blocks(plan, resolved))
     _require_one_template_per_metal_name(metal_blocks)
+    keep_chains = _kept_chains(plan, resolved.get("structure.chains", "all"))
+    removed = _in_chains(_removed_residues(plan, resolved), keep_chains)
+    replacements = _in_chains(_modified_residue_replacements(plan, resolved), keep_chains)
+    repair: dict[str, Any] = {}
+    if resolved.get("structure.repair.add_missing_heavy_atoms") or replacements:
+        repair = {
+            "backend": "pdbfixer",
+            "add_missing_heavy_atoms": bool(
+                resolved.get("structure.repair.add_missing_heavy_atoms")
+            ),
+            "unresolved_residues": resolved.get(
+                "structure.repair.unresolved_residues", "leave_absent"
+            ),
+        }
+        if replacements:
+            repair["replace_modified_residues"] = replacements
 
     manifest: dict[str, Any] = {
         "project": {
@@ -2183,26 +2561,15 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
             "output_dir": resolved["project.output_dir"],
         },
         "structure": {
-            "keep_chains": _kept_chains(plan, resolved.get("structure.chains", "all")),
+            "keep_chains": keep_chains,
             "keep_crystal_waters": get("structure.keep_crystal_waters", True),
             "keep_crystal_ions": get("structure.keep_crystal_ions", True),
             "altloc_policy": "highest_occupancy",
             "remove_unknown_heterogens": get("structure.remove_unknown_heterogens", False),
             "preserve_chain_ids": True,
             "remove_input_hydrogens": True,
-            **(
-                {
-                    "repair": {
-                        "backend": "pdbfixer",
-                        "add_missing_heavy_atoms": True,
-                        "unresolved_residues": resolved.get(
-                            "structure.repair.unresolved_residues", "leave_absent"
-                        ),
-                    }
-                }
-                if resolved.get("structure.repair.add_missing_heavy_atoms")
-                else {}
-            ),
+            **({"remove_residues": removed} if removed else {}),
+            **({"repair": repair} if repair else {}),
         },
         "protein": {
             "forcefield": resolved["protein.forcefield"],
@@ -2231,6 +2598,105 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
         plan, resolved, manifest["metals"], manifest["ligands"]
     )
     return manifest
+
+
+# What stops the build when a group of heterogens is kept: none of them can
+# be built as it is.
+KEEPING_STOPS_THE_BUILD = {
+    "structure.replace_modified_residues": (
+        "mdprep cannot build a modified amino acid inside a chain. Answer yes to "
+        "replace each by its standard parent, or prepare this structure with a "
+        "tool that has templates for them."
+    ),
+    "structure.remove_glycans": (
+        "mdprep does not build glycans bonded to a protein. Answer yes to "
+        "prepare the protein without them, or prepare the glycoprotein with "
+        "GLYCAM, outside mdprep."
+    ),
+    "structure.remove_covalent_heterogens": (
+        "mdprep does not build heterogens bonded to the protein. Answer yes to "
+        "prepare the structure without them, or prepare it with a tool that "
+        "builds covalent ligands."
+    ),
+}
+
+
+def _require_buildable_heterogens(resolved: Mapping[str, Any]) -> None:
+    for decision_id, message in KEEPING_STOPS_THE_BUILD.items():
+        if resolved.get(decision_id) is False:
+            raise DecisionError(message, decision_id=decision_id)
+
+
+# Why each grouped removal removes what it does, for the structure report.
+REMOVAL_REASONS = {
+    "structure.remove_glycans": "glycan bonded to the protein, which mdprep does not build",
+    "structure.remove_covalent_heterogens": (
+        "bonded to the protein, which mdprep does not build"
+    ),
+}
+
+
+def _removed_residues(
+    plan: DecisionPlan, resolved: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """Every residue the answers leave out, each with the reason."""
+
+    removed: list[dict[str, Any]] = []
+    for decision in plan.decisions:
+        if decision.id in REMOVAL_REASONS and resolved.get(decision.id) is True:
+            removed.extend(
+                {"selector": target.to_selector(), "reason": REMOVAL_REASONS[decision.id]}
+                for target in decision.targets
+            )
+        elif decision.id == "structure.remove_additives" and resolved.get(decision.id) is True:
+            removed.extend(
+                {
+                    "selector": target.to_selector(),
+                    "reason": "crystallisation additive ("
+                    + CRYSTALLISATION_ADDITIVES.get(target.resname.strip().upper(), target.resname)
+                    + ")",
+                }
+                for target in decision.targets
+            )
+        elif (
+            decision.section == "metals"
+            and decision.id.endswith(".model")
+            and resolved.get(decision.id) == "remove"
+        ):
+            removed.append(
+                {
+                    "selector": decision.subject.to_selector(),
+                    "reason": "metal left out as answered: not part of the system",
+                }
+            )
+    return removed
+
+
+def _modified_residue_replacements(
+    plan: DecisionPlan, resolved: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    if resolved.get("structure.replace_modified_residues") is not True:
+        return []
+    return [
+        {
+            "selector": {
+                "chain": item["chain"],
+                "resname": item["resname"],
+                "resid": item["resid"],
+                "icode": item["icode"],
+            },
+            "parent": item["parent"],
+        }
+        for item in plan.findings.get("modified_residue_replacements", [])
+    ]
+
+
+def _in_chains(items: list[dict[str, Any]], keep_chains: Sequence[str]) -> list[dict[str, Any]]:
+    """Only what is in a chain being built: the rest is left out with its chain."""
+
+    if not keep_chains:
+        return items
+    return [item for item in items if item["selector"]["chain"] in keep_chains]
 
 
 def share_answers(plan: DecisionPlan, resolved: Mapping[str, Any]) -> dict[str, Any]:
@@ -2295,6 +2761,7 @@ def answer_conflicts(plan: DecisionPlan, answers: Mapping[str, Any]) -> Decision
         and shared.get(decision.id) == "bonded_mcpb"
     ]
     try:
+        _require_buildable_heterogens(shared)
         _require_one_bonded_fit(plan, shared, bonded)
         _require_a_fit_for_fitted_cofactors(plan, shared)
     except DecisionError as exc:
@@ -2515,15 +2982,29 @@ def _require_a_fit_for_fitted_cofactors(
     schema caught only at the end, as an error the page could not place.
     """
 
-    for decision in plan.decisions:
-        if decision.section != "metals" or not decision.id.endswith(".confirm_donors"):
-            continue
+    shells = [
+        decision
+        for decision in plan.decisions
+        if decision.section == "metals" and decision.id.endswith(".confirm_donors")
+    ]
+    # A cofactor on two metals -- a heme whose propionate holds a magnesium
+    # as well as its own iron -- is fitted with whichever site is fitted.
+    fitted = {
+        (target.chain, target.resid, target.icode)
+        for decision in shells
+        if resolved.get(f"metal.{decision.id.split('.')[1]}.model") == "bonded_mcpb"
+        and resolved.get(decision.id) is not False
+        for target in decision.targets[1:]
+    }
+    for decision in shells:
         site = decision.id.split(".")[1]
         model = resolved.get(f"metal.{site}.model")
         confirmed = resolved.get(decision.id)
         if model is None or (model == "bonded_mcpb" and confirmed is not False):
             continue
-        donors = {(target.chain, target.resid, target.icode) for target in decision.targets[1:]}
+        donors = {
+            (target.chain, target.resid, target.icode) for target in decision.targets[1:]
+        } - fitted
         for ligand in plan.decisions:
             if ligand.section != "ligands" or not ligand.id.endswith(".charge_method"):
                 continue
@@ -2693,7 +3174,7 @@ def _metal_blocks(
             continue
         site_id = decision.id.split(".")[1]
         model = resolved.get(decision.id)
-        if model is None:
+        if model is None or model == "remove":
             continue
         ion = {
             "selector": decision.subject.to_atom_selector(),
@@ -3072,15 +3553,22 @@ def _proposals(
                 + " ".join(terms)
                 + f" = {value:+d}. Change it if that is not this site.",
             )
-    for ligand_id, resname in plan.findings.get("known_cofactors", {}).items():
-        entry = KNOWN_METAL_FREE_COFACTORS[resname]
-        for field_name, value in (
-            ("smiles", entry.smiles),
-            ("net_charge", str(entry.net_charge)),
-        ):
-            decision_id = f"ligand.{ligand_id}.{field_name}"
-            if plan.by_id(decision_id) is not None:
-                proposals[decision_id] = (value, entry.explanation)
+    asked = {decision.id for decision in plan.decisions}
+    for table, finding in (
+        (KNOWN_METAL_FREE_COFACTORS, "known_cofactors"),
+        (KNOWN_ORGANIC_COFACTORS, "known_organic_cofactors"),
+    ):
+        for ligand_id, resname in plan.findings.get(finding, {}).items():
+            entry = table[resname]
+            for field_name, value in (
+                ("smiles", entry.smiles),
+                ("net_charge", str(entry.net_charge)),
+            ):
+                # A cofactor the structure resolved with its hydrogens has
+                # no SMILES question to propose an answer to.
+                decision_id = f"ligand.{ligand_id}.{field_name}"
+                if decision_id in asked:
+                    proposals[decision_id] = (value, entry.explanation)
     return proposals
 
 

@@ -204,11 +204,23 @@ def _render_plan(plan) -> None:
         "water_residues",
     ):
         findings.add_row(key.replace("_", " "), str(plan.findings[key]))
+    additives = set(plan.findings.get("additives", ()))
     for key in ("chains", "ligands", "metal_ions", "histidines", "possible_disulfides"):
-        values = plan.findings[key]
+        # An additive is a ligand only if the additives are kept, so it is
+        # listed with them.
+        values = [value for value in plan.findings[key] if value not in additives]
         findings.add_row(
             key.replace("_", " "), ", ".join(str(value) for value in values) or "none"
         )
+    for key, label in (
+        ("modified_residues", "modified residues"),
+        ("glycans", "glycans"),
+        ("covalent_heterogens", "bonded to the protein"),
+        ("additives", "crystallisation additives"),
+    ):
+        values = plan.findings.get(key, ())
+        if values:
+            findings.add_row(label, ", ".join(str(value) for value in values))
     copies = [
         group for group in plan.findings.get("oligomer", {}).get("groups", []) if len(group) > 1
     ]

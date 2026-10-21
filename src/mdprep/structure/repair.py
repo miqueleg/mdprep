@@ -49,6 +49,9 @@ class StructureRepairResult:
     warnings: tuple[str, ...]
 
     missing_residues_left_absent: tuple[dict[str, object], ...] = ()
+    # Modified residues PDBFixer replaced by their parents, each with the
+    # name it had and the one it got.
+    modified_residues_replaced: tuple[dict[str, object], ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -68,6 +71,7 @@ class StructureRepairResult:
                 self.missing_heavy_atoms_detected
             ),
             "added_atom_count": self.added_atom_count,
+            "modified_residues_replaced": list(self.modified_residues_replaced),
             "peptide_bond_checks": list(self.peptide_bond_checks),
             "random_seed": self.random_seed,
             "platform": self.platform,
@@ -161,13 +165,43 @@ def repair_structure(
                 for key, value in fixer.missingResidues.items()
                 if key in approved_keys
             }
+        replaced: list[dict[str, object]] = []
+        if config.replace_modified_residues:
+            # After the missing residues, which PDBFixer finds by matching
+            # residue names against SEQRES -- where a selenomethionine is
+            # still MSE. Before the missing atoms, so that what the parent has
+            # and the modified form lacked, a methionine's SD for a
+            # selenomethionine's SE, is built like any other missing atom.
+            fixer.nonstandardResidues = _listed_modified_residues(
+                fixer, config.replace_modified_residues
+            )
+            replaced = [
+                {
+                    "chain": residue.chain.id,
+                    "resname": residue.name,
+                    "resid": int(residue.id),
+                    "icode": (residue.insertionCode or "").strip() or None,
+                    "replacement": replacement,
+                }
+                for residue, replacement in fixer.nonstandardResidues
+            ]
+            fixer.replaceNonstandardResidues()
+        replaced_keys = {
+            (str(item["chain"]), int(item["resid"]), item["icode"]) for item in replaced
+        }
         fixer.findMissingAtoms()
         detected_atoms = _detected_missing_atoms(fixer)
-        if detected_atoms and not config.add_missing_heavy_atoms:
+        # A replaced residue is rebuilt to its parent's atoms by design.
+        unasked = [
+            item
+            for item in detected_atoms
+            if (str(item["chain"]), int(item["resid"]), item["icode"]) not in replaced_keys
+        ]
+        if unasked and not config.add_missing_heavy_atoms:
             formatted = ", ".join(
                 f"{item['chain']}:{item['resname']}{item['resid']} "
                 f"({','.join(item['atom_names'])})"
-                for item in detected_atoms
+                for item in unasked
             )
             raise StructureRepairError(
                 "Missing protein heavy atoms were detected but "
@@ -195,6 +229,10 @@ def repair_structure(
         original,
         repaired_raw,
         output_path=output,
+        replaced={
+            (str(item["chain"]), str(item["resname"]), int(item["resid"]), item["icode"])
+            for item in replaced
+        },
     )
     checks = _validate_repaired_peptide_bonds(
         repaired,
@@ -223,6 +261,7 @@ def repair_structure(
             for item in detected_residues
         ),
         missing_residues_left_absent=tuple(left_absent),
+        modified_residues_replaced=tuple(replaced),
         missing_heavy_atoms_detected=tuple(detected_atoms),
         added_atom_count=len(repaired.atoms) - len(original.atoms),
         peptide_bond_checks=tuple(checks),
@@ -230,6 +269,38 @@ def repair_structure(
         platform=config.platform,
         warnings=warnings,
     )
+
+
+def _listed_modified_residues(fixer: object, listed: list[object]) -> list[tuple[object, str]]:
+    """PDBFixer's residues for each listed modified residue, with its parent.
+
+    Exactly the listed ones. PDBFixer's own findNonstandardResidues would
+    replace any residue its table names, chain or not, and nobody asked for
+    those.
+    """
+
+    by_key = {
+        (
+            residue.chain.id,
+            residue.name,
+            int(residue.id),
+            (residue.insertionCode or "").strip() or None,
+        ): residue
+        for residue in fixer.topology.residues()  # type: ignore[attr-defined]
+    }
+    found: list[tuple[object, str]] = []
+    for item in listed:
+        selector = item.selector  # type: ignore[attr-defined]
+        key = (selector.chain, selector.resname, selector.resid, selector.icode or None)
+        residue = by_key.get(key)
+        if residue is None:
+            raise StructureRepairError(
+                "structure.repair.replace_modified_residues names "
+                f"{selector.chain}:{selector.resname}{selector.resid}{selector.icode or ''}, "
+                "which is not in the chains being built."
+            )
+        found.append((residue, item.parent))  # type: ignore[attr-defined]
+    return found
 
 
 def _write_repair_input(
@@ -477,8 +548,13 @@ def _restore_existing_atom_metadata(
     repaired: PdbStructure,
     *,
     output_path: Path,
+    replaced: set[tuple[str, str, int, str | None]] = frozenset(),
 ) -> PdbStructure:
-    original_by_identity = {atom.atom_identity: atom for atom in original.atoms}
+    # A residue replaced by its parent changes its name and some of its
+    # atoms on purpose; every other atom must come back as it went in.
+    original_by_identity = {
+        atom.atom_identity: atom for atom in original.atoms if atom.residue_key not in replaced
+    }
     repaired_by_identity = {atom.atom_identity: atom for atom in repaired.atoms}
     lost = sorted(set(original_by_identity) - set(repaired_by_identity))
     if lost:

@@ -45,9 +45,48 @@ relative executable path when needed.
 - `altloc_policy`: `highest_occupancy`, `first`, or `fail`.
 - `remove_unknown_heterogens`: remove unconfigured heterogens instead of
   failing.
+- `remove_residues`: residues left out on purpose, each with its reason:
+
+  ```yaml
+  remove_residues:
+    - selector: {chain: A, resname: GOL, resid: 410}
+      reason: crystallisation additive (glycerol)
+  ```
+
+  Applied before anything else looks at the structure, so a removed residue
+  is never an unknown heterogen, a ligand or a metal donor, and each one is
+  listed with its reason in `reports/structure_report.md`. A residue the
+  manifest also builds -- a ligand, a metal, an MCPB bond partner -- is
+  refused, and so is one the structure does not have. The builders write
+  this list for what the user agreed to drop: crystallisation additives,
+  glycans, a heterogen bonded to the protein, a metal from the purification.
+  See [heterogens.md](heterogens.md).
 - `preserve_chain_ids`: preserve chain IDs when possible.
 - `remove_input_hydrogens`: remove input hydrogens before protonation-stage PDB
   output.
+- `repair`: what PDBFixer may do to the protein, every part of it asked for
+  explicitly. Off (`backend: none`) by default.
+  - `backend`: `none` or `pdbfixer`.
+  - `add_missing_heavy_atoms`: rebuild side-chain atoms the input lacks.
+  - `unresolved_residues`: `fail` (default) or `leave_absent`, for residues
+    the deposition lists but never resolved.
+  - `missing_residues` and `sequence_source`: residues to build from the
+    sequence, each named.
+  - `replace_modified_residues`: modified amino acids inside a chain, each
+    replaced by its standard parent:
+
+    ```yaml
+    replace_modified_residues:
+      - selector: {chain: A, resname: MSE, resid: 14}
+        parent: MET
+    ```
+
+    The atoms the two share keep their coordinates; what only the parent
+    has -- a methionine's SD for a selenomethionine's SE -- is built. Where the
+    modification was the protein's chemistry (a phosphoserine), that
+    chemistry is gone, which is why each is named. Exactly the listed
+    residues are replaced; PDBFixer's own substitution table is not
+    consulted. Each replacement is reported.
 
 ## protein
 

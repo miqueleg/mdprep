@@ -350,6 +350,9 @@ async function applyResidueRename(residues, text, name) {
 
 function renderFindings() {
   const f = state.plan.findings;
+  // An additive is a ligand only if the student keeps the additives, so it
+  // is listed with them, not here.
+  const additives = new Set(f.additives || []);
   const rows = [
     ["Atoms", f.total_atoms],
     ["Residues", f.total_residues],
@@ -357,11 +360,21 @@ function renderFindings() {
     ["Waters", f.water_residues],
     ["Chains", f.chains.join(", ") || "none"],
     ["Copies of one protein", copiesSummary(f.oligomer)],
-    ["Ligands", f.ligands.join(", ") || "none"],
+    ["Ligands", f.ligands.filter((name) => !additives.has(name)).join(", ") || "none"],
     ["Metal ions", f.metal_ions.join(", ") || "none"],
     ["Histidines", f.histidines.length ? `${f.histidines.length}` : "none"],
     ["Possible disulfides", f.possible_disulfides.join("; ") || "none"],
   ];
+  // Heterogens that are not ligands, each group asked about once. Only the
+  // groups this structure has: four rows of "none" would bury the rest.
+  for (const [label, values] of [
+    ["Modified residues", f.modified_residues],
+    ["Glycans", f.glycans],
+    ["Bonded to the protein", f.covalent_heterogens],
+    ["Crystallisation additives", f.additives],
+  ]) {
+    if (values && values.length) rows.push([label, values.join(", ")]);
+  }
   el("findings").innerHTML =
     `<table>${rows
       .map(([k, v]) => `<tr><th>${k}</th><td>${escapeHtml(String(v))}</td></tr>`)

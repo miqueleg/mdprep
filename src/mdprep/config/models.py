@@ -5,7 +5,7 @@ from __future__ import annotations
 from math import isfinite
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class StrictModel(BaseModel):
@@ -34,6 +34,46 @@ class AtomSelector(ResidueSelector):
     atom_name: str = Field(min_length=1)
 
 
+class RemovedResidueConfig(StrictModel):
+    """One residue the build leaves out, and why.
+
+    Nothing is removed by inference: a residue goes only when it is named
+    here, and the reason goes with it into the structure report. The builder
+    writes these for what the user agreed to drop -- crystallisation
+    additives, glycans, a covalently attached heterogen, a metal from the
+    purification.
+    """
+
+    selector: ResidueSelector
+    reason: str = Field(min_length=1)
+
+
+STANDARD_AMINO_ACID_NAMES = frozenset(
+    {
+        "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
+        "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+    }
+)
+
+
+class ModifiedResidueReplacement(StrictModel):
+    """A modified residue of a chain, and the standard one it becomes."""
+
+    selector: ResidueSelector
+    parent: str
+
+    @field_validator("parent")
+    @classmethod
+    def validate_parent(cls, value: str) -> str:
+        parent = value.strip().upper()
+        if parent not in STANDARD_AMINO_ACID_NAMES:
+            raise ValueError(
+                f"{value!r} is not one of the twenty standard amino acids, so "
+                "no force field template can build it in the chain"
+            )
+        return parent
+
+
 class ProjectConfig(StrictModel):
     name: str
     input_structure: str
@@ -53,6 +93,16 @@ class StructureRepairConfig(StrictModel):
     # them, which is what an unresolved expression tag calls for: modelling a
     # disordered His-tag is worse than omitting it.
     unresolved_residues: Literal["fail", "leave_absent"] = "fail"
+    # A modified residue inside a chain -- a selenomethionine, an oxidised
+    # cysteine, a pyroglutamate -- cannot be built: no force field template
+    # bonds it into the chain. Each one listed here is replaced by its
+    # standard parent through PDBFixer, which keeps the atoms the two share
+    # and builds the rest; where the modification was real chemistry, that
+    # chemistry is gone, which is why each is named. Exactly these, and no
+    # others: PDBFixer's own table is not consulted.
+    replace_modified_residues: list[ModifiedResidueReplacement] = Field(
+        default_factory=list
+    )
     random_seed: int = Field(default=20260722, ge=0)
     platform: Literal["Reference", "CPU"] = "Reference"
     peptide_bond_min_angstrom: float = Field(default=1.10, gt=0)
@@ -71,17 +121,29 @@ class StructureRepairConfig(StrictModel):
             self.sequence_source
             or self.add_missing_heavy_atoms
             or self.missing_residues
+            or self.replace_modified_residues
         )
         if self.backend == "none" and configured:
             raise ValueError(
                 "structure.repair settings require backend: pdbfixer"
             )
         if self.backend == "pdbfixer" and not (
-            self.add_missing_heavy_atoms or self.missing_residues
+            self.add_missing_heavy_atoms
+            or self.missing_residues
+            or self.replace_modified_residues
         ):
             raise ValueError(
                 "structure.repair backend: pdbfixer must explicitly request "
-                "add_missing_heavy_atoms and/or list missing_residues"
+                "add_missing_heavy_atoms, replace_modified_residues and/or list "
+                "missing_residues"
+            )
+        keys = [
+            (item.selector.chain, item.selector.resname, item.selector.resid, item.selector.icode)
+            for item in self.replace_modified_residues
+        ]
+        if len(set(keys)) != len(keys):
+            raise ValueError(
+                "structure.repair.replace_modified_residues names a residue more than once"
             )
         if self.missing_residues and self.sequence_source is None:
             raise ValueError(
@@ -111,7 +173,25 @@ class StructureConfig(StrictModel):
     remove_unknown_heterogens: bool = False
     preserve_chain_ids: bool = True
     remove_input_hydrogens: bool = True
+    # Residues left out on purpose, each with its reason. Applied before
+    # anything else looks at the structure, so a removed residue is never
+    # an unknown heterogen, a ligand or a donor.
+    remove_residues: list[RemovedResidueConfig] = Field(default_factory=list)
     repair: StructureRepairConfig = Field(default_factory=StructureRepairConfig)
+
+    @model_validator(mode="after")
+    def validate_removed_residues(self) -> "StructureConfig":
+        keys = [
+            (item.selector.chain, item.selector.resname, item.selector.resid, item.selector.icode)
+            for item in self.remove_residues
+        ]
+        duplicates = sorted({key for key in keys if keys.count(key) > 1}, key=str)
+        if duplicates:
+            raise ValueError(
+                "structure.remove_residues names a residue more than once: "
+                + ", ".join(f"{c}:{n}{r}{i or ''}" for c, n, r, i in duplicates)
+            )
+        return self
 
 
 class ProteinConfig(StrictModel):
@@ -1086,6 +1166,7 @@ class ManifestConfig(StrictModel):
                 "but one nonbonded"
             )
         self._validate_shared_parameters()
+        self._validate_removed_residues_are_not_built()
         self._validate_refinement(ligand_ids=ligand_ids, metal_ids=metal_ids)
         self._validate_mcpb_refinement_geometry()
         if any(ligand.charge_method == "qmmesp_pyscf" for ligand in self.ligands):
@@ -1219,6 +1300,45 @@ class ManifestConfig(StrictModel):
                     f"that ligand's site, a metal site with parameters_from: "
                     f"{source.id if source is not None else '<its site>'}"
                 )
+
+    def _validate_removed_residues_are_not_built(self) -> None:
+        """A residue cannot be both left out and built."""
+
+        removed = {
+            (item.selector.chain, item.selector.resname, item.selector.resid, item.selector.icode)
+            for item in self.structure.remove_residues
+        }
+        if not removed:
+            return
+        used: list[tuple[str, tuple[str | None, str, int | None, str | None]]] = []
+        for ligand in self.ligands:
+            selector = ligand.selector
+            used.append(
+                (f"ligand {ligand.id!r}", (selector.chain, selector.resname, selector.resid, selector.icode))
+            )
+        for site in self.metals:
+            atoms = [ion.selector for ion in site.ions] + [
+                ion.selector for ion in site.coordinating_ions
+            ]
+            if site.mcpb is not None:
+                atoms += [bond.coordinator for bond in site.mcpb.bonds]
+                atoms += list(site.mcpb.additional_residues)
+            for selector in atoms:
+                used.append(
+                    (f"metal site {site.id!r}", (selector.chain, selector.resname, selector.resid, selector.icode))
+                )
+        clashes = sorted(
+            {
+                f"{label} uses {chain}:{resname}{resid}{icode or ''}"
+                for label, (chain, resname, resid, icode) in used
+                if (chain, resname, resid, icode) in removed
+            }
+        )
+        if clashes:
+            raise ValueError(
+                "structure.remove_residues leaves out residues the manifest also builds: "
+                + "; ".join(clashes)
+            )
 
     def _validate_mcpb_refinement_geometry(self) -> None:
         for site in self.metals:

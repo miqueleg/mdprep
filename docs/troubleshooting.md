@@ -2,8 +2,16 @@
 
 ## Unknown Heterogens
 
-Add the residue to `ligands:`, configure a one-atom ion under `metals:`, or set
+Add the residue to `ligands:`, configure a one-atom ion under `metals:`, list
+it under `structure.remove_residues` with the reason it goes, or set
 `structure.remove_unknown_heterogens: true` if removal is intended.
+
+## Glycans, Bonded Heterogens Or Modified Residues Stop The Build
+
+mdprep builds neither sugars nor other heterogens bonded to the protein, nor a
+modified amino acid inside a chain. Answering no to removing the first two, or
+to replacing the third by its standard parent, stops the build at that
+question. See [heterogens.md](heterogens.md).
 
 ## Missing External Tool
 
@@ -73,13 +81,15 @@ The error names this setting when it applies. The builder writes it for a site
 whose donors include a heme. See
 [metals.md](metals.md#smearing-the-xtb-occupations).
 
-## A Metal Cluster Or Heme c Is Refused
+## A Metal Cluster, A Bonded Heme Or A Vanadate Is Refused
 
 mdprep models a metal as one atom in a site of its own. A residue still holding
 several metal atoms once single metals have been read out of their cofactors --
 an iron-sulfur cluster -- cannot be described that way, and heme c is bonded to
-two cysteines, which makes it a covalent ligand. Both are refused before any
-question is asked rather than failing in antechamber or tleap later.
+two cysteines, which makes it a covalent ligand. A myeloperoxidase's heme is
+bonded to the protein too, through the bonds its file declares. A vanadate is
+not split: what would remain is four oxygens bonded to nothing. All are refused
+before any question is asked rather than failing in antechamber or tleap later.
 
 ## Two Bonded Sites Would Each Need A Fit
 

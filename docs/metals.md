@@ -644,8 +644,9 @@ silently choosing one charge model.
 - Metal charges are limited to +1 through +4 because the mandatory provisional
   hydrogenation/QMMESP environment uses Amber Li/Merz ion models.
 - No metal-metal bond inference, metal clusters, covalent ligands (heme c
-  among them), noncanonical polymer residues, ORCA backend, or Multiwfn
-  dependency. A metal inside a cofactor is supported; see
+  among them), noncanonical polymer residues (a modified residue with a
+  standard parent can be replaced by it; see [heterogens.md](heterogens.md)),
+  ORCA backend, or Multiwfn dependency. A metal inside a cofactor is supported; see
   [A metal inside a cofactor](#a-metal-inside-a-cofactor-hemes).
 - No small-model optimization inside the MCPB Hessian stage. Geometry must come
   from a completed ASH QM/MM refinement or an explicitly supplied optimized PDB.
@@ -855,11 +856,34 @@ own site's constants and its distances after every step: look at both.
   makes it a covalent ligand, and it is refused by name. A bond cannot be told
   from a clash by distance alone, and predicted complexes have clashes that
   short.
-- Heme b is the only cofactor whose SMILES is proposed. Another single-metal
-  cofactor is split the same way, and its metal-free SMILES has to be typed.
+- **A heme bonded to the protein** -- the heme of a myeloperoxidase or a
+  lactoperoxidase, held by ester and sulfonium bonds the file declares in its
+  LINK records -- is refused the same way: it cannot be built bonded, and
+  cannot be left out without its metal site. See
+  [heterogens.md](heterogens.md).
+- **An oxoanion** is not split: the vanadate of a vanadium haloperoxidase
+  would leave four oxygens bonded to nothing, so it stays whole and is
+  refused, being neither a metal site nor a ligand.
+- Heme b is the only metal cofactor whose SMILES is proposed. Another
+  single-metal cofactor is split the same way, and its metal-free SMILES has
+  to be typed.
 
 [examples/19_cyp119_heme_mcpb.yaml](../examples/19_cyp119_heme_mcpb.yaml) is
 the manifest for CYP119's chain A.
+
+## Magnesium, calcium, and metals that are not part of the system
+
+Magnesium and calcium are proposed nonbonded even when the planner finds a
+coordination shell: they are closed-shell ions held by electrostatics, which a
+Li/Merz ion model describes, and a QM calculation would add cost and nothing
+else. 5OXU's magnesium, held by the heme's propionate, is one. A nonbonded ion
+next to a bonded site's QM region is part of the MM environment of its QM/MM
+refinement, like a crystal chloride.
+
+A metal that is not inside a cofactor can also be left out: its model
+question offers **Remove it**, for a nickel from a His-tag purification or a
+cadmium from the crystallisation buffer, and the metal goes into
+`structure.remove_residues` with its reason. Nothing else is asked about it.
 
 ## Free ions in the crystal
 

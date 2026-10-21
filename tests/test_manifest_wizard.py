@@ -136,7 +136,10 @@ def test_unreachable_questions_are_never_asked(tmp_path):
 
 
 def test_preset_answers_are_not_asked(tmp_path):
-    prompt = scripted_prompter({"structure.remove_unknown_heterogens": "no"})
+    # The sulfate is a crystallisation additive, kept here to be a ligand.
+    prompt = scripted_prompter(
+        {"structure.remove_unknown_heterogens": "no", "structure.remove_additives": "no"}
+    )
 
     run_wizard(
         DATA / "protein_with_waters.pdb",

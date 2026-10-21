@@ -118,7 +118,8 @@ def test_every_other_atom_keeps_its_place(tmp_path):
             _atom(1, "FE", "HEM", 401, "FE", 0.0),
             _atom(2, "NA", "HEM", 401, "N", 2.0),
             _atom(3, "O", "HOH", 501, "O", 9.0),
-            _atom(4, "NB", "HEM", 401, "N", -2.0),
+            # Bonded to NA: what remains of the cofactor is one molecule.
+            _atom(4, "C1A", "HEM", 401, "C", 3.4),
             _atom(5, "O", "HOH", 502, "O", -9.0),
         ],
     )
@@ -126,7 +127,7 @@ def test_every_other_atom_keeps_its_place(tmp_path):
     atoms = read_pdb(path).atoms
 
     assert [(atom.resname, atom.name) for atom in atoms] == [
-        ("HEM", "NA"), ("HOH", "O"), ("HEM", "NB"), ("FE", "FE"), ("HOH", "O"),
+        ("HEM", "NA"), ("HOH", "O"), ("HEM", "C1A"), ("FE", "FE"), ("HOH", "O"),
     ]
 
 

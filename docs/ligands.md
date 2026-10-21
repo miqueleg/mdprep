@@ -41,7 +41,14 @@ Three things are checked, and one is not:
   enol C-OH would refine near 1.36. Delocalised groups -- carboxylate, nitro,
   guanidinium, phosphate, sulfonyl -- and aromatic rings are skipped, because
   a SMILES has to write their symmetric geometry as alternating orders and the
-  formal numbers there say nothing about length.
+  formal numbers there say nothing about length. A single bond a pi system
+  reaches across is measured against a conjugated length rather than a
+  saturated one: C-C between two sp2 carbons against 1.46 A, and C-N from an
+  sp2 carbon to a neutral three-coordinate nitrogen -- an amide, an amino
+  group on a ring, the ring nitrogen of NADH -- against 1.36 A. Measured
+  against 1.52 and 1.47, every amide, adenine and flavin looked like a wrong
+  tautomer. C-O is not relaxed: an enol's C-OH against a ketone's C=O is what
+  the check is for.
 
 Note what the geometry check does and does not establish. At typical protein
 resolution the ligand's bond lengths come from the refinement restraints
@@ -57,6 +64,34 @@ molecule has a CH2-CH2.
 
 A ligand that already carries hydrogens is left alone, and a SMILES is neither
 asked for nor applied to it.
+
+## Cofactors whose SMILES is proposed
+
+Some cofactors' chemistry is fixed by their name up to a protonation state,
+and typing their SMILES in the middle of a form is not something to ask of
+anyone. For these the builders propose the SMILES and the net charge at pH 7,
+with the protonation it assumes, filled in and changeable:
+
+| Residue | Cofactor | Net charge | Assumes |
+| --- | --- | --- | --- |
+| HEM | heme b, without its iron | -4 | both propionates ionised |
+| FAD | flavin adenine dinucleotide, oxidised | -2 | diphosphate ionised, flavin N3 protonated |
+| FMN | flavin mononucleotide, oxidised | -2 | phosphate dianion |
+| SAM | S-adenosylmethionine | +1 | sulfonium, zwitterionic amino acid |
+| SAH | S-adenosylhomocysteine | 0 | zwitterionic amino acid |
+| NAD | NAD+ | -1 | diphosphate ionised |
+| NAI | NADH | -2 | diphosphate ionised |
+| NAP | NADP+ | -3 | every phosphate ionised |
+| NDP | NADPH | -4 | every phosphate ionised |
+
+A residue gets a proposal only when it has exactly the heavy atoms of its
+cofactor: one that lost atoms to disorder gets nothing. Each SMILES is tested
+against the cofactor as a deposition holds it (`tests/data/cofactors`). Some
+depositions of NADH and NADPH refine the nicotinamide ring flat, as if it were
+oxidised; the bond-length check then reports it, and which state you simulate
+is yours to decide. A reduced flavin -- the FADH- that reacts with O2 in a
+flavin-dependent halogenase -- is a different molecule: change the SMILES and
+the charge.
 
 ## AM1-BCC
 

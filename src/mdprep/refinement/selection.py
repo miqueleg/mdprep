@@ -14,6 +14,7 @@ from mdprep.refinement.mapping import (
     map_residues_by_coordinates,
 )
 from mdprep.structure.classify import (
+    is_bulk_ion_residue,
     is_nonstandard_nonwater_residue,
     is_standard_protein_residue,
     is_water_residue,
@@ -240,6 +241,16 @@ def select_refinement_regions(
     if not qm_atoms:
         raise RefinementSelectionError("The configured QM region contains no physical atoms")
 
+    # An ion whose parameters the build already has -- a nonbonded metal
+    # site, a crystal ion from Amber's ion library -- is part of the MM
+    # environment like any residue of the protein, not an undeclared
+    # heterogen. 5OXU's magnesium sits on the heme's propionate.
+    mm_ions = {
+        input_index_by_object[id(ion.residue)]
+        for site in resolved_metal_sites
+        if site.config.model == "nonbonded"
+        for ion in site.ions
+    }
     active_residue_indices = set(qm_residue_indices)
     residue_cutoff = manifest.refinement.active_region_cutoff_angstrom
     water_cutoff = manifest.refinement.active_water_cutoff_angstrom
@@ -257,7 +268,9 @@ def select_refinement_regions(
         if (
             contacts_qm
             and residue_index not in qm_residue_indices
+            and residue_index not in mm_ions
             and is_nonstandard_nonwater_residue(input_residue)
+            and not is_bulk_ion_residue(input_residue)
         ):
             raise RefinementSelectionError(
                 "A non-protein, non-water component contacts the configured QM region but "

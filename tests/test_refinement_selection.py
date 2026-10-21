@@ -200,3 +200,98 @@ def test_hydrogen_only_policy_keeps_full_qm_region_but_moves_only_active_hydroge
     assert all(topology.atoms[index].element == "H" for index in selection.active_atom_indices)
     assert not set(selection.qm_atom_indices).issubset(selection.active_atom_indices)
     assert selection.movable_atom_policy == "active_region_hydrogens"
+
+
+def _magnesium_beside_the_ligand() -> ManifestConfig:
+    """The substrate in the QM region, a nonbonded magnesium against it."""
+
+    manifest = _manifest()
+    data = manifest.model_dump(mode="json")
+    data["metals"] = [
+        {
+            "id": "magnesium",
+            "model": "nonbonded",
+            "ions": [
+                {
+                    "selector": {"chain": "Z", "resname": "MG", "resid": 1, "atom_name": "MG"},
+                    "element": "Mg",
+                    "charge": 2,
+                    "multiplicity": 1,
+                }
+            ],
+            "nonbonded": {"parameter_set": "12_6"},
+        }
+    ]
+    data["refinement"]["qm_components"] = {
+        "ligands": ["substrate"],
+        "metal_sites": [],
+        "metal_coordinating_residues": {},
+    }
+    return ManifestConfig.model_validate(data)
+
+
+def _with_neighbour(resname: str, element: str) -> tuple[PdbStructure, PdbStructure]:
+    leap_input = _structure(
+        "input.pdb",
+        [
+            _atom(1, "C1", "SUB", "B", 501, 0.0, "C", "HETATM"),
+            _atom(2, "O1", "SUB", "B", 501, 0.5, "O", "HETATM"),
+            _atom(3, resname, resname, "Z", 1, 2.6, element, "HETATM"),
+        ],
+    )
+    topology = _structure(
+        "provisional.pdb",
+        [
+            _atom(1, "C1", "SUB", "", 1, 0.0, "C", "HETATM"),
+            _atom(2, "O1", "SUB", "", 1, 0.5, "O", "HETATM"),
+            _atom(3, resname, resname, "", 2, 2.6, element, "HETATM"),
+        ],
+    )
+    return leap_input, topology
+
+
+def test_a_nonbonded_metal_against_the_qm_region_is_mm_environment():
+    """Its charge and parameters are in the topology like any residue's.
+
+    5OXU's magnesium sits on the propionate of the heme whose iron is the
+    QM region, and refinement used to stop on it as an undeclared heterogen.
+    """
+
+    leap_input, topology = _with_neighbour("MG", "Mg")
+
+    selection = select_refinement_regions(
+        leap_input_structure=leap_input,
+        topology_structure=topology,
+        manifest=_magnesium_beside_the_ligand(),
+    )
+
+    assert selection.qm_residue_indices == (0,)
+    assert 1 in selection.active_residue_indices
+    assert selection.total_qm_charge == 0
+
+
+def test_a_crystal_chloride_against_the_qm_region_is_mm_environment():
+    leap_input, topology = _with_neighbour("CL", "Cl")
+
+    selection = select_refinement_regions(
+        leap_input_structure=leap_input,
+        topology_structure=topology,
+        manifest=_magnesium_beside_the_ligand().model_copy(update={"metals": []}),
+    )
+
+    assert selection.qm_residue_indices == (0,)
+
+
+def test_an_undeclared_heterogen_against_the_qm_region_still_stops_it():
+    import pytest
+
+    from mdprep.refinement.selection import RefinementSelectionError
+
+    leap_input, topology = _with_neighbour("GOL", "C")
+
+    with pytest.raises(RefinementSelectionError, match="was not explicitly selected"):
+        select_refinement_regions(
+            leap_input_structure=leap_input,
+            topology_structure=topology,
+            manifest=_magnesium_beside_the_ligand().model_copy(update={"metals": []}),
+        )

@@ -46,10 +46,29 @@ that. These have no suggested value, and a front end cannot skip them:
 - **Removing unknown heterogens.** Normalization must never discard a residue
   that was not explicitly configured, so the question names every residue at
   stake.
+- **Removing a heterogen bonded to the protein**, a covalent intermediate for
+  instance, and **replacing a modified residue** other than a selenomethionine.
 - **Production length**, when MD is enabled. There is no sensible default.
 
 Free monatomic metals are offered as metal sites, never as GAFF ligands. Bulk
 counterions are treated as solvent and are not asked about at all.
+
+## Heterogens that are not ligands
+
+Before the ligands, the planner sorts out the heterogens that are not ones,
+and asks about each group once, with every member listed:
+
+- **Modified residues** in a chain -- replace each with its standard parent?
+  Proposed yes for selenomethionine; asked without a proposal otherwise.
+- **Glycans** bonded to the protein -- remove them? Proposed yes.
+- **Other heterogens bonded to the protein** -- remove them? No proposal.
+- **Crystallisation additives** -- remove them? Proposed yes. Answer no to be
+  asked about each as a ligand.
+
+Keeping a group mdprep cannot build stops the build at that question, and
+every removal is written to `structure.remove_residues` with its reason. See
+[heterogens.md](heterogens.md), and [enzyme_families.md](enzyme_families.md)
+for what this means for each family of halogenating enzymes.
 
 ## Metal sites
 
@@ -84,8 +103,13 @@ stated as CYM.
 
 A metal deposited inside a cofactor, a heme's iron, is read out into a residue
 of its own, and the porphyrin left behind is a ligand on it. Heme b's SMILES
-and net charge are proposed, with the protonation they assume; any other
-cofactor's are asked. See [metals.md](metals.md#a-metal-inside-a-cofactor-hemes).
+and net charge are proposed, with the protonation they assume, and so are
+FAD's, FMN's, SAM's, SAH's and the nicotinamides'; any other ligand's are
+asked. See [metals.md](metals.md#a-metal-inside-a-cofactor-hemes) and
+[ligands.md](ligands.md#cofactors-whose-smiles-is-proposed).
+
+Magnesium and calcium are proposed nonbonded, and a metal that is not inside
+a cofactor can be removed instead of modelled -- a nickel from a His-tag, say.
 
 The Hessian defaults to GFN2, which is orders of magnitude cheaper than DFT and
 is what makes a bonded site tractable outside a cluster; g-xTB and PySCF DFT

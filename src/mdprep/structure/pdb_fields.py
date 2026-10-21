@@ -129,7 +129,10 @@ def split_cofactor_metals(
 
     A residue holding more than one metal atom -- an iron-sulfur cluster --
     is left whole: splitting it would not make it something mdprep can
-    parameterise.
+    parameterise. So is one whose remainder would fall apart: a vanadate is
+    four oxygens bonded to nothing but the vanadium, and taking it out
+    leaves four loose oxygens under one residue name, not a ligand. That is
+    told by every remaining atom being on its own.
     """
 
     keys: list[tuple[str, str, int, str | None]] = []
@@ -152,6 +155,22 @@ def split_cofactor_metals(
             continue
         (metal,) = metals
         element = _element_of(metal)
+        remainder = [
+            atom for atom in residue_atoms
+            if atom is not metal and _element_of(atom) not in {"H", "D"}
+        ]
+        fragments = _fragment_count(remainder)
+        # Every atom on its own: an oxoanion, whose atoms are bonded to the
+        # metal and to nothing else. A cofactor with a disordered gap still
+        # has fragments of several atoms, and is split as before.
+        if len(remainder) > 1 and fragments == len(remainder):
+            warnings.append(
+                f"{_label(key)} holds a metal atom, {metal.name.strip()} "
+                f"({_canonical(element)}), whose removal would leave {fragments} "
+                "fragments bonded to nothing but it -- an oxoanion such as "
+                "vanadate -- so it was left whole."
+            )
+            continue
         new_key = (chain_id, element, resid, icode)
         if new_key in members:
             raise PdbFieldError(
@@ -212,6 +231,45 @@ def expected_split_metal_numbering() -> Iterator[None]:
 
 def _element_of(atom: AtomRecord) -> str:
     return (atom.element or "").strip().upper()
+
+
+# Covalent radii, for telling whether the atoms left in a cofactor without
+# its metal are still one molecule. Anything not listed is taken as carbon.
+_COVALENT_RADII = {
+    "H": 0.31, "B": 0.84, "C": 0.76, "N": 0.71, "O": 0.66, "F": 0.57,
+    "SI": 1.11, "P": 1.07, "S": 1.05, "CL": 1.02, "AS": 1.19, "SE": 1.20,
+    "BR": 1.20, "I": 1.39,
+}
+
+
+def _fragment_count(atoms: list[AtomRecord]) -> int:
+    """How many separate molecules these atoms form, bonded by distance."""
+
+    heavy = [atom for atom in atoms if _element_of(atom) not in {"H", "D"}]
+    if len(heavy) < 2:
+        return len(heavy)
+    parent = list(range(len(heavy)))
+
+    def root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for i, first in enumerate(heavy):
+        for j in range(i + 1, len(heavy)):
+            second = heavy[j]
+            limit = (
+                _COVALENT_RADII.get(_element_of(first), 0.76)
+                + _COVALENT_RADII.get(_element_of(second), 0.76)
+                + 0.45
+            )
+            distance_squared = (
+                (first.x - second.x) ** 2 + (first.y - second.y) ** 2 + (first.z - second.z) ** 2
+            )
+            if distance_squared <= limit * limit:
+                parent[root(i)] = root(j)
+    return len({root(index) for index in range(len(heavy))})
 
 
 def _label(key: tuple[str, str, int, str | None]) -> str:
