@@ -46,8 +46,8 @@ ANSWERS = {
     "ligand.a_akg_304.net_charge": "-2",
     "metal.a_fe2_302_site.charge": "2",
     "metal.a_fe2_302_site.confirm_donors": "true",
-    "metal.a_fe2_302_site.multiplicity": "5",
     "metal.a_fe2_302_site.model_charge": "-1",
+    "refinement.total_qm_multiplicity": "5",
 }
 
 
@@ -204,17 +204,15 @@ def test_a_proposed_answer_is_shown_filled_in_with_its_arithmetic(report):
 
 
 def test_a_question_with_nothing_to_propose_is_still_shown_empty(report):
-    """The iron's own oxidation state is not inferable from a deposition that
-    calls the residue FE2 -- it is, and that one is proposed -- but the
-    multiplicity is not, and must not be prefilled with anything."""
+    """A deposition that calls the iron FE2 settles its oxidation state, and
+    that one is proposed. The spin is not settled by anything in the file,
+    and must not be prefilled with anything."""
 
     steps = {step["id"]: step for step in report["asked"] if step.get("id")}
-    multiplicity = next(
-        step for key, step in steps.items() if key.endswith(".multiplicity")
-    )
+    spin = steps["refinement.total_qm_multiplicity"]
 
-    assert multiplicity["prefilled"] == ""
-    assert "cannot be guessed" in multiplicity["note"]
+    assert spin["prefilled"] == ""
+    assert "cannot be guessed" in spin["note"]
 
 
 def test_the_page_never_asks_for_an_output_directory(report):

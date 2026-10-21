@@ -791,7 +791,7 @@ six donors, NA, NB, NC and ND, the cysteine's SG and the water's O, and asks:
 | --- | --- | --- |
 | Oxidation state | +3 | `HEM` does not say: Fe(III) in a resting P450, Fe(II) in deoxymyoglobin |
 | Cysteine protonation | `CYM` | The proximal thiolate. Asked before the model charge, which counts it |
-| Spin multiplicity | 2 | Six-coordinate low-spin Fe(III). Five-coordinate, with the water gone, it is high-spin: 6 |
+| Spin of the QM region | 2 | Six-coordinate low-spin Fe(III). Five-coordinate, with the water gone, it is high-spin: 6 |
 
 It also proposes, filled in and changeable:
 

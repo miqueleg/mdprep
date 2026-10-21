@@ -115,7 +115,6 @@ BONDED_AQUA = {
     "metal.z_zn_500_site.model": "bonded_mcpb",
     "metal.z_zn_500_site.charge": 2,
     "metal.z_zn_500_site.confirm_donors": True,
-    "metal.z_zn_500_site.multiplicity": 1,
     "metal.z_zn_500_site.model_charge": 2,
     "refinement.total_qm_multiplicity": 1,
 }
@@ -138,7 +137,6 @@ def test_opc_is_fine_when_the_metal_holds_no_water():
         "metal.z_zn_500_site.model": "bonded_mcpb",
         "metal.z_zn_500_site.charge": 2,
         "metal.z_zn_500_site.confirm_donors": True,
-        "metal.z_zn_500_site.multiplicity": 1,
         "metal.z_zn_500_site.model_charge": 2,
         "refinement.total_qm_multiplicity": 1,
         "protein.forcefield": "ff19SB",
@@ -146,18 +144,6 @@ def test_opc_is_fine_when_the_metal_holds_no_water():
     }
 
     assert build_manifest(plan, answers)["protein"]["water_model"] == "OPC"
-
-
-def test_the_spin_proposal_counts_a_model_accepted_by_default():
-    """The bonded model is the default for a metal with donors. Accepting it
-    without typing it used to make every bonded-only question look
-    unreachable, so 2FCT's iron got no spin proposal at all."""
-
-    plan = plan_decisions(DATA / "protein_zinc_aqua.pdb")
-    typed = {key: value for key, value in BONDED_AQUA.items() if not key.endswith(".model")}
-    typed["metal.z_zn_500_site.multiplicity"] = 5
-
-    assert proposed_answers(plan, typed)["refinement.total_qm_multiplicity"] == "5"
 
 
 def test_the_model_charge_is_proposed_from_an_accepted_oxidation_state():

@@ -133,7 +133,7 @@ def test_a_coordinated_metal_is_proposed_as_a_bonded_site():
     # here only because this residue is called ZN, which settles it.
     blocking = {decision.id for decision in plan.blocking()}
     assert "metal.z_zn_500_site.confirm_donors" in blocking
-    assert "metal.z_zn_500_site.multiplicity" in blocking
+    assert "refinement.total_qm_multiplicity" in blocking
 
 
 def test_unknown_heterogen_removal_is_blocking():
@@ -282,7 +282,7 @@ def test_blocking_count_respects_answers_already_given():
     # Zinc's oxidation state is settled by its residue name, so it is not
     # blocking either way; what a bonded site adds is what it alone needs.
     assert "metal.z_zn_500_site.charge" not in bonded_ids | nonbonded_ids
-    assert "metal.z_zn_500_site.multiplicity" in bonded_ids - nonbonded_ids
+    assert "refinement.total_qm_multiplicity" in bonded_ids - nonbonded_ids
     # The capped-model questions only arise for the bonded model.
     assert "metal.z_zn_500_site.model_charge" in bonded_ids
     assert "metal.z_zn_500_site.model_charge" not in nonbonded_ids
@@ -313,7 +313,6 @@ def test_a_confirmed_coordination_shell_is_generated():
         "metal.z_zn_500_site.model": "bonded_mcpb",
         "metal.z_zn_500_site.charge": 2,
         "metal.z_zn_500_site.confirm_donors": True,
-        "metal.z_zn_500_site.multiplicity": 1,
         "refinement.total_qm_multiplicity": 1,
         "metal.z_zn_500_site.model_charge": 2,
     }
@@ -919,7 +918,6 @@ def test_the_answer_reaches_the_structure_the_refusal_was_about():
         "ligand.k_lg2_1.smiles": "OCC=O",
         "metal.f_fe_1_site.charge": 2,
         "metal.f_fe_1_site.confirm_donors": True,
-        "metal.f_fe_1_site.multiplicity": 5,
         "refinement.total_qm_multiplicity": 5,
         "molecular_dynamics.enabled": False,
         "metal.f_fe_1_site.donor_state.a_asp_131": "ASH",

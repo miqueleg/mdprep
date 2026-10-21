@@ -42,7 +42,6 @@ METAL_STRUCTURE = REPO / "tests" / "data" / "protein_histidine_zinc.pdb"
 # region's own multiplicity is asked separately from the ion's: the region is
 # one quantum system, and its spin is not a function of its parts.
 METAL_ANSWERS = {
-    "metal.z_zn_500_site.multiplicity": "1",
     "refinement.total_qm_multiplicity": "1",
 }
 

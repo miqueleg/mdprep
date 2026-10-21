@@ -170,7 +170,6 @@ def test_a_bonded_site_keeps_its_halide_when_the_others_go(tmp_path):
         "metal.z_zn_500_site.model": "bonded_mcpb",
         "metal.z_zn_500_site.charge": 2,
         "metal.z_zn_500_site.confirm_donors": True,
-        "metal.z_zn_500_site.multiplicity": 1,
         "metal.z_zn_500_site.model_charge": 1,
         "refinement.total_qm_multiplicity": 1,
     }

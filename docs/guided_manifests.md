@@ -64,14 +64,21 @@ and the site is reported for manual work rather than invented. The oxidation
 state, the spin multiplicity and the capped-model charge have no defaults
 either, because none of them can be read off a structure.
 
+The spin is asked once, for the QM region: the metal, everything bonded to it
+and the cofactors. One bonded site is fitted per preparation and the cofactors
+in it are closed shell, so that one answer is also the spin of the site's
+MCPB.py models (`ions[].multiplicity`, `mcpb.small_model_spin`,
+`mcpb.large_model_spin`), and the metal is not asked separately. The question
+says what usually decides it: high-spin Fe(II) is 5, high-spin Fe(III) 6,
+Zn(II) 1, and for a heme, the ligands across the heme plane.
+
 A ligand that coordinates the metal takes its charges from that site's MCPB fit
 rather than an independent AM1-BCC calculation, since fitting a bonded donor
 separately leaves the site electrostatically inconsistent. A ligand that does
 not coordinate keeps AM1-BCC.
 
 A titratable side chain on the metal -- an aspartate, a cysteine -- is asked
-its protonation right after the shell is confirmed, before the spin and the
-model charge. The model charge is then proposed from the states as given:
+its protonation right after the shell is confirmed, before the model charge. The model charge is then proposed from the states as given:
 a heme's cysteine is named CYS and counts as the thiolate, -1, once it has been
 stated as CYM.
 

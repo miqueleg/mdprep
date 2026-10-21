@@ -193,7 +193,6 @@ def test_a_confirmed_coordination_shell_is_written(tmp_path):
             "metal.z_zn_500_site.model": "bonded_mcpb",
             "metal.z_zn_500_site.charge": "2",
             "metal.z_zn_500_site.confirm_donors": "yes",
-            "metal.z_zn_500_site.multiplicity": "1",
             "metal.z_zn_500_site.model_charge": "2",
             "refinement.total_qm_multiplicity": "1",
         }

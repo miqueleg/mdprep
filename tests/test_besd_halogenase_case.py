@@ -234,7 +234,6 @@ BESD_ANSWERS = {
     "metal.a_fe2_302_site.model": "bonded_mcpb",
     "metal.a_fe2_302_site.charge": 2,
     "metal.a_fe2_302_site.confirm_donors": True,
-    "metal.a_fe2_302_site.multiplicity": 5,
     # The region as a whole, which mdprep asks for rather than taking
     # from the iron: here the iron is the only open shell, so it agrees.
     "refinement.total_qm_multiplicity": 5,

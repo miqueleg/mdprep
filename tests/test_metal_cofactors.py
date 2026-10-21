@@ -36,7 +36,7 @@ CHAIN_A = {
     "metal.a_fe_1401_site.charge": "3",
     "metal.a_fe_1401_site.confirm_donors": "true",
     "metal.a_fe_1401_site.donor_state.a_cys_317": "CYM",
-    "metal.a_fe_1401_site.multiplicity": "2",
+    "refinement.total_qm_multiplicity": "2",
 }
 
 
@@ -217,7 +217,7 @@ def test_the_oxidation_state_is_asked_not_read_off_the_name(plan):
     assert charge.requires_user_input
     assert "came out of A:HEM1401" in charge.why
     assert "Fe(III) in a resting cytochrome P450" in charge.why
-    assert "low-spin, 2" in plan.by_id("metal.a_fe_1401_site.multiplicity").why
+    assert "low-spin, 2" in plan.by_id("refinement.total_qm_multiplicity").why
 
 
 def test_the_cysteine_state_is_asked_before_the_model_charge(plan):
@@ -226,7 +226,6 @@ def test_the_cysteine_state_is_asked_before_the_model_charge(plan):
     assert (
         ids.index("metal.a_fe_1401_site.confirm_donors")
         < ids.index("metal.a_fe_1401_site.donor_state.a_cys_317")
-        < ids.index("metal.a_fe_1401_site.multiplicity")
         < ids.index("metal.a_fe_1401_site.model_charge")
     )
 

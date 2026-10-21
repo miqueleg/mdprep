@@ -44,7 +44,6 @@ SHARED = {
     "ligand.a_akg_897.net_charge": -2,
     "ligand.a_akg_897.smiles": AKG_SMILES,
     "metal.a_fe2_900_site.confirm_donors": True,
-    "metal.a_fe2_900_site.multiplicity": 5,
     "metal.a_fe2_900_site.model_charge": -1,
     "refinement.total_qm_multiplicity": 5,
 }
@@ -54,7 +53,6 @@ CHAIN_B = {
     "ligand.b_akg_898.net_charge": -2,
     "ligand.b_akg_898.smiles": AKG_SMILES,
     "metal.b_fe2_899_site.confirm_donors": True,
-    "metal.b_fe2_899_site.multiplicity": 5,
     "metal.b_fe2_899_site.model_charge": -1,
 }
 

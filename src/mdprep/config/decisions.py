@@ -1471,6 +1471,35 @@ STANDARD_DONOR_FORMAL_CHARGE = {
 }
 
 
+def source_cofactor(
+    residue: ResidueRecord,
+    all_residues: Sequence[ResidueRecord],
+    assigned_resnames: frozenset[str] = frozenset(),
+) -> ResidueRecord | None:
+    """The cofactor a metal was read out of, if it was.
+
+    A metal mdprep took out of a cofactor as it read the structure -- a
+    heme's iron -- keeps the cofactor's chain and number, and its name is one
+    mdprep assigned. That is how the cofactor is found again.
+    """
+
+    if residue.id.resname.strip().upper() not in {
+        name.strip().upper() for name in assigned_resnames
+    }:
+        return None
+    return next(
+        (
+            other
+            for other in all_residues
+            if other is not residue
+            and len(other.atoms) > 1
+            and (other.id.chain_id, other.id.resid, other.id.icode)
+            == (residue.id.chain_id, residue.id.resid, residue.id.icode)
+        ),
+        None,
+    )
+
+
 def _metal_decisions(
     residue: ResidueRecord,
     all_residues: Sequence[ResidueRecord],
@@ -1484,24 +1513,7 @@ def _metal_decisions(
     name_assigned = residue.id.resname.strip().upper() in {
         name.strip().upper() for name in assigned_resnames
     }
-    # A metal mdprep took out of a cofactor as it read the structure -- a
-    # heme's iron -- keeps the cofactor's chain and number, and its name is
-    # one mdprep assigned. That is how the cofactor is found again here.
-    cofactor = (
-        next(
-            (
-                other
-                for other in all_residues
-                if other is not residue
-                and len(other.atoms) > 1
-                and (other.id.chain_id, other.id.resid, other.id.icode)
-                == (residue.id.chain_id, residue.id.resid, residue.id.icode)
-            ),
-            None,
-        )
-        if name_assigned
-        else None
-    )
+    cofactor = source_cofactor(residue, all_residues, assigned_resnames)
     donors = metal_donor_atoms(all_residues, residue)
     donor_residues: list[ResidueRecord] = []
     for donor_residue, _, _ in donors:
@@ -1705,32 +1717,6 @@ def _metal_decisions(
     decisions.extend(
         [
             Decision(
-                id=f"metal.{site_id}.multiplicity",
-                section="metals",
-                question=f"Spin multiplicity of {display}",
-                kind="integer",
-                default=None,
-                requires_user_input=True,
-                why=(
-                    "The spin state changes the electronic structure the Hessian "
-                    "and the charges are derived from. High-spin Fe(II) d6 is 5 and "
-                    "high-spin Fe(III) d5 is 6; low-spin states differ."
-                    + (
-                        " In a heme the ligands opposite each other decide it: "
-                        "with a water across from the cysteine, as in a resting "
-                        "P450, Fe(III) is low-spin, 2; five-coordinate, with the "
-                        "water gone, it is high-spin, 6."
-                        if cofactor is not None and cofactor.id.resname.strip().upper() == "HEM"
-                        else ""
-                    )
-                ),
-                minimum=1,
-                evidence=evidence,
-                targets=targets,
-                focus="targets",
-                when=confirmed,
-            ),
-            Decision(
                 id=f"metal.{site_id}.model_charge",
                 section="metals",
                 question=(
@@ -1891,18 +1877,17 @@ def _metal_donor_protonation_decisions(
 
 
 def _qm_region_decisions(summary: InspectionSummary) -> list[Decision]:
-    """The spin state of the QM region as a whole.
+    """The spin state of the QM region: the one spin question there is.
 
-    mdprep used to take this from the first open-shell component it found,
-    which for a single high-spin iron gives the right number by accident: the
-    region's multiplicity is that of the ion only when nothing else in it
-    carries unpaired spin, and only when nothing couples. Put an Fe(III) and
-    a substrate radical in the same region and the total is 5 or 7 depending
-    on how the two spins align -- a chemical fact about this system that no
-    arithmetic over the parts can settle.
-
-    So it is asked. The proposal fills in the usual answer, with the terms it
-    came from, and the student changes it when their chemistry says otherwise.
+    One bonded site is fitted per preparation, and the QM region is that
+    site and the cofactors in it, so its spin is the site's: the MCPB.py
+    models the force constants and charges come from, and the QM/MM
+    refinement, all take this one number. Asking the metal's spin as well
+    asked the same thing twice, and the region's could not be inferred from
+    the metal's anyway -- put an Fe(III) and a substrate radical in one
+    region and the total is 5 or 7 depending on how the two spins align, a
+    chemical fact no arithmetic over the parts can settle. So it is asked,
+    once, with what usually decides it.
     """
 
     sites = list(summary.metal_ions)
@@ -1921,22 +1906,45 @@ def _qm_region_decisions(summary: InspectionSummary) -> list[Decision]:
     )
     if not when_any:
         return []
+    hemes = [
+        site
+        for site in sites
+        if (cofactor := source_cofactor(
+            site,
+            summary.structure.residues,
+            getattr(summary.structure, "assigned_resnames", frozenset()),
+        )) is not None
+        and cofactor.id.resname.strip().upper() == "HEM"
+    ]
     return [
         Decision(
             id="refinement.total_qm_multiplicity",
             section="refinement",
-            question="Spin multiplicity of the whole QM region",
+            question=(
+                "Spin multiplicity of the QM region: the metal, everything "
+                "bonded to it, and the cofactors"
+            ),
             kind="integer",
             default=None,
             requires_user_input=True,
             why=(
-                "The QM/MM refinement treats the metal, its coordination "
-                "sphere and the cofactors as one quantum system, and that "
-                "system has one spin state. It is not always the metal's: a "
-                "second open-shell component can couple to the ion either "
-                "way, and the answer is chemistry, not arithmetic. mdprep "
-                "proposes the value that follows when the metal is the only "
-                "unpaired spin."
+                "This one number is the spin of the quantum models the metal "
+                "site's force constants and charges come from, and of the "
+                "QM/MM refinement. With the metal as the only unpaired spin it "
+                "is the metal's: high-spin Fe(II), d6, is 5; high-spin "
+                "Fe(III), d5, is 6; Zn(II) and other closed-shell ions are 1; "
+                "low-spin states are lower."
+                + (
+                    " In a heme the ligands across from each other decide it: "
+                    "with a water opposite the cysteine, as in a resting P450, "
+                    "Fe(III) is low-spin, 2; five-coordinate, with the water "
+                    "gone, it is high-spin, 6."
+                    if hemes
+                    else ""
+                )
+                + " A second open-shell component, a radical substrate say, "
+                "can couple to the metal either way, and then the answer is "
+                "chemistry, not arithmetic."
             ),
             minimum=1,
             when_any=when_any,
@@ -2709,7 +2717,9 @@ def _metal_blocks(
         if not resolved.get(f"metal.{site_id}.confirm_donors"):
             continue
         confirm = plan.by_id(f"metal.{site_id}.confirm_donors")
-        multiplicity = resolved[f"metal.{site_id}.multiplicity"]
+        # The region's spin is the site's: one site is fitted, and the
+        # cofactors in it are closed shell.
+        multiplicity = resolved["refinement.total_qm_multiplicity"]
         model_charge = resolved[f"metal.{site_id}.model_charge"]
         ion["multiplicity"] = multiplicity
         backend = resolved[f"metal.{site_id}.hessian_backend"]
@@ -3062,14 +3072,6 @@ def _proposals(
                 + " ".join(terms)
                 + f" = {value:+d}. Change it if that is not this site.",
             )
-    spin = _proposed_qm_multiplicity(plan, answers)
-    if spin is not None:
-        value, why = spin
-        proposals["refinement.total_qm_multiplicity"] = (
-            value,
-            f"Worked out from your earlier answers: {why}. Change it if that "
-            "is not this region.",
-        )
     for ligand_id, resname in plan.findings.get("known_cofactors", {}).items():
         entry = KNOWN_METAL_FREE_COFACTORS[resname]
         for field_name, value in (
@@ -3100,51 +3102,6 @@ def _answers_with_defaults(
         except DecisionError:
             continue
     return seen
-
-
-def _proposed_qm_multiplicity(
-    plan: DecisionPlan, answers: Mapping[str, Any]
-) -> tuple[str, str] | None:
-    """The region's multiplicity when the metal is its only unpaired spin.
-
-    Which is the usual case and the one the arithmetic can speak to. It is a
-    proposal and not an answer precisely because a second open-shell
-    component would make it wrong, and mdprep cannot see that from here.
-    """
-
-    # Read from what has been answered so far, with defaults filled in where
-    # nothing was typed. A proposal is offered while the form is half filled
-    # in, and resolve_answers refuses an incomplete set by design -- but a
-    # default the user accepted is still an answer, and without it every
-    # question conditioned on "the model is bonded" looked unreachable.
-    seen = _answers_with_defaults(plan, answers)
-    spins: list[tuple[str, int]] = []
-    for decision in plan.decisions:
-        if not decision.id.endswith(".multiplicity") or decision.section != "metals":
-            continue
-        if not decision.is_applicable(seen):
-            continue
-        value = seen.get(decision.id)
-        if value is None:
-            return None
-        try:
-            spins.append((decision.id.split(".")[1], int(value)))
-        except (TypeError, ValueError):
-            return None
-    if not spins:
-        return None
-    open_shell = [(site_id, spin) for site_id, spin in spins if spin > 1]
-    if not open_shell:
-        return ("1", "every component is closed shell = 1")
-    if len(open_shell) > 1:
-        # Two unpaired centres can couple either way; there is no single
-        # value to put forward, so none is.
-        return None
-    site_id, spin = open_shell[0]
-    return (
-        str(spin),
-        f"{site_id} = {spin}, and nothing else in the region is open shell",
-    )
 
 
 def unresolved_mcpb_sites(

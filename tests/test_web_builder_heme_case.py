@@ -2,7 +2,8 @@
 
 A student loading a P450 sees the heme's iron as a metal site of its own, is
 offered the porphyrin's SMILES and charge rather than asked to type them, is
-asked the iron's oxidation state and spin and the cysteine's protonation, and
+asked the iron's oxidation state, the cysteine's protonation and the QM
+region's spin, and
 gets a manifest with a bonded iron site whose donors are the four porphyrin
 nitrogens, the cysteine and the water.
 
@@ -36,7 +37,7 @@ ANSWERS = {
     "metal.a_fe_1401_site.charge": "3",
     "metal.a_fe_1401_site.confirm_donors": "true",
     "metal.a_fe_1401_site.donor_state.a_cys_317": "CYM",
-    "metal.a_fe_1401_site.multiplicity": "2",
+    "refinement.total_qm_multiplicity": "2",
 }
 
 
