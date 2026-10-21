@@ -23,6 +23,7 @@ from math import floor
 from typing import Iterable, Sequence
 
 from mdprep.structure.classify import (
+    STANDARD_AMINO_ACIDS,
     is_bulk_ion_residue,
     is_metal_ion_residue,
     is_standard_protein_residue,
@@ -60,13 +61,6 @@ MODIFIED_RESIDUE_PARENTS = {
 # protein: selenium is how a methionine is labelled to solve the phases, and
 # the protein being simulated has a methionine there.
 LABELLING_MODIFICATIONS = frozenset({"MSE"})
-
-STANDARD_AMINO_ACIDS = frozenset(
-    {
-        "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
-        "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
-    }
-)
 
 # Monosaccharides of N- and O-linked glycans, by chemical component name.
 CARBOHYDRATE_RESNAMES = frozenset(

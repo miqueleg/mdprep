@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from mdprep.structure.classify import STANDARD_AMINO_ACIDS
+
 
 class StrictModel(BaseModel):
     """Base model that rejects undeclared manifest keys."""
@@ -48,14 +50,6 @@ class RemovedResidueConfig(StrictModel):
     reason: str = Field(min_length=1)
 
 
-STANDARD_AMINO_ACID_NAMES = frozenset(
-    {
-        "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
-        "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
-    }
-)
-
-
 class ModifiedResidueReplacement(StrictModel):
     """A modified residue of a chain, and the standard one it becomes."""
 
@@ -66,7 +60,7 @@ class ModifiedResidueReplacement(StrictModel):
     @classmethod
     def validate_parent(cls, value: str) -> str:
         parent = value.strip().upper()
-        if parent not in STANDARD_AMINO_ACID_NAMES:
+        if parent not in STANDARD_AMINO_ACIDS:
             raise ValueError(
                 f"{value!r} is not one of the twenty standard amino acids, so "
                 "no force field template can build it in the chain"

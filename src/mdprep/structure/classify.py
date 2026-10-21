@@ -38,6 +38,15 @@ STANDARD_PROTEIN_RESIDUES = {
     "VAL",
 }
 
+# The twenty amino acids by their PDB names, without protonation variants:
+# what a modified residue can be replaced by.
+STANDARD_AMINO_ACIDS = frozenset(
+    {
+        "ALA", "ARG", "ASN", "ASP", "CYS", "GLN", "GLU", "GLY", "HIS", "ILE",
+        "LEU", "LYS", "MET", "PHE", "PRO", "SER", "THR", "TRP", "TYR", "VAL",
+    }
+)
+
 WATER_RESIDUES = {"HOH", "WAT", "H2O", "TIP3", "OPC"}
 
 TITRATABLE_RESIDUES = {
