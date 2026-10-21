@@ -222,7 +222,13 @@ def _water_atom_name(name: str) -> str:
     return upper
 
 
-def _lookup_name(atom_name: str, *, template: str, is_water: bool) -> str:
+def _lookup_name(
+    atom_name: str,
+    *,
+    template: str,
+    is_water: bool,
+    residue_atom_names: frozenset[str] = frozenset(),
+) -> str:
     if is_water:
         return _water_atom_name(atom_name)
     upper = atom_name.strip().upper()
@@ -230,6 +236,11 @@ def _lookup_name(atom_name: str, *, template: str, is_water: bool) -> str:
     # the first one spelled H, as it is on every internal residue.
     if template.startswith("N") and upper == "H":
         return "H1"
+    # OpenMM's hydrogen definitions give a neutral lysine HZ1 and HZ2, where
+    # ff14SB's LYN has HZ2 and HZ3. The two carry the same charge, so the one
+    # OpenMM calls HZ1 takes HZ3's.
+    if template.endswith("LYN") and upper == "HZ1" and "HZ3" not in residue_atom_names:
+        return "HZ3"
     return upper
 
 
@@ -285,11 +296,17 @@ def residue_point_charges(
         return [], f"{residue.id.display()} has no {candidates[-1]} template"
 
     is_water = template_name == "HOH"
+    atom_names = frozenset(atom.name.strip().upper() for atom in residue.atoms)
     charges: list[EmbeddedPointCharge] = []
     unknown: list[str] = []
     matched: set[str] = set()
     for atom in residue.atoms:
-        lookup = _lookup_name(atom.name, template=template_name, is_water=is_water)
+        lookup = _lookup_name(
+            atom.name,
+            template=template_name,
+            is_water=is_water,
+            residue_atom_names=atom_names,
+        )
         if lookup not in table:
             unknown.append(atom.name.strip())
             continue

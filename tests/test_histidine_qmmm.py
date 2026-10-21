@@ -96,34 +96,68 @@ def test_charges_come_from_the_force_field_tleap_will_use(templates):
 
 @pytest.mark.parametrize(
     "resname,formal_charge",
-    [("ALA", 0), ("ASP", -1), ("GLU", -1), ("ARG", 1), ("LYS", 1), ("HIP", 1),
-     ("HID", 0), ("HIE", 0), ("HOH", 0), ("CASP", -2), ("NLYS", 2)],
+    [("ALA", 0), ("ASP", -1), ("GLU", -1), ("ARG", 1), ("LYS", 1), ("LYN", 0),
+     ("HIP", 1), ("HID", 0), ("HIE", 0), ("HOH", 0), ("CASP", -2), ("NLYS", 2)],
 )
 def test_a_complete_residue_contributes_its_formal_charge(templates, resname, formal_charge):
     """Whole residues carry integral charges, which is why the cutoff keeps
     them whole. A fractional embedding total means atoms went missing."""
 
-    from mdprep.structure.models import AtomRecord, ResidueId, ResidueRecord
-
-    template = templates[resname]
-    pdb_resname = {"HOH": "HOH"}.get(resname, resname)
-    atoms = [
-        AtomRecord(
-            serial=index, name=name, altloc=None, resname=pdb_resname, chain_id="A",
-            resid=1, icode=None, x=float(index), y=0.0, z=0.0, occupancy=1.0,
-            bfactor=0.0, element=name[0], record_name="ATOM", original_line="",
-        )
-        for index, name in enumerate(sorted(template), start=1)
-    ]
-    residue = ResidueRecord(
-        id=ResidueId(chain_id="A", resname=pdb_resname, resid=1, icode=None),
-        atoms=atoms, record_names={"ATOM"}, original_index=0,
-    )
+    residue = _residue_with_atoms(resname, sorted(templates[resname]))
 
     charges, reason = residue_point_charges(residue, state=resname)
     assert reason is None, reason
     assert sum(charge.charge for charge in charges) == pytest.approx(
         formal_charge, abs=1e-4
+    )
+
+
+def test_a_neutral_lysine_hydrogenated_by_openmm_is_embedded_whole(templates):
+    """OpenMM names a neutral lysine's amine hydrogens HZ1 and HZ2, ff14SB's
+    LYN HZ2 and HZ3. A lysine PropKa made neutral, hydrogenated by OpenMM for
+    the xTB comparison, lost HZ1's charge: PrnA's Lys79 sat beside four
+    histidines at -0.39 e, and the report asked for it to be declared as a
+    ligand."""
+
+    import xml.etree.ElementTree as ElementTree
+    from importlib.resources import files
+
+    definitions = ElementTree.parse(files("openmm.app") / "data" / "hydrogens.xml")
+    lysine = next(
+        residue for residue in definitions.getroot() if residue.get("name") == "LYS"
+    )
+    on_neutral_amine = sorted(
+        hydrogen.get("name")
+        for hydrogen in lysine
+        if hydrogen.get("parent") == "NZ" and hydrogen.get("variant") is None
+    )
+    assert on_neutral_amine == ["HZ1", "HZ2"]
+
+    names = [name for name in templates["LYN"] if not name.startswith("HZ")]
+    residue = _residue_with_atoms("LYS", names + on_neutral_amine)
+
+    charges, reason = residue_point_charges(residue, state="LYN")
+    assert reason is None, reason
+    assert sum(charge.charge for charge in charges) == pytest.approx(0.0, abs=1e-4)
+    by_name = {charge.atom_name: charge.charge for charge in charges}
+    assert by_name["HZ1"] == pytest.approx(templates["LYN"]["HZ3"])
+    assert by_name["HZ2"] == pytest.approx(templates["LYN"]["HZ2"])
+
+
+def _residue_with_atoms(resname, names):
+    from mdprep.structure.models import AtomRecord, ResidueId, ResidueRecord
+
+    atoms = [
+        AtomRecord(
+            serial=index, name=name, altloc=None, resname=resname, chain_id="A",
+            resid=1, icode=None, x=float(index), y=0.0, z=0.0, occupancy=1.0,
+            bfactor=0.0, element=name[0], record_name="ATOM", original_line="",
+        )
+        for index, name in enumerate(names, start=1)
+    ]
+    return ResidueRecord(
+        id=ResidueId(chain_id="A", resname=resname, resid=1, icode=None),
+        atoms=atoms, record_names={"ATOM"}, original_index=0,
     )
 
 

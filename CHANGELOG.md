@@ -81,6 +81,13 @@
   non-existent fit.
 - QM/MM refinement stopped on a nonbonded metal or a crystal ion next to the
   QM region; both are MM environment with known parameters.
+- A lysine PropKa made neutral lost a hydrogen's charge in the embedding of
+  the xTB histidine comparison: OpenMM names its amine hydrogens HZ1 and HZ2,
+  ff14SB's LYN HZ2 and HZ3. The histidines around it were compared beside a
+  lysine at -0.39 e, and the report asked for the lysine to be declared as a
+  ligand. PrnA's Lys79 reached this: its four histidines keep their states,
+  but their HID-HIE gaps moved by 1 to 3 kcal/mol, enough to flip a closer
+  call.
 - A vanadate was split into a vanadium and four unbonded oxygens.
 
 ## 0.4.0 - 2026-10-20
