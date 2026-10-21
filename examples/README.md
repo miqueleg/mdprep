@@ -24,6 +24,7 @@ to real systems.
 | `15_roe_brooks_openmm.yaml` | Roe--Brooks equilibration and a manifest-sized OpenMM production run | Uses a GPU when available and falls back to CPU |
 | `17_syrb2_bound_water_mcpb.yaml` | SyrB2 (PDB 2FCT): bonded Fe(II) with a water and a chloride on the iron, a free crystal chloride, a missing loop | Requires the example 11 tools; the official Colab notebook runs it as its example |
 | `18_syrb2_dimer_shared_mcpb.yaml` | Both copies of SyrB2 (PDB 2FCT): chain A's iron site fitted once, chain B's site and cofactor built from that fit with `parameters_from` | Requires the example 11 tools; see [docs/oligomers.md](../docs/oligomers.md) |
+| `19_cyp119_heme_mcpb.yaml` | CYP119, a cytochrome P450 (PDB 1IO7): the heme's iron read out into a residue of its own and bonded to the porphyrin's four nitrogens, the cysteine thiolate and a water; low-spin Fe(III) | Requires the example 11 tools; see [docs/metals.md](../docs/metals.md#a-metal-inside-a-cofactor-hemes) |
 
 The `tutorials/minimal_user_mol2/` directory contains a tiny toy example with
 input PDB, ligand mol2, frcmod, and manifest. It is intended only for checking

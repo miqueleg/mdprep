@@ -817,9 +817,19 @@ def test_the_model_charge_is_still_proposed_for_a_prediction_naming_everything_l
         if decision.id.endswith("_lig_21.net_charge")
     )
 
+    # The aspartate on the iron is asked its state, and the sum waits for it.
+    (aspartate,) = [
+        decision.id
+        for decision in plan.decisions
+        if decision.id.startswith(f"metal.{site}.donor_state.")
+    ]
+    assert proposed_model_charge(
+        plan, {f"metal.{site}.charge": 2, cofactor: -2}, site
+    )[0] is None
+
     value, terms = proposed_model_charge(
         plan,
-        {f"metal.{site}.charge": 2, cofactor: -2},
+        {f"metal.{site}.charge": 2, cofactor: -2, aspartate: "ASP"},
         site,
     )
 
@@ -827,6 +837,13 @@ def test_the_model_charge_is_still_proposed_for_a_prediction_naming_everything_l
     # though it donates through two oxygens.
     assert value == -1
     assert len([term for term in terms if term.startswith("LIG21")]) == 1
+
+    # A neutral aspartate counts as one.
+    assert proposed_model_charge(
+        plan,
+        {f"metal.{site}.charge": 2, cofactor: -2, aspartate: "ASH"},
+        site,
+    )[0] == 0
 
 
 def test_the_output_directory_is_marked_as_needing_a_filesystem():

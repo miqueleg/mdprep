@@ -23,6 +23,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from mdprep.structure.classify import (
+    COORDINATING_METAL_ELEMENTS,
     HISTIDINE_RESIDUES,
     STANDARD_PROTEIN_RESIDUES,
     TITRATABLE_RESIDUES,
@@ -86,21 +87,116 @@ def fit_atoms_to_pdb_fields(
     resname_map = _resname_map(atoms, warnings)
     _check_unmappable_fields(atoms)
 
-    assigned = frozenset(resname_map.values())
-    if not chain_map and not resname_map:
-        return settle_monatomic_ion_elements(atoms), warnings, assigned
+    if chain_map or resname_map:
+        atoms = [
+            replace(
+                atom,
+                chain_id=chain_map.get(atom.chain_id, atom.chain_id),
+                resname=resname_map.get(atom.resname, atom.resname),
+                # The original line is a PDB line, and these no longer came
+                # from one. Readers fall back to the fields when it is empty.
+                original_line="",
+            )
+            for atom in atoms
+        ]
+    atoms, split_names = split_cofactor_metals(atoms, warnings)
+    assigned = frozenset(resname_map.values()) | split_names
+    return settle_monatomic_ion_elements(atoms), warnings, assigned
 
-    return settle_monatomic_ion_elements([
-        replace(
-            atom,
-            chain_id=chain_map.get(atom.chain_id, atom.chain_id),
-            resname=resname_map.get(atom.resname, atom.resname),
-            # The original line is a PDB line, and these no longer came from
-            # one. Readers fall back to the fields when it is empty.
-            original_line="",
+
+def split_cofactor_metals(
+    atoms: list[AtomRecord],
+    warnings: list[str],
+) -> tuple[list[AtomRecord], frozenset[str]]:
+    """Take a metal atom out of the cofactor it was deposited in.
+
+    A heme is deposited as one residue, HEM, with its iron among its 43
+    atoms, and a cobalamin or a chlorophyll the same way. Nothing downstream
+    can parameterise that residue whole: antechamber's semi-empirical charges
+    do not treat iron, and a metal is modelled as a metal site, which MCPB.py
+    builds around a one-atom metal residue. So the metal is moved into a
+    residue of its own as the structure is read -- named after its element,
+    with the cofactor's chain and number, written after it -- and the
+    cofactor without it is an ordinary ligand that coordinates it: a
+    porphyrin with four nitrogens on the iron.
+
+    The new name is assigned, not deposited. FE is the PDB's code for
+    Fe(III), and a heme's iron is either; nothing may read an oxidation state
+    into a name mdprep chose.
+
+    A residue holding more than one metal atom -- an iron-sulfur cluster --
+    is left whole: splitting it would not make it something mdprep can
+    parameterise.
+    """
+
+    keys: list[tuple[str, str, int, str | None]] = []
+    members: dict[tuple[str, str, int, str | None], list[AtomRecord]] = {}
+    for atom in atoms:
+        key = (atom.chain_id, atom.resname, atom.resid, atom.icode)
+        if key not in members:
+            keys.append(key)
+            members[key] = []
+        members[key].append(atom)
+
+    split: dict[tuple[str, str, int, str | None], tuple[AtomRecord, AtomRecord]] = {}
+    for key in keys:
+        chain_id, resname, resid, icode = key
+        residue_atoms = members[key]
+        if len(residue_atoms) < 2 or resname in STANDARD_PROTEIN_RESIDUES | WATER_RESIDUES:
+            continue
+        metals = [atom for atom in residue_atoms if _element_of(atom) in COORDINATING_METAL_ELEMENTS]
+        if len(metals) != 1:
+            continue
+        (metal,) = metals
+        element = _element_of(metal)
+        new_key = (chain_id, element, resid, icode)
+        if new_key in members:
+            raise PdbFieldError(
+                f"{_label(key)} holds a metal atom, {metal.name.strip()} "
+                f"({_canonical(element)}), that mdprep moves into a residue of its "
+                f"own, {_label(new_key)}, but the "
+                "structure already has a residue by that name and number. "
+                "Renumber one of them in the input."
+            )
+        split[key] = (
+            metal,
+            replace(
+                metal,
+                resname=element,
+                record_name="HETATM",
+                element=_canonical(element),
+                original_line="",
+            ),
         )
-        for atom in atoms
-    ]), warnings, assigned
+        warnings.append(
+            f"{_label(key)} holds a metal atom, {metal.name.strip()} ({_canonical(element)}). "
+            f"mdprep moved it into a residue of its own, {_label(new_key)}, so it "
+            f"can be modelled as a metal site; the rest of {resname} is a ligand "
+            f"that coordinates it. Selectors in the manifest use {_label(new_key)}."
+        )
+    if not split:
+        return atoms, frozenset()
+
+    # Every other atom keeps its place; the metal goes right after the last
+    # atom of its cofactor.
+    moved_out = {id(metal) for metal, _ in split.values()}
+    last_of = {id(members[key][-1]): moved for key, (_, moved) in split.items()}
+    result: list[AtomRecord] = []
+    for atom in atoms:
+        if id(atom) not in moved_out:
+            result.append(atom)
+        if id(atom) in last_of:
+            result.append(last_of[id(atom)])
+    return result, frozenset(moved.resname for _, moved in split.values())
+
+
+def _element_of(atom: AtomRecord) -> str:
+    return (atom.element or "").strip().upper()
+
+
+def _label(key: tuple[str, str, int, str | None]) -> str:
+    chain_id, resname, resid, icode = key
+    return f"{chain_id}:{resname}{resid}{icode or ''}"
 
 
 def _chain_id_map(atoms: list[AtomRecord], warnings: list[str]) -> dict[str, str]:

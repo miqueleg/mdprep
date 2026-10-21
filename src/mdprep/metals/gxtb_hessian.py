@@ -95,6 +95,7 @@ def build_gxtb_hessian_command(
     accuracy: float,
     model: str = "gxtb",
     max_scf_iterations: int | None = None,
+    electronic_temperature_kelvin: float | None = None,
 ) -> list[str]:
     """Build the fixed-geometry command without any optimization run type."""
 
@@ -106,6 +107,10 @@ def build_gxtb_hessian_command(
         raise GxtbHessianError(f"Unsupported xTB Hessian model: {model}")
     if max_scf_iterations is not None and max_scf_iterations < 1:
         raise GxtbHessianError("xTB maximum SCF iterations must be positive.")
+    if electronic_temperature_kelvin is not None and not (
+        np.isfinite(electronic_temperature_kelvin) and electronic_temperature_kelvin > 0
+    ):
+        raise GxtbHessianError("xTB electronic temperature must be positive and finite.")
     model_args = ["--gfn", "2"] if model == "gfn2" else ["--gxtb"]
     command = [
         executable,
@@ -121,6 +126,8 @@ def build_gxtb_hessian_command(
     ]
     if max_scf_iterations is not None:
         command.extend(["--iterations", str(max_scf_iterations)])
+    if electronic_temperature_kelvin is not None:
+        command.extend(["--etemp", f"{electronic_temperature_kelvin:g}"])
     return command
 
 
@@ -200,6 +207,7 @@ def run_gxtb_hessian(
         accuracy=config.accuracy,
         model=config.model,
         max_scf_iterations=config.max_scf_iterations,
+        electronic_temperature_kelvin=config.electronic_temperature_kelvin,
     )
     command_result = run_command(command, cwd=work, env=environment)
     stdout_path = work / f"{file_prefix}.hessian.stdout.txt"
@@ -207,8 +215,19 @@ def run_gxtb_hessian(
     stdout_path.write_text(command_result.stdout, encoding="utf-8")
     stderr_path.write_text(command_result.stderr, encoding="utf-8")
     if command_result.returncode != 0:
+        hint = ""
+        if "SCF not converged" in command_result.stdout:
+            hint = (
+                " Its SCF did not converge. More cycles rarely help an SCF that "
+                "oscillates; smearing the occupations does. Set "
+                "mcpb.pyscf.xtb.electronic_temperature_kelvin (1000 converges a "
+                "low-spin Fe(III) heme in seconds)."
+                if config.electronic_temperature_kelvin is None
+                else " Its SCF did not converge, even at an electronic "
+                f"temperature of {config.electronic_temperature_kelvin:g} K."
+            )
         raise GxtbHessianError(
-            f"{backend} Hessian failed with exit code {command_result.returncode}. "
+            f"{backend} Hessian failed with exit code {command_result.returncode}.{hint} "
             f"See {stdout_path} and {stderr_path}."
         )
     if config.model == "gxtb" and "for g-xTB:" not in command_result.stdout:

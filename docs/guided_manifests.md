@@ -69,6 +69,17 @@ rather than an independent AM1-BCC calculation, since fitting a bonded donor
 separately leaves the site electrostatically inconsistent. A ligand that does
 not coordinate keeps AM1-BCC.
 
+A titratable side chain on the metal -- an aspartate, a cysteine -- is asked
+its protonation right after the shell is confirmed, before the spin and the
+model charge. The model charge is then proposed from the states as given:
+a heme's cysteine is named CYS and counts as the thiolate, -1, once it has been
+stated as CYM.
+
+A metal deposited inside a cofactor, a heme's iron, is read out into a residue
+of its own, and the porphyrin left behind is a ligand on it. Heme b's SMILES
+and net charge are proposed, with the protonation they assume; any other
+cofactor's are asked. See [metals.md](metals.md#a-metal-inside-a-cofactor-hemes).
+
 The Hessian defaults to GFN2, which is orders of magnitude cheaper than DFT and
 is what makes a bonded site tractable outside a cluster; g-xTB and PySCF DFT
 are offered too. The geometry comes from the QM/MM refinement stage, which is

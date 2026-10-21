@@ -24,6 +24,7 @@ from mdprep.config.decisions import (
     build_manifest,
     plan_decisions,
     ligands_needing_hydrogens,
+    proposal_explanations,
     proposed_answers,
     unresolved_mcpb_sites,
 )
@@ -104,7 +105,14 @@ def collect_answers(
         # default is, and can still be overridden.
         proposal = proposed_answers(plan, answers).get(decision.id)
         if proposal is not None:
-            decision = replace(decision, default=proposal)
+            # Shown with the question, so the value can be checked rather
+            # than accepted on trust.
+            decision = replace(
+                decision,
+                default=proposal,
+                evidence=decision.evidence
+                + (proposal_explanations(plan, answers)[decision.id],),
+            )
         last_error: str | None = None
         for _ in range(max_attempts):
             raw = prompt(decision).strip()

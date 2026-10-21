@@ -439,6 +439,13 @@ class McpbXtbHessianConfig(StrictModel):
     accuracy: float = Field(default=0.001, gt=0)
     num_threads: int = Field(default=1, ge=1)
     max_scf_iterations: int | None = Field(default=None, ge=1)
+    # Fermi smearing, for both the Hessian and the GFN2 ESP of the large
+    # model. Left unset, xTB uses its own 300 K. An open-shell porphyrin --
+    # a low-spin Fe(III) heme -- has d orbitals close enough together that
+    # the SCF oscillates there without converging in any number of cycles;
+    # at 1000 K it converges in seconds. The builder sets that for a site
+    # whose donors include a heme, and the value is in every command record.
+    electronic_temperature_kelvin: float | None = Field(default=None, gt=0)
 
 
 class McpbGxtbHessianConfig(McpbXtbHessianConfig):

@@ -147,6 +147,11 @@ Each site has:
 - `id`: unique site identifier.
 - `model`: `nonbonded` or `bonded_mcpb`.
 - `ions`: one or more explicitly selected one-atom metal residues.
+  A metal deposited inside a cofactor, a heme's iron, is already one: mdprep
+  moves it into a residue of its own, named after the element with the
+  cofactor's chain and number, as the structure is read (`A:FE1401` for the
+  iron of `A:HEM1401`). See
+  [metals.md](metals.md#a-metal-inside-a-cofactor-hemes).
   - `selector`: exact chain, residue name/number/insertion code, and atom name.
   - `element`: case-sensitive chemical symbol such as `Zn` or `Fe`.
   - `charge`: explicit +1 through +4 formal ion charge.
@@ -226,7 +231,11 @@ For `model: bonded_mcpb`, the `mcpb` block contains:
   `executable`, optional `release_tag` and `expected_executable_sha256`,
   positive `accuracy` (default `0.001`), `num_threads`, and optional positive
   `max_scf_iterations`. The latter is passed explicitly to every displaced
-  xTB Hessian calculation; omit it to retain the executable default. The legacy
+  xTB Hessian calculation; omit it to retain the executable default.
+  `electronic_temperature_kelvin` (optional, positive) smears the occupations
+  of both the Hessian and the GFN2 large-model ESP; left out, xTB uses 300 K.
+  The builder sets 1000 for a site whose donors include a heme, whose
+  open-shell SCF does not converge at 300 K. The legacy
   `hessian_backend: gxtb` plus `gxtb:` block remains valid. xTB replaces only
   the small-model Hessian. `hessian_backend: mace_polar1` requires a
   `mace_polar1` block containing the isolated `python_executable`, model

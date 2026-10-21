@@ -976,6 +976,11 @@ def _run_large_model_with_xtb(
             ),
             num_threads=xtb_config.num_threads if xtb_config is not None else 1,
             max_cycle=config.max_cycle,
+            # The same smearing as the Hessian, so both describe one
+            # electronic structure.
+            electronic_temperature_kelvin=(
+                xtb_config.electronic_temperature_kelvin if xtb_config is not None else None
+            ),
             mm_charges=embedding.charge_array,
             mm_coordinates_angstrom=embedding.coordinate_array,
         )

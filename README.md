@@ -19,7 +19,9 @@ recorded in the output reports.
 - Multiple GAFF or GAFF2 ligands/cofactors with AM1-BCC, user mol2/frcmod,
   PySCF gas-phase RESP, or electrostatically embedded PySCF QMMESP charges.
 - Amber nonbonded metal models or bonded MCPB.py models with explicit
-  coordinating atoms, charges, and multiplicities.
+  coordinating atoms, charges, and multiplicities -- including a metal
+  deposited inside a cofactor: a cytochrome P450's heme iron, bonded to the
+  porphyrin, the cysteine and a water ([docs/metals.md](docs/metals.md#a-metal-inside-a-cofactor-hemes)).
 - Dimers, trimers, tetramers: every protein chain in one system. Copies of one
   protein can share parameters -- asked about once, matched residue for
   residue by sequence and position rather than number, and a bonded metal site
@@ -218,6 +220,7 @@ specified in steps in the manifest.
 | Roe–Brooks OpenMM MD | [Molecular dynamics](docs/molecular_dynamics.md) | `examples/15_roe_brooks_openmm.yaml` |
 | Predicted models: closest X-ray, crystal waters | [Predicted structures](docs/predicted_structures.md) | `mdprep closest-xray`, `mdprep transplant-waters` |
 | A water bound to a metal | [Metal centers](docs/metals.md#waters-bound-in-a-metal-site) | `examples/17_syrb2_bound_water_mcpb.yaml` |
+| A heme: cytochrome P450 | [Metal centers](docs/metals.md#a-metal-inside-a-cofactor-hemes) | `examples/19_cyp119_heme_mcpb.yaml` |
 | Preparing, running and investigating in Colab | [Colab example notes](examples/README.md) | `examples/mdprep_colab.ipynb` |
 | Guided Colab builder (legacy) | [Colab example notes](examples/README.md) | `examples/mdprep_interactive_colab.ipynb` |
 | Complete Fe(III) workflow | [7E07 tutorial](examples/tutorials/7E07_bonded_fe3/README.md) | `examples/tutorials/7E07_bonded_fe3/system.yaml` |
@@ -243,7 +246,7 @@ charge model, protonation, force field, QM method, or metal model.
 ## Current limitations
 
 mdprep does not support noncanonical amino acids inside peptide chains,
-covalent ligands, automatic loop modeling (a missing loop is left as two
+covalent ligands (heme c among them), metal clusters, automatic loop modeling (a missing loop is left as two
 termini), a metal-bound hydroxide, ORCA, Multiwfn, more than one independently
 fitted bonded MCPB site (copies of one site in an oligomer share a single
 fit), or a bonded MCPB site bound by two chains. Unsupported chemistry fails

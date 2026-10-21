@@ -21,7 +21,9 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
+from mdprep.ligands.cofactors import KNOWN_METAL_FREE_COFACTORS, known_metal_free_cofactor
 from mdprep.structure.classify import (
+    COORDINATING_METAL_ELEMENTS,
     LEAP_RESERVED_RESIDUE_NAMES,
     describe_reserved_residue_names,
     free_residue_name,
@@ -426,6 +428,13 @@ def plan_decisions(
         for residue in summary.likely_ligands
         if not is_metal_ion_residue(residue) and residue.id not in monatomic_donors
     ]
+    # What mdprep cannot parameterise is refused before anything is asked,
+    # with the reason, rather than failing in antechamber or tleap later --
+    # or worse, building.
+    unsupported = unsupported_ligands(ligands, summary.structure.residues)
+    if unsupported:
+        raise DecisionError(" ".join(unsupported))
+
     # A ligand carrying a name the force fields already define cannot be
     # built: tleap resolves residues by name, so it would use the protein,
     # water, ion or nucleic template rather than the ligand's own parameters.
@@ -571,6 +580,13 @@ def plan_decisions(
         "ligand_atom_names": {
             ligand_id_for(residue): residue.atom_names() for residue in ligands
         },
+        # Cofactors whose metal mdprep moved into a residue of its own and
+        # whose metal-free form it knows, so their SMILES can be proposed.
+        "known_cofactors": {
+            ligand_id_for(residue): entry.resname
+            for residue in ligands
+            if (entry := known_metal_free_cofactor(residue)) is not None
+        },
     }
     return DecisionPlan(
         structure_path=path,
@@ -578,6 +594,51 @@ def plan_decisions(
         findings=findings,
         oligomer=oligomer,
     )
+
+
+# Cofactors that are bonded to the protein, so that mdprep would build them
+# as a separate molecule at bond length from it. Refused by name: a bond
+# cannot be told from a clash by distance alone, and predicted complexes
+# have clashes this short.
+COVALENT_COFACTORS = {
+    "HEC": "heme c, bonded to two cysteines through thioethers",
+}
+
+
+def unsupported_ligands(
+    ligands: Sequence[ResidueRecord], residues: Sequence[ResidueRecord]
+) -> list[str]:
+    """Why each of these ligands cannot be prepared, if it cannot.
+
+    A metal inside a cofactor has already been read out into a residue of its
+    own, so a ligand that still holds metal atoms holds several: a cluster,
+    such as an iron-sulfur cluster, which no single metal site describes.
+    And a cofactor bonded to the protein would be built beside it rather than
+    onto it, which is the one outcome worse than refusing.
+    """
+
+    problems: list[str] = []
+    for ligand in ligands:
+        metals = [
+            atom for atom in ligand.atoms
+            if (atom.element or "").strip().upper() in COORDINATING_METAL_ELEMENTS
+        ]
+        if metals:
+            elements = sorted({(atom.element or "").strip().capitalize() for atom in metals})
+            problems.append(
+                f"{ligand.id.display()} holds {len(metals)} metal atoms "
+                f"({', '.join(elements)}): a metal cluster. mdprep models a metal "
+                "as one atom in a site of its own and cannot parameterise a "
+                "cluster."
+            )
+            continue
+        covalent = COVALENT_COFACTORS.get(ligand.id.resname.strip().upper())
+        if covalent is not None:
+            problems.append(
+                f"{ligand.id.display()} is {covalent}: a covalently attached "
+                "ligand, which mdprep does not support."
+            )
+    return problems
 
 
 def _project_decisions(path: Path) -> list[Decision]:
@@ -1392,6 +1453,14 @@ def proposed_oxidation_state(
     )
 
 
+METAL_NAMES = {
+    "FE": "iron", "ZN": "zinc", "CU": "copper", "MN": "manganese",
+    "CO": "cobalt", "NI": "nickel", "MG": "magnesium", "CA": "calcium",
+    "MO": "molybdenum", "W": "tungsten", "V": "vanadium", "CD": "cadmium",
+    "HG": "mercury",
+}
+
+
 STANDARD_DONOR_FORMAL_CHARGE = {
     "HIS": 0, "HID": 0, "HIE": 0, "HIP": 1,
     "ASP": -1, "ASH": 0, "GLU": -1, "GLH": 0,
@@ -1415,6 +1484,24 @@ def _metal_decisions(
     name_assigned = residue.id.resname.strip().upper() in {
         name.strip().upper() for name in assigned_resnames
     }
+    # A metal mdprep took out of a cofactor as it read the structure -- a
+    # heme's iron -- keeps the cofactor's chain and number, and its name is
+    # one mdprep assigned. That is how the cofactor is found again here.
+    cofactor = (
+        next(
+            (
+                other
+                for other in all_residues
+                if other is not residue
+                and len(other.atoms) > 1
+                and (other.id.chain_id, other.id.resid, other.id.icode)
+                == (residue.id.chain_id, residue.id.resid, residue.id.icode)
+            ),
+            None,
+        )
+        if name_assigned
+        else None
+    )
     donors = metal_donor_atoms(all_residues, residue)
     donor_residues: list[ResidueRecord] = []
     for donor_residue, _, _ in donors:
@@ -1427,7 +1514,13 @@ def _metal_decisions(
         for donor_residue, atom, distance in donors
     )
     evidence = (
-        f"{display}, element {element}",
+        (
+            f"{display} is the {METAL_NAMES.get(element.upper(), element.capitalize())} "
+            f"of {cofactor.id.display()}, which mdprep moved into a residue of its "
+            f"own; the rest of {cofactor.id.resname} is a ligand that coordinates it"
+        )
+        if cofactor is not None
+        else f"{display}, element {element}",
         (
             "within "
             f"{CONTACT_CUTOFF_ANGSTROM:.1f} A: "
@@ -1446,6 +1539,20 @@ def _metal_decisions(
             "before going on: mdprep transplant-waters (docs/predicted_structures.md).",
         )
     targets = (_target_for(residue, element=element),) + contacts
+    proposed_state, state_reason = proposed_oxidation_state(
+        residue.id.resname, element, name_was_assigned=name_assigned
+    )
+    if cofactor is not None and proposed_state is None:
+        state_reason = (
+            f"{display} came out of {cofactor.id.display()}, and a cofactor's "
+            "name does not record the oxidation state of its metal"
+            + (
+                " -- a heme's iron is Fe(III) in a resting cytochrome P450 and "
+                "Fe(II) in deoxymyoglobin"
+                if element.upper() == "FE"
+                else ""
+            )
+        )
     model_id = f"metal.{site_id}.model"
     bonded = (Condition(model_id, ("bonded_mcpb",)),)
     nonbonded = (Condition(model_id, ("nonbonded",)),)
@@ -1503,24 +1610,16 @@ def _metal_decisions(
             section="metals",
             question=f"Formal oxidation state (charge) of {display}",
             kind="integer",
-            default=(
-                str(_proposed_state)
-                if (_proposed_state := proposed_oxidation_state(
-                    residue.id.resname, element, name_was_assigned=name_assigned
-                )[0]) is not None
-                else None
-            ),
-            requires_user_input=_proposed_state is None,
+            default=str(proposed_state) if proposed_state is not None else None,
+            requires_user_input=proposed_state is None,
             why=(
                 "This sets the electron count, and with the spin state it sets "
                 "what the quantum calculation is solving. "
                 + (
-                    f"Proposed as {_proposed_state:+d} because "
-                    f"{proposed_oxidation_state(residue.id.resname, element, name_was_assigned=name_assigned)[1]}; "
+                    f"Proposed as {proposed_state:+d} because {state_reason}; "
                     "change it if that is not this site."
-                    if _proposed_state is not None
-                    else "No value is proposed here because "
-                    f"{proposed_oxidation_state(residue.id.resname, element, name_was_assigned=name_assigned)[1]}. "
+                    if proposed_state is not None
+                    else f"No value is proposed here because {state_reason}. "
                     "Guessing would give a converged calculation with the wrong "
                     "parameters."
                 )
@@ -1555,34 +1654,56 @@ def _metal_decisions(
         # Nothing to bond to, so the bonded model cannot be built here.
         return decisions
 
+    decisions.append(
+        Decision(
+            id=confirm_id,
+            section="metals",
+            question=(
+                f"Are these the atoms coordinating {display}?"
+            ),
+            kind="boolean",
+            default=None,
+            requires_user_input=True,
+            why=(
+                "mdprep proposes this shell from interatomic distances alone. "
+                "Every bond it contains becomes a bonded parameter, so it has "
+                "to be confirmed by someone who knows the chemistry. Answer no "
+                "to write the site out by hand instead."
+            ),
+            evidence=donor_evidence,
+            # targets[0] is the metal; the rest are the donor ATOMS, named,
+            # because they become the bonds in the generated manifest.
+            targets=(_target_for(residue, element=element),)
+            + tuple(
+                _target_for(donor_residue, atom_name=atom.name)
+                for donor_residue, atom, _ in donors
+            ),
+            focus="targets",
+            when=bonded,
+        )
+    )
+    # Each titratable side chain on the metal next, before the charge of the
+    # model it sits in is asked: its state is one of that charge's terms, and
+    # a cysteine on a heme is CYM, not the neutral CYS its name says.
+    decisions.extend(
+        _metal_donor_protonation_decisions(
+            site_id,
+            # The residues that become bonds, which is what the build
+            # refuses over -- not the shorter donor list. The two use
+            # different radii (3.0 A against 2.6 A), so asking about donors
+            # left a side chain between them bonded and unasked about,
+            # which is the gap that sent the refusal to Colab.
+            neighbours,
+            distances={
+                donor_residue.id.display(): (atom.name, distance)
+                for donor_residue, atom, distance in donors
+            },
+            confirmed=confirmed,
+            metal_display=display,
+        )
+    )
     decisions.extend(
         [
-            Decision(
-                id=confirm_id,
-                section="metals",
-                question=(
-                    f"Are these the atoms coordinating {display}?"
-                ),
-                kind="boolean",
-                default=None,
-                requires_user_input=True,
-                why=(
-                    "mdprep proposes this shell from interatomic distances alone. "
-                    "Every bond it contains becomes a bonded parameter, so it has "
-                    "to be confirmed by someone who knows the chemistry. Answer no "
-                    "to write the site out by hand instead."
-                ),
-                evidence=donor_evidence,
-                # targets[0] is the metal; the rest are the donor ATOMS, named,
-                # because they become the bonds in the generated manifest.
-                targets=(_target_for(residue, element=element),)
-                + tuple(
-                    _target_for(donor_residue, atom_name=atom.name)
-                    for donor_residue, atom, _ in donors
-                ),
-                focus="targets",
-                when=bonded,
-            ),
             Decision(
                 id=f"metal.{site_id}.multiplicity",
                 section="metals",
@@ -1594,6 +1715,14 @@ def _metal_decisions(
                     "The spin state changes the electronic structure the Hessian "
                     "and the charges are derived from. High-spin Fe(II) d6 is 5 and "
                     "high-spin Fe(III) d5 is 6; low-spin states differ."
+                    + (
+                        " In a heme the ligands opposite each other decide it: "
+                        "with a water across from the cysteine, as in a resting "
+                        "P450, Fe(III) is low-spin, 2; five-coordinate, with the "
+                        "water gone, it is high-spin, 6."
+                        if cofactor is not None and cofactor.id.resname.strip().upper() == "HEM"
+                        else ""
+                    )
                 ),
                 minimum=1,
                 evidence=evidence,
@@ -1666,23 +1795,6 @@ def _metal_decisions(
                 when=confirmed,
             ),
         ]
-    )
-    decisions.extend(
-        _metal_donor_protonation_decisions(
-            site_id,
-            # The residues that become bonds, which is what the build
-            # refuses over -- not the shorter donor list. The two use
-            # different radii (3.0 A against 2.6 A), so asking about donors
-            # left a side chain between them bonded and unasked about,
-            # which is the gap that sent the refusal to Colab.
-            neighbours,
-            distances={
-                donor_residue.id.display(): (atom.name, distance)
-                for donor_residue, atom, distance in donors
-            },
-            confirmed=confirmed,
-            metal_display=display,
-        )
     )
     return decisions
 
@@ -2645,7 +2757,14 @@ def _metal_blocks(
                     "small_model_spin": multiplicity,
                     "large_model_charge": model_charge,
                     "large_model_spin": multiplicity,
-                    "pyscf": _mcpb_pyscf_block(backend),
+                    "pyscf": _mcpb_pyscf_block(
+                        backend,
+                        porphyrin=any(
+                            _id_stem_of(_residue_id_of(donor))
+                            in plan.findings.get("known_cofactors", {})
+                            for donor in confirm.targets[1:]
+                        ),
+                    ),
                 },
             }
         )
@@ -2680,7 +2799,7 @@ def _monatomic_ion_charge(target: ResidueTarget) -> int:
     return MONATOMIC_ION_CHARGES[(target.resname or "").strip().upper()]
 
 
-def _mcpb_pyscf_block(hessian_backend: str) -> dict[str, Any]:
+def _mcpb_pyscf_block(hessian_backend: str, *, porphyrin: bool = False) -> dict[str, Any]:
     """QM settings for one bonded site.
 
     The geometry comes from the QM/MM refinement stage rather than a
@@ -2705,6 +2824,11 @@ def _mcpb_pyscf_block(hessian_backend: str) -> dict[str, Any]:
     }
     if hessian_backend in {"gfn2", "gxtb"}:
         block["xtb"] = {"model": hessian_backend, "num_threads": 8}
+        if porphyrin:
+            # An open-shell heme's SCF oscillates at xTB's own 300 K and does
+            # not converge in any number of cycles; smeared at 1000 K it
+            # converges in seconds. See McpbXtbHessianConfig.
+            block["xtb"]["electronic_temperature_kelvin"] = 1000.0
     return block
 
 
@@ -2859,16 +2983,33 @@ def proposed_model_charge(
             continue
         ligand_charges[(subject.chain, subject.resid, subject.icode)] = given
 
+    # A titratable side chain on the metal carries the state it was given,
+    # not the one its residue name suggests: the cysteine on a heme is named
+    # CYS and is a thiolate. Until that is answered its term is unknown.
+    donor_states = {
+        decision.id.rsplit(".", 1)[1]: answers.get(decision.id)
+        for decision in plan.decisions
+        if decision.id.startswith(f"metal.{site_id}.donor_state.")
+    }
+
     complete = True
     seen: set[tuple[str, int, str | None]] = set()
     for donor in confirm.targets[1:]:
         key = (donor.chain, donor.resid, donor.icode)
         # A bidentate cofactor appears once per donating atom and must be
-        # counted once.
+        # counted once, and a porphyrin once for its four nitrogens.
         if key in seen:
             continue
         seen.add(key)
         resname = (donor.resname or "").strip().upper()
+        stem = _id_stem_of(_residue_id_of(donor))
+        if stem in donor_states:
+            state = donor_states[stem]
+            if state is None or str(state) == "":
+                terms.append(f"{resname}{donor.resid} ?")
+                complete = False
+                continue
+            resname = str(state).strip().upper()
         charge = STANDARD_DONOR_FORMAL_CHARGE.get(resname)
         if charge is None and key in ligand_charges:
             try:
@@ -2917,11 +3058,27 @@ def _proposals(
         if value is not None:
             proposals[decision.id] = (
                 str(value),
-                " ".join(terms) + f" = {value:+d}",
+                "Worked out from your earlier answers: "
+                + " ".join(terms)
+                + f" = {value:+d}. Change it if that is not this site.",
             )
     spin = _proposed_qm_multiplicity(plan, answers)
     if spin is not None:
-        proposals["refinement.total_qm_multiplicity"] = spin
+        value, why = spin
+        proposals["refinement.total_qm_multiplicity"] = (
+            value,
+            f"Worked out from your earlier answers: {why}. Change it if that "
+            "is not this region.",
+        )
+    for ligand_id, resname in plan.findings.get("known_cofactors", {}).items():
+        entry = KNOWN_METAL_FREE_COFACTORS[resname]
+        for field_name, value in (
+            ("smiles", entry.smiles),
+            ("net_charge", str(entry.net_charge)),
+        ):
+            decision_id = f"ligand.{ligand_id}.{field_name}"
+            if plan.by_id(decision_id) is not None:
+                proposals[decision_id] = (value, entry.explanation)
     return proposals
 
 
