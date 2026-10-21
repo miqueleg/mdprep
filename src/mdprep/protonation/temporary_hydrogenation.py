@@ -17,6 +17,7 @@ from typing import Mapping
 
 from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 from mdprep.structure.pdb import read_pdb
+from mdprep.structure.pdb_fields import expected_split_metal_numbering
 from mdprep.structure.writer import write_pdb
 
 
@@ -107,7 +108,8 @@ def add_temporary_protein_hydrogens(
     try:
         platform_name = "Reference"
         platform = Platform.getPlatformByName(platform_name)
-        fixer = PDBFixer(filename=str(input_path), platform=platform)
+        with expected_split_metal_numbering():
+            fixer = PDBFixer(filename=str(input_path), platform=platform)
         modeller = Modeller(fixer.topology, fixer.positions)
         variants, requested = _requested_variants(modeller.topology, assigned_states)
         # Residues somebody else already hydrogenated are held back here, so

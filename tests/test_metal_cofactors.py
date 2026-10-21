@@ -130,6 +130,31 @@ def test_every_other_atom_keeps_its_place(tmp_path):
     ]
 
 
+def test_openmm_reads_the_split_metal_as_a_residue_and_is_not_noisy_about_it(tmp_path):
+    """OpenMM's reader warns about consecutive residues sharing a number --
+    the metal and its cofactor -- every time it reads one of mdprep's files,
+    and reads them as the two residues they are."""
+
+    pdbfixer = pytest.importorskip("pdbfixer")
+    import warnings
+
+    from mdprep.structure.pdb_fields import expected_split_metal_numbering
+
+    written = tmp_path / "written.pdb"
+    write_pdb(read_pdb(CYP119), written)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        with expected_split_metal_numbering():
+            fixer = pdbfixer.PDBFixer(filename=str(written))
+
+    assert not [w for w in caught if "consecutive residues" in str(w.message)]
+    assert [
+        (residue.name, residue.id) for residue in fixer.topology.residues()
+        if residue.name in {"HEM", "FE"}
+    ] == [("HEM", "1401"), ("FE", "1401"), ("HEM", "901"), ("FE", "901")]
+
+
 def test_a_lone_metal_and_a_cluster_are_left_as_they_are(tmp_path):
     path = _pdb(
         tmp_path,

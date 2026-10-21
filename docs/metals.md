@@ -829,6 +829,23 @@ It applies to both the Hessian and the GFN2 ESP of the large model, and it is
 in every command record. A site that fails this way without it says which
 setting to add.
 
+### The iron's force constants
+
+The Seminario method reads a bond's force constant from the 3 x 3 block of the
+Hessian between its two atoms. For a heme's iron the result depends on which of
+the two it starts from, because that block mixes the bond's stretch with the
+porphyrin's ring modes, and MCPB.py takes one order. On CYP119's crystal
+geometry it writes 24, 61, 91 and 93 kcal/mol/A^2 for the four Fe-N bonds;
+projected from the iron instead, the same four come out 76-107. On a Boltz model
+of the same enzyme MCPB.py writes 52-82.
+
+Either way the site holds. Through the Roe-Brooks equilibration and 200 ps of
+production on the crystal parameters, the four Fe-N bonds average 2.00-2.04 A,
+Fe-S 2.29 A and Fe-O 2.25 A (crystal: 1.98-2.01, 2.27 and 2.27 A), the softest
+Fe-N fluctuating only slightly more than the others. The water, at 22
+kcal/mol/A^2, moves most. Sections E7 and H of the official notebook show your
+own site's constants and its distances after every step: look at both.
+
 ### What is not supported
 
 - **A residue holding more than one metal**, an iron-sulfur cluster for

@@ -20,6 +20,9 @@ a selector written against the original file can be translated by hand.
 
 from __future__ import annotations
 
+import warnings
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 
 from mdprep.structure.classify import (
@@ -188,6 +191,23 @@ def split_cofactor_metals(
         if id(atom) in last_of:
             result.append(last_of[id(atom)])
     return result, frozenset(moved.resname for _, moved in split.values())
+
+
+@contextmanager
+def expected_split_metal_numbering() -> Iterator[None]:
+    """Read a PDB mdprep wrote with OpenMM, without its residue-number warning.
+
+    A metal read out of its cofactor keeps the cofactor's number, so the two
+    are consecutive residues sharing one -- which OpenMM's PDB reader reports
+    every time it reads such a file, and still reads as the two residues they
+    are. Expected, so not passed on as if something were wrong.
+    """
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore", message="WARNING: two consecutive residues with same number"
+        )
+        yield
 
 
 def _element_of(atom: AtomRecord) -> str:
