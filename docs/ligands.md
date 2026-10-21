@@ -39,13 +39,17 @@ Three things are checked, and one is not:
   connectivity cannot tell the keto and enol forms apart, but the coordinates
   can: in 6NIE the C2-O5 of alpha-ketoglutarate is 1.207 A, a ketone, where an
   enol C-OH would refine near 1.36. Delocalised groups -- carboxylate, nitro,
-  guanidinium, phosphate, sulfonyl -- and aromatic rings are skipped, because
-  a SMILES has to write their symmetric geometry as alternating orders and the
-  formal numbers there say nothing about length. A single bond a pi system
-  reaches across is measured against a conjugated length rather than a
-  saturated one: C-C between two sp2 carbons against 1.46 A, and C-N from an
-  sp2 carbon to a neutral three-coordinate nitrogen -- an amide, an amino
-  group on a ring, the ring nitrogen of NADH -- against 1.36 A. Measured
+  guanidinium, phosphate, sulfonyl, the core of a porphyrin -- and aromatic
+  rings are skipped, because a SMILES has to write their symmetric geometry as
+  alternating orders and the formal numbers there say nothing about length.
+  A heme's SMILES draws two pyrroles with a single beta-beta bond and two with
+  a double one, which two being the writer's choice; 2QFK's heme was refined
+  with one of them at 1.52 A, and was refused as a wrong tautomer of heme b,
+  which has none. A chlorin's reduced pyrrole is still checked. A single bond
+  a pi system reaches across is measured against a conjugated length rather
+  than a saturated one: C-C between two sp2 carbons against 1.46 A, and C-N
+  from an sp2 carbon to a neutral three-coordinate nitrogen -- an amide, an
+  amino group on a ring, the ring nitrogen of NADH -- against 1.36 A. Measured
   against 1.52 and 1.47, every amide, adenine and flavin looked like a wrong
   tautomer. C-O is not relaxed: an enol's C-OH against a ketone's C=O is what
   the check is for.

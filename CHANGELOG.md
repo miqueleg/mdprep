@@ -99,6 +99,10 @@
   own backbone nitrogen. A replaced side chain bonded to its own backbone is
   rebuilt beyond CB from the parent's template, listed under
   `side_chain_rebuilt`, with a warning naming its closest contact.
+- The bond-order check read a porphyrin bond by bond, so 2QFK's heme, refined
+  with one pyrrole's beta-beta bond at single-bond length, was refused as a
+  wrong tautomer of heme b. A porphyrin's core is skipped like a carboxylate;
+  a chlorin's reduced ring is still checked.
 
 ## 0.4.0 - 2026-10-20
 

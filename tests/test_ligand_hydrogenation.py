@@ -403,3 +403,46 @@ def test_a_ligand_from_a_prediction_with_a_wide_name_can_be_hydrogenated():
     )
 
     assert count_hydrogens(result.residue) > 0
+
+
+def test_a_porphyrin_is_not_read_bond_by_bond():
+    """A SMILES draws two of a porphyrin's pyrroles as pyrrolides, with a
+    single beta-beta bond, and two as pyrrolenines, with a double one. Which
+    two is the writer's choice; the real ring has all four alike.
+
+    2QFK's heme was refined with C2D-C3D at 1.52 A while its other three
+    beta-beta bonds are 1.34-1.36 -- in both chains, so most likely the
+    restraint dictionary of the time. The proposed heme SMILES happens to draw
+    ring D as a pyrrolenine, and was refused as the wrong tautomer of heme b,
+    of which there is none to pick.
+    """
+    from math import dist
+
+    from mdprep.ligands.cofactors import KNOWN_METAL_FREE_COFACTORS
+
+    heme = KNOWN_METAL_FREE_COFACTORS["HEM"]
+    residue = residue_named(DATA / "cofactors" / "hem_2qfk.pdb", "HEM")
+    xyz = {atom.name: (atom.x, atom.y, atom.z) for atom in residue.atoms}
+    assert dist(xyz["C2D"], xyz["C3D"]) == pytest.approx(1.52, abs=0.01)
+
+    result = add_ligand_hydrogens(
+        residue, heme.smiles, ligand_id="a_hem_139", net_charge=heme.net_charge
+    )
+
+    # Four meso hydrogens, four methyls, two vinyls, two propionates.
+    assert result.added_hydrogens == 30
+
+
+def test_a_chlorin_is_still_read_bond_by_bond():
+    """A chlorin's reduced pyrrole is a real single bond, not notation: its
+    beta carbons carry four neighbours, and the porphyrin core does not match."""
+    from rdkit import Chem
+
+    from mdprep.ligands.hydrogenate import PORPHYRIN_CORE_SMARTS
+
+    core = Chem.MolFromSmarts(PORPHYRIN_CORE_SMARTS)
+    porphine = Chem.MolFromSmiles("c1cc2cc3ccc(cc4ccc(cc5ccc(cc1n2)[nH]5)n4)[nH]3")
+    chlorin = Chem.MolFromSmiles("C1Cc2cc3ccc(cc4ccc(cc5ccc(cc1n2)[nH]5)n4)[nH]3")
+
+    assert porphine.HasSubstructMatch(core)
+    assert not chlorin.HasSubstructMatch(core)

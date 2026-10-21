@@ -129,6 +129,17 @@ CONJUGATED_SINGLE_BOND_ANGSTROM: dict[tuple[str, str], float] = {
 BOND_LENGTH_TOLERANCE_ANGSTROM = 0.10
 BOND_LENGTH_MARGIN_ANGSTROM = 0.06
 
+# The 24-atom core of a porphyrin, as in heme. A SMILES draws two of its
+# pyrroles as pyrrolides, whose beta-beta bond is single, and two as
+# pyrrolenines, whose beta-beta bond is double; which two is the writer's
+# choice, and the real ring has all four alike. Every carbon is
+# three-connected, so a chlorin's saturated pyrrole is still checked.
+PORPHYRIN_CORE_SMARTS = (
+    "[#6X3]~1~[#6X3]~[#6X3]~2~[#7]~[#6X3]~1~[#6X3]~[#6X3]~3~[#6X3]~[#6X3]"
+    "~[#6X3](~[#7]~3)~[#6X3]~[#6X3]~4~[#6X3]~[#6X3]~[#6X3](~[#7]~4)~[#6X3]"
+    "~[#6X3]~5~[#6X3]~[#6X3]~[#6X3](~[#6X3]~2)~[#7]~5"
+)
+
 # Groups whose real geometry is symmetric while any SMILES has to write them
 # as alternating single and double bonds. Their formal orders say nothing
 # about their lengths, so they are not checked.
@@ -139,6 +150,7 @@ DELOCALISED_SMARTS = (
     "[NX3][CX3](=[NX3+])[NX3]",   # guanidinium
     "[PX4](=[OX1])([OX1-])",      # phosphate
     "[SX4](=[OX1])(=[OX1])",      # sulfonyl
+    PORPHYRIN_CORE_SMARTS,
 )
 
 
