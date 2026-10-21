@@ -6,6 +6,7 @@ references are real ones, from the enzymes a halogenase workshop meets:
 * an unspecific peroxygenase (5OXU), with five N-glycans and the phosphate,
   glycerol and methanol it was crystallised from;
 * the fluorinase (1RQR), solved with selenomethionine;
+* chloroperoxidase (1CPO), which begins with a pyroglutamate;
 * an L-2-haloacid dehalogenase (1ZRN), with its acetate bonded to the
   catalytic aspartate;
 * a vanadium chloroperoxidase (1IDQ), whose vanadate is not a metal site.
@@ -35,6 +36,7 @@ HETEROGENS = DATA / "heterogens"
 UPO = ROOT / "examples" / "tutorials" / "upo_5oxu" / "5OXU.pdb"
 SELENOMETHIONINE = HETEROGENS / "selenomethionine_1rqr.pdb"
 COVALENT = HETEROGENS / "covalent_intermediate_1zrn.pdb"
+PYROGLUTAMATE = HETEROGENS / "pyroglutamate_1cpo.pdb"
 VANADATE = HETEROGENS / "vanadate_1idq.pdb"
 
 
@@ -281,6 +283,35 @@ def test_anything_else_modified_is_asked_without_a_proposal(tmp_path):
     decision = plan.by_id("structure.replace_modified_residues")
 
     assert decision.default is None and decision.requires_user_input
+
+
+def test_a_pyroglutamate_is_said_to_lose_its_lactam():
+    """1CPO's N-terminal PCA0: a glutamine whose side chain closed onto its own
+    nitrogen. Replacing it rebuilds the side chain and frees the amine, which
+    is the student's to weigh, so it is said, and nothing is proposed."""
+
+    decision = plan_decisions(PYROGLUTAMATE).by_id("structure.replace_modified_residues")
+
+    assert decision.evidence == ("A:PCA0 -> GLN, from the file's MODRES records",)
+    assert decision.default is None and decision.requires_user_input
+    assert "A:PCA0: its side chain is bonded to its own backbone" in decision.why
+    assert "charged amine" in decision.why
+
+
+def test_a_selenomethionine_keeps_its_side_chain(selenomethionine):
+    decision = selenomethionine.by_id("structure.replace_modified_residues")
+
+    assert "bonded to its own backbone" not in decision.why
+
+
+def test_only_proline_may_have_a_side_chain_on_its_backbone():
+    """A hydroxyproline's CD-N bond is its parent's too."""
+    from mdprep.structure.heterogens import side_chain_closes_onto_backbone
+
+    lactam = [("N", (0.0, 0.0, 0.0)), ("CA", (1.46, 0.0, 0.0)), ("CD", (-0.5, 1.4, 0.0))]
+
+    assert side_chain_closes_onto_backbone(lactam, "GLN")
+    assert not side_chain_closes_onto_backbone(lactam, "PRO")
 
 
 def test_a_modified_residue_with_no_known_parent_is_refused(tmp_path):

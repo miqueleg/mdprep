@@ -82,8 +82,11 @@ relative executable path when needed.
     ```
 
     The atoms the two share keep their coordinates; what only the parent
-    has -- a methionine's SD for a selenomethionine's SE -- is built. Where the
-    modification was the protein's chemistry (a phosphoserine), that
+    has -- a methionine's SD for a selenomethionine's SE -- is built, with or
+    without `add_missing_heavy_atoms`. A side chain bonded to its own
+    backbone, as a pyroglutamate's lactam is, is instead rebuilt beyond CB
+    from the parent's template and listed under `side_chain_rebuilt`. Where
+    the modification was the protein's chemistry (a phosphoserine), that
     chemistry is gone, which is why each is named. Exactly the listed
     residues are replaced; PDBFixer's own substitution table is not
     consulted. Each replacement is reported.

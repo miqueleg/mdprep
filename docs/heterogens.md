@@ -64,6 +64,27 @@ them, otherwise from a short table in `mdprep.structure.heterogens`; a
 modified residue with no known parent is refused when the structure is loaded
 (noncanonical amino acids inside a chain are not supported).
 
+A replacement needs nothing else repaired: what the parent has and the
+modified residue lacked is built whether or not `add_missing_heavy_atoms` is
+set, and a chain's terminal `OXT` is left to tleap, as it is when nothing is
+repaired.
+
+A pyroglutamate (`PCA`), the N-terminus of many secreted proteins, is a
+glutamine whose side chain has closed onto its own nitrogen as a lactam. The
+two share atom names but not their places -- kept where they are, the
+glutamine's CD would sit 1.5 A from its backbone N -- so a side chain bonded
+to its own backbone (only proline's may be) is deleted beyond CB and built
+again from the parent's template. The report lists the rebuilt atoms under
+`side_chain_rebuilt`, and a warning says how close the new side chain comes
+to its neighbours: PDBFixer places it in its template's rotamer and only
+pushes apart atoms closer than 1.3 A, so on 1CPO the glutamine's NE2 starts
+1.5 A from Ser4's OG, and tleap puts Ser4's hydroxyl hydrogen almost on top of
+it. Minimise before anything else: a plain minimisation of the prepared 1CPO
+separates them, leaving Ser4's hydroxyl hydrogen-bonded to Glu1's carbonyl and
+every bond of both residues at its length. The replacement also changes the
+chemistry: a pyroglutamate's N-terminus is a neutral lactam, a glutamine's a
+charged amine.
+
 ## Glycans
 
 Sugars bonded to the protein, and every sugar bonded to those. mdprep does not

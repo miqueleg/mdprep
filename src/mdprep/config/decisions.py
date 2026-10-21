@@ -1039,6 +1039,11 @@ def _heterogen_group_decisions(groups: HeterogenGroups) -> list[Decision]:
             item.residue.id.resname.strip().upper() in LABELLING_MODIFICATIONS
             for item in groups.modified_residues
         )
+        rebuilt = [
+            item.residue.id.display()
+            for item in groups.modified_residues
+            if item.side_chain_rebuilt
+        ]
         decisions.append(
             Decision(
                 id="structure.replace_modified_residues",
@@ -1061,6 +1066,17 @@ def _heterogen_group_decisions(groups: HeterogenGroups) -> list[Decision]:
                     "selenomethionine stands for, but also a serine where a "
                     "phosphoserine was, whose phosphate is then gone from the "
                     "simulation. Answering no stops the build. "
+                    + (
+                        f"{', '.join(rebuilt)}: its side chain is bonded to its own "
+                        "backbone, as a pyroglutamate's lactam is, and its parent's "
+                        "is not. Replacing it builds the side chain again beyond CB, "
+                        "in PDBFixer's template rotamer, which can sit close to its "
+                        "neighbours until the system is minimised; and it frees the "
+                        "nitrogen: a glutamine at the N-terminus is a charged amine "
+                        "where the pyroglutamate was a neutral lactam. "
+                        if rebuilt
+                        else ""
+                    )
                     + (
                         "Proposed yes: these are selenomethionines, the label a "
                         "methionine is given to solve the phases, not chemistry of "

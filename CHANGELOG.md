@@ -89,6 +89,16 @@
   but their HID-HIE gaps moved by 1 to 3 kcal/mol, enough to flip a closer
   call.
 - A vanadate was split into a vanadium and four unbonded oxygens.
+- Replacing a modified residue stopped the run unless
+  `structure.repair.add_missing_heavy_atoms` was set: PDBFixer keeps a blank
+  insertion code as a space, so the replaced residue's own new atoms counted
+  as unrequested. Any replacement in a structure missing nothing else reached
+  this, 1CPO's pyroglutamate among them. A chain's terminal OXT, which the
+  planner never asks about, stopped such a run too; it is left to tleap.
+- A pyroglutamate replaced by glutamine kept its lactam's CD 1.5 A from its
+  own backbone nitrogen. A replaced side chain bonded to its own backbone is
+  rebuilt beyond CB from the parent's template, listed under
+  `side_chain_rebuilt`, with a warning naming its closest contact.
 
 ## 0.4.0 - 2026-10-20
 

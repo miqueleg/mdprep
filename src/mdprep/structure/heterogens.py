@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from math import floor
+from math import dist, floor
 from typing import Iterable, Sequence
 
 from mdprep.structure.classify import (
@@ -29,7 +29,7 @@ from mdprep.structure.classify import (
     is_standard_protein_residue,
     is_water_residue,
 )
-from mdprep.structure.completeness import PEPTIDE_BOND_MAX_ANGSTROM
+from mdprep.structure.completeness import BACKBONE_HEAVY_ATOMS, PEPTIDE_BOND_MAX_ANGSTROM
 from mdprep.structure.links import StructureLink
 from mdprep.structure.models import AtomRecord, ResidueId, ResidueRecord
 
@@ -123,6 +123,39 @@ CRYSTALLISATION_ADDITIVES = {
 BOND_MAX_ANGSTROM = 1.75
 
 
+# Of the twenty amino acids only proline has a side chain bonded to its own
+# backbone. A modified residue can close one -- a pyroglutamate's lactam joins
+# CD to N -- and then the atoms it shares with its parent by name are not where
+# the parent has them: kept, a glutamine's CD would sit 1.5 A from its own
+# nitrogen. A side-chain atom this close to N or C is bonded to it; nothing
+# unbonded is. Such a side chain is rebuilt, keeping only these atoms; CB stays
+# because it carries the residue's chirality.
+SIDE_CHAIN_BACKBONE_BOND_MAX_ANGSTROM = 2.0
+KEPT_WHEN_SIDE_CHAIN_REBUILT = BACKBONE_HEAVY_ATOMS | {"OXT", "CB"}
+
+
+def side_chain_closes_onto_backbone(
+    atoms: Iterable[tuple[str, Sequence[float]]], parent: str
+) -> bool:
+    """Whether a side chain is bonded to its own backbone where its parent's is not.
+
+    ``atoms`` are the residue's heavy atoms as (name, position) pairs.
+    """
+
+    if parent == "PRO":
+        return False
+    atoms = list(atoms)
+    backbone = [position for name, position in atoms if name in {"N", "C"}]
+    side_chain = [
+        position for name, position in atoms if name not in KEPT_WHEN_SIDE_CHAIN_REBUILT
+    ]
+    return any(
+        dist(left, right) < SIDE_CHAIN_BACKBONE_BOND_MAX_ANGSTROM
+        for left in side_chain
+        for right in backbone
+    )
+
+
 @dataclass(frozen=True)
 class ModifiedResidue:
     """A heterogen that is a residue of a polymer chain."""
@@ -132,6 +165,19 @@ class ModifiedResidue:
     parent: str | None
     # Where the parent came from: the file, or mdprep's own table.
     parent_source: str | None
+
+    @property
+    def side_chain_rebuilt(self) -> bool:
+        """Whether replacing it builds its side chain again instead of keeping it."""
+
+        return self.parent is not None and side_chain_closes_onto_backbone(
+            (
+                (atom.name, (atom.x, atom.y, atom.z))
+                for atom in self.residue.atoms
+                if (atom.element or atom.name[:1]).strip().upper() != "H"
+            ),
+            self.parent,
+        )
 
     def describe(self) -> str:
         if self.parent is None:

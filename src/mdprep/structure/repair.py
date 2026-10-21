@@ -11,6 +11,10 @@ import numpy as np
 
 from mdprep.config.models import ManifestConfig, ResidueSelector
 from mdprep.structure.classify import is_standard_protein_residue
+from mdprep.structure.heterogens import (
+    KEPT_WHEN_SIDE_CHAIN_REBUILT,
+    side_chain_closes_onto_backbone,
+)
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord, build_residues
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.pdb_fields import expected_split_metal_numbering
@@ -180,22 +184,33 @@ def repair_structure(
                     "chain": residue.chain.id,
                     "resname": residue.name,
                     "resid": int(residue.id),
-                    "icode": (residue.insertionCode or "").strip() or None,
+                    "icode": _insertion_code(residue),
                     "replacement": replacement,
                 }
                 for residue, replacement in fixer.nonstandardResidues
             ]
             fixer.replaceNonstandardResidues()
+            cleared = _clear_side_chains_bonded_to_the_backbone(fixer, replaced)
+            for item in replaced:
+                item["side_chain_rebuilt"] = cleared.get(
+                    (str(item["chain"]), int(item["resid"]), item["icode"]), []
+                )
         replaced_keys = {
             (str(item["chain"]), int(item["resid"]), item["icode"]) for item in replaced
         }
         fixer.findMissingAtoms()
         detected_atoms = _detected_missing_atoms(fixer)
+        if not config.add_missing_heavy_atoms:
+            # A chain's terminal OXT is tleap's to build, as it is when nothing
+            # is repaired: replacing a modified residue is no reason for
+            # PDBFixer to build atoms nobody asked it for.
+            fixer.missingTerminals = {}
         # A replaced residue is rebuilt to its parent's atoms by design.
         unasked = [
             item
             for item in detected_atoms
             if (str(item["chain"]), int(item["resid"]), item["icode"]) not in replaced_keys
+            and item["source"] != "missing_terminal_atoms"
         ]
         if unasked and not config.add_missing_heavy_atoms:
             formatted = ", ".join(
@@ -247,6 +262,18 @@ def repair_structure(
         "PDBFixer-generated missing coordinates are deterministic for the "
         "recorded seed/platform but remain modeled coordinates; minimize the "
         "final Amber system before production MD.",
+        *(
+            f"{item['chain']}:{item['resname']}{item['resid']}{item['icode'] or ''} "
+            f"was replaced by {item['replacement']} with its side chain rebuilt "
+            f"beyond CB ({', '.join(item['side_chain_rebuilt'])}): it was bonded "
+            f"to the residue's own backbone, which {item['replacement']}'s is not, "
+            "so the atoms the two share by name were not where the parent has "
+            "them. The new side chain is PDBFixer's template rotamer, "
+            + _closest_rebuilt_contact(repaired, item)
+            + "; minimize before anything else."
+            for item in replaced
+            if item["side_chain_rebuilt"]
+        ),
     )
     return StructureRepairResult(
         backend="pdbfixer",
@@ -284,7 +311,7 @@ def _listed_modified_residues(fixer: object, listed: list[object]) -> list[tuple
             residue.chain.id,
             residue.name,
             int(residue.id),
-            (residue.insertionCode or "").strip() or None,
+            _insertion_code(residue),
         ): residue
         for residue in fixer.topology.residues()  # type: ignore[attr-defined]
     }
@@ -301,6 +328,84 @@ def _listed_modified_residues(fixer: object, listed: list[object]) -> list[tuple
             )
         found.append((residue, item.parent))  # type: ignore[attr-defined]
     return found
+
+
+def _clear_side_chains_bonded_to_the_backbone(
+    fixer: object, replaced: list[dict[str, object]]
+) -> dict[tuple[str, int, str | None], list[str]]:
+    """Delete, for PDBFixer to rebuild, a replaced side chain its parent cannot have.
+
+    Everything beyond CB goes, and the parent's template supplies the side
+    chain when the missing atoms are built. Returns the deleted atoms' names
+    by residue.
+    """
+
+    from openmm import unit
+    from openmm.app import Modeller
+
+    parents = {
+        (str(item["chain"]), int(item["resid"]), item["icode"]): str(item["replacement"])
+        for item in replaced
+    }
+    positions = fixer.positions.value_in_unit(unit.angstrom)  # type: ignore[attr-defined]
+    cleared: dict[tuple[str, int, str | None], list[str]] = {}
+    doomed: list[object] = []
+    for residue in fixer.topology.residues():  # type: ignore[attr-defined]
+        key = (residue.chain.id, int(residue.id), _insertion_code(residue))
+        if key not in parents:
+            continue
+        atoms = [
+            atom
+            for atom in residue.atoms()
+            if atom.element is not None and atom.element.symbol != "H"
+        ]
+        if side_chain_closes_onto_backbone(
+            ((atom.name, positions[atom.index]) for atom in atoms), parents[key]
+        ):
+            side_chain = [
+                atom for atom in atoms if atom.name not in KEPT_WHEN_SIDE_CHAIN_REBUILT
+            ]
+            cleared[key] = sorted(atom.name for atom in side_chain)
+            doomed.extend(side_chain)
+    if doomed:
+        modeller = Modeller(fixer.topology, fixer.positions)  # type: ignore[attr-defined]
+        modeller.delete(doomed)
+        fixer.topology = modeller.topology  # type: ignore[attr-defined]
+        fixer.positions = modeller.positions  # type: ignore[attr-defined]
+    return cleared
+
+
+def _closest_rebuilt_contact(structure: PdbStructure, item: dict[str, object]) -> str:
+    """How close a rebuilt side chain comes to the atoms around it, in words."""
+
+    chain, resid, icode = str(item["chain"]), int(item["resid"]), item["icode"]
+
+    def heavy(atom: AtomRecord) -> bool:
+        return (atom.element or atom.name[:1]).strip().upper() != "H"
+
+    def own(atom: AtomRecord) -> bool:
+        return (atom.chain_id, atom.resid, atom.icode or None) == (chain, resid, icode)
+
+    rebuilt = [
+        atom
+        for atom in structure.atoms
+        if own(atom) and heavy(atom) and atom.name not in KEPT_WHEN_SIDE_CHAIN_REBUILT
+    ]
+    others = [atom for atom in structure.atoms if not own(atom) and heavy(atom)]
+    if not rebuilt or not others:
+        return "with nothing around it"
+    near = np.array([(atom.x, atom.y, atom.z) for atom in others])
+    closest: tuple[float, AtomRecord, AtomRecord] | None = None
+    for atom in rebuilt:
+        distances = np.linalg.norm(near - (atom.x, atom.y, atom.z), axis=1)
+        index = int(distances.argmin())
+        if closest is None or distances[index] < closest[0]:
+            closest = (float(distances[index]), atom, others[index])
+    distance, mine, other = closest  # type: ignore[misc]
+    return (
+        f"whose {mine.name} is {distance:.2f} A from "
+        f"{other.chain_id}:{other.resname}{other.resid}{other.icode or ''} {other.name}"
+    )
 
 
 def _write_repair_input(
@@ -505,6 +610,16 @@ def _validate_expected_missing_residues(
     ]
 
 
+def _insertion_code(residue: object) -> str | None:
+    """A PDBFixer residue's insertion code, None when blank as everywhere else.
+
+    PDBFixer keeps the column as it read it, a space when there is none, and a
+    key built with the space matches nothing mdprep built.
+    """
+
+    return (residue.insertionCode or "").strip() or None  # type: ignore[attr-defined]
+
+
 def _detected_missing_atoms(fixer: object) -> list[dict[str, object]]:
     values: list[dict[str, object]] = []
     for residue, atoms in fixer.missingAtoms.items():  # type: ignore[attr-defined]
@@ -515,7 +630,7 @@ def _detected_missing_atoms(fixer: object) -> list[dict[str, object]]:
                 "chain": residue.chain.id,
                 "resname": residue.name,
                 "resid": int(residue.id),
-                "icode": residue.insertionCode or None,
+                "icode": _insertion_code(residue),
                 "atom_names": sorted(atom.name for atom in atoms),
                 "source": "missing_heavy_atoms",
             }
@@ -528,7 +643,7 @@ def _detected_missing_atoms(fixer: object) -> list[dict[str, object]]:
                 "chain": residue.chain.id,
                 "resname": residue.name,
                 "resid": int(residue.id),
-                "icode": residue.insertionCode or None,
+                "icode": _insertion_code(residue),
                 "atom_names": sorted(str(name) for name in atom_names),
                 "source": "missing_terminal_atoms",
             }

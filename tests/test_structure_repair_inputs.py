@@ -181,3 +181,35 @@ def test_the_tolerance_clears_unit_round_trip_noise_but_not_real_movement():
     """
     assert EXISTING_ATOM_TOLERANCE_ANGSTROM > 0.0051
     assert EXISTING_ATOM_TOLERANCE_ANGSTROM < 0.0476
+
+
+# --------------------------------------------------------------------------
+# What PDBFixer reports
+# --------------------------------------------------------------------------
+
+
+def test_a_blank_insertion_code_from_pdbfixer_is_none():
+    """PDBFixer keeps a blank insertion code as the space it read.
+
+    Keyed with the space, the missing atoms of a residue replaced by its parent
+    matched nothing mdprep had built, so on 1CPO the glutamine that replaced
+    the N-terminal pyroglutamate stopped the run as unrequested missing atoms.
+    """
+    from types import SimpleNamespace
+
+    from mdprep.structure.repair import _detected_missing_atoms
+
+    class Residue:  # PDBFixer's residues are dictionary keys
+        chain = SimpleNamespace(id="A")
+        name, id, insertionCode = "GLN", "0", " "
+
+    glutamine = Residue()
+    fixer = SimpleNamespace(
+        missingAtoms={glutamine: [SimpleNamespace(name="OE1"), SimpleNamespace(name="NE2")]},
+        missingTerminals={},
+    )
+
+    (item,) = _detected_missing_atoms(fixer)
+
+    assert item["icode"] is None
+    assert item["atom_names"] == ["NE2", "OE1"]
