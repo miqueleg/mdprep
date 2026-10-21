@@ -643,8 +643,10 @@ silently choosing one charge model.
   metal bound between two chains has to be modelled nonbonded.
 - Metal charges are limited to +1 through +4 because the mandatory provisional
   hydrogenation/QMMESP environment uses Amber Li/Merz ion models.
-- No metal-metal bond inference, covalent ligands, noncanonical polymer
-  residues, ORCA backend, or Multiwfn dependency.
+- No metal-metal bond inference, metal clusters, covalent ligands (heme c
+  among them), noncanonical polymer residues, ORCA backend, or Multiwfn
+  dependency. A metal inside a cofactor is supported; see
+  [A metal inside a cofactor](#a-metal-inside-a-cofactor-hemes).
 - No small-model optimization inside the MCPB Hessian stage. Geometry must come
   from a completed ASH QM/MM refinement or an explicitly supplied optimized PDB.
 - MCPB.py and its AmberTools RESP dependencies are always required. The
@@ -759,6 +761,105 @@ Off*.
 With the fix, SyrB2 runs the whole Roe-Brooks protocol and production with
 Fe-N(His) 2.0-2.35 A, Fe-Cl 2.2-2.5 A, Fe-O(alpha-KG) 1.9-2.2 A, Fe-O(water)
 2.1-2.5 A, and the water hydrogens never closer than 3 A to the chloride.
+
+## A metal inside a cofactor: hemes
+
+A heme is deposited as one residue. Heme b is `HEM`, 43 atoms with the iron
+among them, and a cytochrome P450's iron is bonded to the porphyrin's four
+nitrogens, to the proximal cysteine's sulfur and, at rest, to a water across
+the heme plane. Neither half can be parameterised with the other inside it:
+antechamber's semi-empirical charges do not treat iron, and MCPB.py builds a
+site around a one-atom metal residue.
+
+So mdprep moves the metal into a residue of its own as the structure is read,
+from a PDB or an mmCIF file, a deposition or a prediction:
+
+- The new residue is named after the element, keeps the cofactor's chain and
+  residue number, and comes right after it. In CYP119
+  ([PDB 1IO7](https://www.rcsb.org/structure/1IO7)) `A:HEM1401` becomes
+  `A:HEM1401`, 42 atoms, and `A:FE1401`.
+- The name is recorded as assigned, so no oxidation state is read into it:
+  `FE` is Fe(III) in the PDB dictionary, and a heme's iron is either.
+- The reader says so in the structure's warnings, and selectors in the manifest
+  use the new residue.
+
+From there the iron is an ordinary metal site and the porphyrin an ordinary
+ligand that coordinates it. The decision engine proposes the bonded model with
+six donors, NA, NB, NC and ND, the cysteine's SG and the water's O, and asks:
+
+| Question | CYP119 at rest | Why it is asked |
+| --- | --- | --- |
+| Oxidation state | +3 | `HEM` does not say: Fe(III) in a resting P450, Fe(II) in deoxymyoglobin |
+| Cysteine protonation | `CYM` | The proximal thiolate. Asked before the model charge, which counts it |
+| Spin multiplicity | 2 | Six-coordinate low-spin Fe(III). Five-coordinate, with the water gone, it is high-spin: 6 |
+
+It also proposes, filled in and changeable:
+
+- **The porphyrin's SMILES and net charge**: protoporphyrin IX as it binds the
+  iron, with both pyrrole nitrogens deprotonated and both propionates ionised,
+  -4. Change it if a propionate is protonated in your structure.
+- **The model charge**, -2: Fe +3, porphyrin -4, thiolate -1, water 0.
+
+The porphyrin's charges come from the site's fit (`mcpb_resp_pyscf`), as an
+alpha-ketoglutarate's on a non-heme iron do. A proposal is not a default: a
+manifest written without a front end still has to state each value.
+
+A predicted P450 has no water on its iron. `mdprep closest-xray` and
+`mdprep transplant-waters` bring it in from a crystal structure in the same
+state, as for any other metal: for a Boltz model of CYP119 they find 1IO7 and
+put its HOH1402 2.27 A from the predicted iron
+(see [predicted_structures.md](predicted_structures.md)).
+
+### Smearing the xTB occupations
+
+An open-shell porphyrin has iron d orbitals close enough together that xTB's
+SCF oscillates at its own electronic temperature of 300 K and does not
+converge: on the CYP119 small model it was still oscillating after 1,000
+cycles. At 1000 K it converges in seconds. The builder therefore writes this
+for a site whose donors include a heme:
+
+```yaml
+      pyscf:
+        xtb:
+          model: gxtb
+          electronic_temperature_kelvin: 1000.0
+```
+
+It applies to both the Hessian and the GFN2 ESP of the large model, and it is
+in every command record. A site that fails this way without it says which
+setting to add.
+
+### The iron's force constants
+
+The Seminario method reads a bond's force constant from the 3 x 3 block of the
+Hessian between its two atoms. For a heme's iron the result depends on which of
+the two it starts from, because that block mixes the bond's stretch with the
+porphyrin's ring modes, and MCPB.py takes one order. On CYP119's crystal
+geometry it writes 24, 61, 91 and 93 kcal/mol/A^2 for the four Fe-N bonds;
+projected from the iron instead, the same four come out 76-107. On a Boltz model
+of the same enzyme MCPB.py writes 52-82.
+
+Either way the site holds. Through the Roe-Brooks equilibration and 200 ps of
+production on the crystal parameters, the four Fe-N bonds average 2.00-2.04 A,
+Fe-S 2.29 A and Fe-O 2.25 A (crystal: 1.98-2.01, 2.27 and 2.27 A), the softest
+Fe-N fluctuating only slightly more than the others. The water, at 22
+kcal/mol/A^2, moves most. Sections E7 and H of the official notebook show your
+own site's constants and its distances after every step: look at both.
+
+### What is not supported
+
+- **A residue holding more than one metal**, an iron-sulfur cluster for
+  instance, is refused before any question is asked: no single site describes
+  a cluster.
+- **Heme c** (`HEC`) is bonded to two cysteines through thioethers, which
+  makes it a covalent ligand, and it is refused by name. A bond cannot be told
+  from a clash by distance alone, and predicted complexes have clashes that
+  short.
+- Heme b is the only cofactor whose SMILES is proposed. Another single-metal
+  cofactor is split the same way, and its metal-free SMILES has to be typed.
+
+[examples/19_cyp119_heme_mcpb.yaml](../examples/19_cyp119_heme_mcpb.yaml) is
+the manifest for CYP119's chain A.
 
 ## Free ions in the crystal
 

@@ -1,0 +1,223 @@
+# CYP119, a cytochrome P450 with its heme (PDB 1IO7).
+#
+# The reference case for a metal inside a cofactor. The PDB writes heme b as
+# one residue, HEM, with its iron among its atoms; mdprep reads the iron out
+# into a residue of its own, A:FE1401, and the porphyrin left behind,
+# A:HEM1401, is a ligand bonded to it through four nitrogens. See
+# tutorials/cyp119_1io7/README.md and docs/metals.md.
+#
+# Written by the decision engine (mdprep init --interactive) with these
+# answers:
+#   * keep_chains: [A]       1IO7 is two copies of the enzyme.
+#   * Fe charge 3, spin 2    the resting state: low-spin Fe(III), with a
+#                            water across the heme from the cysteine.
+#   * Cys317 as CYM          the proximal thiolate.
+#   * model charge -2        Fe(3+) + porphyrin(4-) + thiolate(1-) + water(0),
+#                            proposed from the answers above.
+#   * HEM SMILES, charge -4  proposed: protoporphyrin IX as it binds the iron,
+#                            both propionates ionised.
+#   * six explicit bonds     NA, NB, NC, ND, Cys317 SG and HOH1402 O,
+#                            measured at 1.98-2.27 A in the deposition.
+#   * electronic temperature 1000 K: set by the builder for a heme, because
+#                            the open-shell porphyrin's xTB SCF does not
+#                            converge at 300 K.
+project:
+  name: cyp119_1io7
+  input_structure: tutorials/cyp119_1io7/1IO7.pdb
+  output_dir: prepared/cyp119_1io7
+structure:
+  keep_chains:
+  - A
+  keep_crystal_waters: true
+  keep_crystal_ions: true
+  altloc_policy: highest_occupancy
+  remove_unknown_heterogens: false
+  preserve_chain_ids: true
+  remove_input_hydrogens: true
+  repair:
+    backend: pdbfixer
+    add_missing_heavy_atoms: true
+    unresolved_residues: leave_absent
+protein:
+  forcefield: ff14SB
+  water_model: TIP3P
+protonation:
+  ph: 7.0
+  method: propka_xtb_his
+  overrides:
+  - selector:
+      chain: A
+      resname: CYS
+      resid: 317
+      icode: null
+    state: CYM
+    reason: Coordinates a metal modelled with bonded MCPB; stated by the user because
+      coordination alone does not distinguish the neutral and ionised forms.
+  histidine:
+    neutral_tautomer_method: xtb
+    xtb:
+      model: gfn2
+      mode: sp
+      num_threads: 1
+disulfides:
+  auto_detect: true
+  detection_cutoff_angstrom: 2.2
+  force: []
+  forbid: []
+ligands:
+- id: a_hem_1401
+  selector:
+    chain: A
+    resname: HEM
+    resid: 1401
+    icode: null
+  net_charge: -4
+  multiplicity: 1
+  atom_types: gaff2
+  charge_method: mcpb_resp_pyscf
+  smiles: Cc1c2[n-]c(cc3nc(cc4[n-]c(cc5nc(c2)c(C)c5C=C)c(C)c4C=C)c(C)c3CCC([O-])=O)c1CCC([O-])=O
+metals:
+- id: a_fe_1401_site
+  model: bonded_mcpb
+  ions:
+  - selector:
+      chain: A
+      resname: FE
+      resid: 1401
+      icode: null
+      atom_name: FE
+    element: Fe
+    charge: 3
+    multiplicity: 2
+  mcpb:
+    workflow: pyscf
+    provisional_nonbonded_parameter_set: '12_6'
+    cutoff_angstrom: 2.6
+    bonds:
+    - ion:
+        chain: A
+        resname: FE
+        resid: 1401
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: A
+        resname: HEM
+        resid: 1401
+        icode: null
+        atom_name: NA
+    - ion:
+        chain: A
+        resname: FE
+        resid: 1401
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: A
+        resname: HEM
+        resid: 1401
+        icode: null
+        atom_name: NC
+    - ion:
+        chain: A
+        resname: FE
+        resid: 1401
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: A
+        resname: HEM
+        resid: 1401
+        icode: null
+        atom_name: ND
+    - ion:
+        chain: A
+        resname: FE
+        resid: 1401
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: A
+        resname: HEM
+        resid: 1401
+        icode: null
+        atom_name: NB
+    - ion:
+        chain: A
+        resname: FE
+        resid: 1401
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: A
+        resname: CYS
+        resid: 317
+        icode: null
+        atom_name: SG
+    - ion:
+        chain: A
+        resname: FE
+        resid: 1401
+        icode: null
+        atom_name: FE
+      coordinator:
+        chain: A
+        resname: HOH
+        resid: 1402
+        icode: null
+        atom_name: O
+    additional_residues: []
+    force_constant_method: seminario
+    charge_restraint: backbone_heavy
+    software_version: gau
+    small_model_charge: -2
+    small_model_spin: 2
+    large_model_charge: -2
+    large_model_spin: 2
+    pyscf:
+      geometry_source: qmmm_refinement
+      hessian_backend: xtb
+      esp_backend: xtb
+      method: B3LYP
+      basis: 6-31G*
+      xtb:
+        model: gxtb
+        num_threads: 8
+        electronic_temperature_kelvin: 1000.0
+refinement:
+  enabled: true
+  backend: openmm
+  qm_method: gfn2_xtb
+  qm_components:
+    ligands:
+    - a_hem_1401
+    metal_sites:
+    - a_fe_1401_site
+    metal_coordinating_residues: {}
+  active_region_cutoff_angstrom: 4.0
+  active_water_cutoff_angstrom: 8.0
+  include_contact_waters: true
+  movable_atoms: active_region_hydrogens
+  post_refinement_protonation: reuse_initial
+  total_qm_multiplicity: 2
+  ash:
+    python_executable: python
+    xtb_executable: xtb
+    allow_unusual_link_boundaries: true
+    num_cores: 4
+    platform: CPU
+solvation:
+  enabled: true
+  box: truncated_octahedron
+  buffer_angstrom: 10.0
+  neutralize: true
+  salt_concentration_molar: 0.15
+  positive_ion: Na+
+  negative_ion: Cl-
+validation:
+  run_openmm_energy_check: true
+  fail_on_warnings: false
+  fail_on_missing_parameters: true
+  fail_on_noninteger_ligand_charge: true
+molecular_dynamics:
+  enabled: false

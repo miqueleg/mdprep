@@ -430,9 +430,11 @@ function targetSelector(target) {
 // Chain letters included: in an oligomer AKG1 is in every copy, and a
 // prediction gives each ligand a chain of its own.
 function targetList(targets) {
-  return targets
-    .map((t) => `${t.chain ? `${t.chain}:` : ""}${t.resname}${t.resid}`)
-    .join(", ");
+  // Once per residue: a porphyrin bonds an iron through four nitrogens and
+  // would otherwise be named four times.
+  return [
+    ...new Set(targets.map((t) => `${t.chain ? `${t.chain}:` : ""}${t.resname}${t.resid}`)),
+  ].join(", ");
 }
 
 function focusOn(decision) {
@@ -549,8 +551,10 @@ function renderCurrentQuestion() {
     state.answers[decision.id] === undefined ? proposalFor(decision) : null;
   state.proposal = proposal;
 
+  // Each proposal says where it came from: a sum of earlier answers, or a
+  // cofactor whose chemistry its name fixes.
   const note = proposal
-    ? `Worked out from your earlier answers: ${proposal.why}. Change it if that is not this site.`
+    ? proposal.why
     : decision.requires_user_input
       ? "This cannot be guessed from the structure, so there is no default."
       : "";

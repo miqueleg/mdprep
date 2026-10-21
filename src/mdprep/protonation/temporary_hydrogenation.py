@@ -17,6 +17,7 @@ from typing import Mapping
 
 from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 from mdprep.structure.pdb import read_pdb
+from mdprep.structure.pdb_fields import expected_split_metal_numbering
 from mdprep.structure.writer import write_pdb
 
 
@@ -107,7 +108,8 @@ def add_temporary_protein_hydrogens(
     try:
         platform_name = "Reference"
         platform = Platform.getPlatformByName(platform_name)
-        fixer = PDBFixer(filename=str(input_path), platform=platform)
+        with expected_split_metal_numbering():
+            fixer = PDBFixer(filename=str(input_path), platform=platform)
         modeller = Modeller(fixer.topology, fixer.positions)
         variants, requested = _requested_variants(modeller.topology, assigned_states)
         # Residues somebody else already hydrogenated are held back here, so
@@ -168,12 +170,16 @@ def add_temporary_protein_hydrogens(
     )
 
 
-# OpenMM names the protonation variants of the standard residues exactly as
-# Amber does, so an assigned state can be handed straight through.
+# OpenMM names the protonation variants of the standard residues as Amber
+# does, so an assigned state can be handed straight through -- with one
+# exception. Amber tells a thiolate (CYM) from a disulfide cysteine (CYX) by
+# charge, and both lack HG; OpenMM has the one variant, CYX. A cysteine bound
+# to a metal is the case that reaches this: a heme's or a zinc finger's.
 KNOWN_VARIANTS = {
     "ASH", "ASP", "GLH", "GLU", "LYN", "LYS",
     "HID", "HIE", "HIP", "CYS", "CYM", "CYX",
 }
+OPENMM_VARIANT_NAMES = {"CYM": "CYX"}
 
 
 def _requested_variants(
@@ -195,7 +201,7 @@ def _requested_variants(
         if state is None or state.upper() not in KNOWN_VARIANTS:
             variants.append(None)
             continue
-        variants.append(state.upper())
+        variants.append(OPENMM_VARIANT_NAMES.get(state.upper(), state.upper()))
         requested.append((f"{key[0]}:{residue.name}{key[1]}", state.upper()))
     return variants, tuple(requested)
 

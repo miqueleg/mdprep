@@ -13,6 +13,7 @@ from mdprep.config.models import ManifestConfig, ResidueSelector
 from mdprep.structure.classify import is_standard_protein_residue
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord, build_residues
 from mdprep.structure.pdb import read_pdb
+from mdprep.structure.pdb_fields import expected_split_metal_numbering
 from mdprep.structure.reader import is_mmcif_path, read_structure
 from mdprep.structure.writer import write_pdb
 
@@ -124,7 +125,8 @@ def repair_structure(
 
     try:
         platform = Platform.getPlatformByName(config.platform)
-        fixer = PDBFixer(filename=str(repair_input), platform=platform)
+        with expected_split_metal_numbering():
+            fixer = PDBFixer(filename=str(repair_input), platform=platform)
         if sequence_path is not None:
             sequence_fixer = PDBFixer(filename=str(sequence_path), platform=platform)
             fixer.sequences = sequence_fixer.sequences

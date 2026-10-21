@@ -179,7 +179,10 @@ def test_the_model_charge_is_proposed_from_an_accepted_oxidation_state():
     # Zn +2, His 0, the bound water 0.
     assert proposed["metal.z_zn_500_site.model_charge"] == "2"
     why = proposal_explanations(plan, typed)["metal.z_zn_500_site.model_charge"]
-    assert why == "ZN +2 HIS2 +0 HOH601 +0 = +2"
+    assert why == (
+        "Worked out from your earlier answers: ZN +2 HIS2 +0 HOH601 +0 = +2. "
+        "Change it if that is not this site."
+    )
 
 
 # --------------------------------------------------------------------------

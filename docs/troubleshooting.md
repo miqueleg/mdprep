@@ -57,6 +57,30 @@ MCPB.py would treat an N/O/S/halogen atom inside `mcpb.cutoff_angstrom` as a
 coordinator. Add every intended pair to `mcpb.bonds`, or reduce the cutoff
 after reviewing the site. Do not use the cutoff to hide an intended bond.
 
+## xTB Hessian Failed: SCF Not Converged
+
+An open-shell metal site with near-degenerate d orbitals -- a low-spin Fe(III)
+heme is the common one -- can make xTB's SCF oscillate without converging, and
+more cycles do not help. Smear the occupations instead:
+
+```yaml
+      pyscf:
+        xtb:
+          electronic_temperature_kelvin: 1000.0
+```
+
+The error names this setting when it applies. The builder writes it for a site
+whose donors include a heme. See
+[metals.md](metals.md#smearing-the-xtb-occupations).
+
+## A Metal Cluster Or Heme c Is Refused
+
+mdprep models a metal as one atom in a site of its own. A residue still holding
+several metal atoms once single metals have been read out of their cofactors --
+an iron-sulfur cluster -- cannot be described that way, and heme c is bonded to
+two cysteines, which makes it a covalent ligand. Both are refused before any
+question is asked rather than failing in antechamber or tleap later.
+
 ## Two Bonded Sites Would Each Need A Fit
 
 mdprep fits one bonded MCPB site per preparation. In an oligomer, give every

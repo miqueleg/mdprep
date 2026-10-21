@@ -1,5 +1,45 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- Hemes and other metals deposited inside a cofactor. The PDB writes heme b as
+  one residue, HEM, with its iron among its atoms; mdprep now moves the metal
+  into a residue of its own as any structure is read, named after the element
+  with the cofactor's chain and number, and the porphyrin left behind is a
+  ligand that coordinates it. A cytochrome P450 becomes an ordinary bonded
+  iron site: the four porphyrin nitrogens, the cysteine and the water. The
+  oxidation state is asked, not read off the assigned name. Heme b's SMILES
+  and net charge (-4, both propionates ionised) are proposed with the
+  assumption stated. See `docs/metals.md`.
+- `examples/19_cyp119_heme_mcpb.yaml` and the vendored 1IO7 deposition:
+  CYP119 at rest, low-spin Fe(III).
+- `mcpb.pyscf.xtb.electronic_temperature_kelvin`: Fermi smearing for the xTB
+  Hessian and the GFN2 ESP of the large model. An open-shell heme's SCF does
+  not converge at xTB's own 300 K; the builder sets 1000 K for a site whose
+  donors include a heme, and an SCF failure without it names the setting.
+- A residue still holding several metal atoms (an iron-sulfur cluster) and
+  heme c, a covalent ligand, are refused with the reason before any question
+  is asked.
+
+### Changed
+
+- The protonation of a titratable side chain on a metal is asked right after
+  the coordination shell is confirmed, before the spin and the model charge.
+- Proposals carry their own explanation, shown by the builder and the
+  `mdprep init --interactive` wizard alike.
+
+### Fixed
+
+- A metal-bound cysteine stated as CYM stopped the protonation stage: OpenMM
+  calls the thiolate's hydrogen variant CYX. Every cysteine donor -- a zinc
+  finger's, a heme's -- reached this.
+- The proposed model charge read a donor's charge from its residue name, so a
+  cysteine stated as CYM counted as neutral and an aspartate stated as ASH as
+  -1. It now counts the state given, and proposes nothing until it is given.
+- The builder named a residue once per highlighted atom.
+
 ## 0.4.0 - 2026-10-20
 
 ### Added
