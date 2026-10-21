@@ -294,6 +294,19 @@ GFN2 is parameterised for main-group chemistry and describes transition-metal
 coordination poorly, which is what the negative value is. The geometry is not
 at fault: every distance is normal.
 
+g-xTB has its own case: the dehaloperoxidase of 2QFK, a high-spin aquo
+Fe(III) on a histidine. In the lowest SCF state the search finds, the angle
+His89 NE2-Fe-NC of the porphyrin comes out near -6.6 kcal/mol/rad^2, and the
+run stops, naming it. In another state of the same family, 1.3 kcal/mol lower,
+which a multi-threaded SCF can stumble into, the same angle is +15.9 and the
+run validates. A metal's angles are the softest terms of its site, and taken
+at the crystal geometry with only the hydrogens relaxed -- not a minimum of
+g-xTB, whose Hessian there has seven or eight negative eigenvalues -- their
+sign hangs on which of these near-degenerate states the Hessian is taken in.
+mdprep does not prepare this site, rather than ship either; a Hessian at a
+relaxed geometry or from DFT (`hessian_backend: pyscf`, expensive at 91
+atoms) is the way to parameterise it.
+
 ### g-xTB is the default, and why
 
 A bonded metal site takes `hessian_backend: xtb` with `xtb.model: gxtb`
@@ -829,6 +842,42 @@ for a site whose donors include a heme:
 It applies to both the Hessian and the GFN2 ESP of the large model, and it is
 in every command record. A site that fails this way without it says which
 setting to add.
+
+### More than one SCF state
+
+Smearing makes an open-shell heme's SCF converge; it does not make the state
+it converges to unique. On the high-spin aquo Fe(III) of a dehaloperoxidase
+(2QFK: histidine, heme and water, spin 6), g-xTB at 1000 K reaches two kinds
+of solution with the same charge and spin: one with 3.1 unpaired electrons on
+the iron, and a family 27 kcal/mol lower with 3.6-3.7. Which one a cold start
+finds depends on as little as the number of threads -- with one to four it
+settled in the first, with eight in either from one run to the next, after up
+to 1,100 cycles -- and the Fe-N force constants of the two differ by up to 1.7
+times, while those within the lower family agree to about 10%.
+
+So for a heme site the builder also writes
+
+```yaml
+          max_scf_iterations: 3000
+          scf_annealing_kelvin: [2000.0, 3000.0, 5000.0]
+```
+
+and mdprep converges the SCF four times before the Hessian: once straight at
+1000 K, and once from a converged SCF at each of these temperatures, cooled to
+1000 K. Each is single-threaded, so the thread count cannot decide. The lowest
+energy wins, the Hessian starts from its wavefunction, and the run stops if
+the Hessian's own SCF ends in another state. Every start, converged or not, is
+in `gxtb_hessian.json` and among the small model's command records, with its
+files in the `scf_start_*` folders beside them.
+
+On 2QFK the search takes about two and a half minutes and finds the lower
+family -- where the site then stops, at a negative angle force constant (see
+below). On a peroxygenase's low-spin Fe(III) (5OXU) every start reaches the
+same state, and on chloroperoxidase's five-coordinate high-spin one (1CPO) the
+direct start is the lowest -- the annealed ones settle 18-28 kcal/mol above
+it -- so there the search changes nothing. No set of starts is guaranteed to
+find the lowest state there is: the energies each reached are recorded so you
+can see how far apart they were.
 
 ### The iron's force constants
 

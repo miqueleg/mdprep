@@ -272,8 +272,11 @@ def test_chain_a_builds_a_manifest_mdprep_accepts(plan, tmp_path):
     assert (site.ions[0].charge, site.ions[0].multiplicity) == (3, 2)
     assert site.mcpb.small_model_charge == -2
     # Smeared, because a low-spin Fe(III) heme's SCF does not converge at
-    # xTB's own 300 K.
+    # xTB's own 300 K; and the lowest of several starts, because a high-spin
+    # one can settle in more than one state.
     assert site.mcpb.pyscf.xtb.electronic_temperature_kelvin == 1000.0
+    assert site.mcpb.pyscf.xtb.scf_annealing_kelvin == [2000.0, 3000.0, 5000.0]
+    assert site.mcpb.pyscf.xtb.max_scf_iterations == 3000
     (ligand,) = config.ligands
     assert (ligand.selector.resname, ligand.net_charge, ligand.smiles) == ("HEM", -4, HEME_SMILES)
     assert [override.state for override in config.protonation.overrides] == ["CYM"]

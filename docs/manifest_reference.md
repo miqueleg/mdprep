@@ -277,7 +277,13 @@ For `model: bonded_mcpb`, the `mcpb` block contains:
   `electronic_temperature_kelvin` (optional, positive) smears the occupations
   of both the Hessian and the GFN2 large-model ESP; left out, xTB uses 300 K.
   The builder sets 1000 for a site whose donors include a heme, whose
-  open-shell SCF does not converge at 300 K. The legacy
+  open-shell SCF does not converge at 300 K. `scf_annealing_kelvin` (a list,
+  each hotter than that) converges the SCF before the Hessian straight and
+  from each of these temperatures, single-threaded, and starts the Hessian
+  from the lowest energy any start reached; every start is recorded. The
+  builder sets `[2000.0, 3000.0, 5000.0]` and `max_scf_iterations: 3000` for
+  a heme site, whose SCF can settle in more than one state
+  ([metals.md](metals.md#more-than-one-scf-state)). The legacy
   `hessian_backend: gxtb` plus `gxtb:` block remains valid. xTB replaces only
   the small-model Hessian. `hessian_backend: mace_polar1` requires a
   `mace_polar1` block containing the isolated `python_executable`, model

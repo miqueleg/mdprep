@@ -406,9 +406,22 @@ def run_mcpb_site(
         try:
             parse_mcpb_seminario_terms(final_frcmod)
         except McpbParameterComparisonError as exc:
+            (seminario_run,) = [run for run in runs if run.step == step_2]
+            negative = negative_seminario_terms(seminario_run.result.stdout, numbering)
             raise McpbWorkflowError(
                 "MCPB.py produced invalid Seminario bonded parameters for metal site "
                 f"{site.config.id!r}: {exc}"
+                + (
+                    ". Negative, and written as zero by MCPB.py: "
+                    + "; ".join(negative)
+                    + ". The Hessian has no restoring force there. At a geometry "
+                    "that is not a minimum of the QM method -- "
+                    "a crystal site with only its hydrogens relaxed -- a metal's "
+                    "angles, its softest terms, are the first to go. See "
+                    "docs/metals.md, 'A zero force constant is reported, not shipped'."
+                    if negative
+                    else ""
+                )
             ) from exc
     restored_pdb = work / f"{group_name}_mcpbpy.restored_ids.pdb"
     renames = restore_mcpb_residue_identities(
@@ -1123,6 +1136,39 @@ def parse_mcpb_tleap_commands(
     if not bonds:
         raise McpbWorkflowError(f"No bonded metal-site commands were found in {path}.")
     return setup, bonds
+
+
+def negative_seminario_terms(stdout: str, numbering: McpbNumberingMap) -> list[str]:
+    """The Seminario terms MCPB.py found negative and wrote as zero.
+
+    Each is named by its MCPB.py atom types and the atoms the site's types
+    stand for, as the structure numbers them, with the value it came out at.
+    """
+
+    atoms_by_type: dict[str, list[str]] = {}
+    for match in re.finditer(
+        r"^\s*\d+-\S+@(\d+)-\S+\s*:\s*\S+\s*-->\s*(\S+)\s*$", stdout, flags=re.MULTILINE
+    ):
+        atom = numbering.original_by_mcpb_atom_id.get(int(match.group(1)))
+        if atom is not None:
+            atoms_by_type.setdefault(match.group(2), []).append(
+                f"{atom.chain_id or '<blank>'}:{atom.resname}{atom.resid}"
+                f"{atom.icode or ''} {atom.name}"
+            )
+    found: list[str] = []
+    term = value = None
+    for line in stdout.splitlines():
+        heading = re.match(r"\s*For (?:bond|angle|dihedral)type: (\S+?)\.\s", line + " ")
+        if heading:
+            term, value = heading.group(1), None
+            continue
+        average = re.match(r"\s*The average force constant is: (\S+)", line)
+        if average:
+            value = average.group(1)
+        if term is not None and "is negative, treat is as 0.00" in line:
+            atoms = ", ".join("/".join(atoms_by_type.get(kind, [kind])) for kind in term.split("-"))
+            found.append(f"{term} ({atoms}) at {value or 'a negative value'}")
+    return found
 
 
 def _run_mcpb(

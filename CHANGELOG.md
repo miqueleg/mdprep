@@ -99,6 +99,17 @@
   own backbone nitrogen. A replaced side chain bonded to its own backbone is
   rebuilt beyond CB from the parent's template, listed under
   `side_chain_rebuilt`, with a warning naming its closest contact.
+- The g-xTB Hessian of a high-spin heme site could fail to converge, or
+  converge in whichever of two states the thread count led it to: on 2QFK's
+  aquo Fe(III), 27 kcal/mol apart, with Fe-N force constants up to 1.7 times
+  different. `mcpb.pyscf.xtb.scf_annealing_kelvin` converges the SCF straight
+  and from each hotter temperature listed, single-threaded, and takes the
+  Hessian from the lowest; the builder sets it, with `max_scf_iterations:
+  3000`, for every heme site. Examples 19 and 20 carry both. 2QFK itself now
+  stops every time at the same place, a negative His-Fe-N angle constant,
+  instead of passing or failing by the thread count. See `docs/metals.md`.
+- A Seminario term MCPB.py found negative and wrote as zero was reported only
+  as a 0.0 in the frcmod; the error now names it, its atoms and its value.
 - The bond-order check read a porphyrin bond by bond, so 2QFK's heme, refined
   with one pyrrole's beta-beta bond at single-bond length, was refused as a
   wrong tautomer of heme b. A porphyrin's core is skipped like a carboxylate;

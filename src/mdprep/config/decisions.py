@@ -3333,9 +3333,13 @@ def _mcpb_pyscf_block(hessian_backend: str, *, porphyrin: bool = False) -> dict[
         block["xtb"] = {"model": hessian_backend, "num_threads": 8}
         if porphyrin:
             # An open-shell heme's SCF oscillates at xTB's own 300 K and does
-            # not converge in any number of cycles; smeared at 1000 K it
-            # converges in seconds. See McpbXtbHessianConfig.
+            # not converge in any number of cycles; smeared at 1000 K a
+            # low-spin Fe(III) converges in seconds. A high-spin one can take
+            # a thousand cycles, and can settle in more than one state, so the
+            # lowest of several starts is kept. See McpbXtbHessianConfig.
             block["xtb"]["electronic_temperature_kelvin"] = 1000.0
+            block["xtb"]["max_scf_iterations"] = 3000
+            block["xtb"]["scf_annealing_kelvin"] = [2000.0, 3000.0, 5000.0]
     return block
 
 

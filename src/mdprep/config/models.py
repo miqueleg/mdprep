@@ -520,6 +520,27 @@ class McpbXtbHessianConfig(StrictModel):
     # at 1000 K it converges in seconds. The builder sets that for a site
     # whose donors include a heme, and the value is in every command record.
     electronic_temperature_kelvin: float | None = Field(default=None, gt=0)
+    # Hotter electronic temperatures to converge the SCF from before the
+    # Hessian. An open-shell heme's SCF can settle in more than one state of
+    # the same spin, and which one a cold start reaches depends on as little
+    # as the thread count: 2QFK's high-spin Fe(III) reached two, 27 kcal/mol
+    # apart, whose Fe-N force constants differ by up to 1.7 times. With these
+    # set, the SCF is converged once straight at electronic_temperature_kelvin
+    # and once from each of these, cooled to it, each single-threaded so the
+    # thread count cannot decide; the lowest energy wins and the Hessian
+    # starts from its wavefunction. Every start is recorded.
+    scf_annealing_kelvin: list[float] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _annealing_starts_hotter(self) -> "McpbXtbHessianConfig":
+        target = self.electronic_temperature_kelvin or 300.0
+        for kelvin in self.scf_annealing_kelvin:
+            if not kelvin > target:
+                raise ValueError(
+                    "mcpb.pyscf.xtb.scf_annealing_kelvin must be hotter than the "
+                    f"temperature the SCF is cooled to ({target:g} K); got {kelvin:g}."
+                )
+        return self
 
 
 class McpbGxtbHessianConfig(McpbXtbHessianConfig):

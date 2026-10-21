@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -47,6 +48,9 @@ class GxtbHessianResult:
     gradient_norm_hartree_per_bohr: float | None
     raw_hessian_asymmetry_warning_count: int
     unoptimized_geometry_warning: bool
+    # The ways into the SCF tried before the Hessian, the lowest first among
+    # those that converged; empty when no search was asked for.
+    scf_starts: tuple["ScfStart", ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         backend = "GFN2-xTB" if self.model == "gfn2" else "g-xTB"
@@ -70,6 +74,7 @@ class GxtbHessianResult:
                 self.raw_hessian_asymmetry_warning_count
             ),
             "unoptimized_geometry_warning": self.unoptimized_geometry_warning,
+            "scf_starts": [start.to_dict() for start in self.scf_starts],
             "version_command": _command_to_dict(self.version_result),
             "hessian_command": _command_to_dict(self.command_result),
             "stdout_path": str(self.stdout_path),
@@ -86,6 +91,35 @@ class GxtbHessianResult:
         }
 
 
+@dataclass(frozen=True)
+class ScfStart:
+    """One way into the SCF before the Hessian, and where it ended."""
+
+    label: str
+    # The electronic temperature converged at first and cooled from; None for
+    # the start made straight at the Hessian's own temperature.
+    annealed_from_kelvin: float | None
+    converged: bool
+    energy_hartree: float | None
+    work_dir: Path
+    commands: tuple[CommandResult, ...]
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "label": self.label,
+            "annealed_from_kelvin": self.annealed_from_kelvin,
+            "converged": self.converged,
+            "energy_hartree": self.energy_hartree,
+            "work_dir": str(self.work_dir),
+            "commands": [_command_to_dict(command) for command in self.commands],
+        }
+
+
+# The Hessian's own SCF starts from the chosen state's wavefunction and has to
+# end where it began. The states 2QFK's starts reached lie 1 to 45 mEh apart.
+SCF_STATE_ENERGY_TOLERANCE_HARTREE = 1.0e-5
+
+
 def build_gxtb_hessian_command(
     *,
     executable: str,
@@ -96,8 +130,12 @@ def build_gxtb_hessian_command(
     model: str = "gxtb",
     max_scf_iterations: int | None = None,
     electronic_temperature_kelvin: float | None = None,
+    hessian: bool = True,
 ) -> list[str]:
-    """Build the fixed-geometry command without any optimization run type."""
+    """Build the fixed-geometry command without any optimization run type.
+
+    ``hessian`` false gives the single point the SCF search runs before it.
+    """
 
     if spin < 0:
         raise GxtbHessianError("g-xTB UHF count must be non-negative.")
@@ -120,7 +158,7 @@ def build_gxtb_hessian_command(
         str(charge),
         "--uhf",
         str(spin),
-        "--hess",
+        *(["--hess"] if hessian else []),
         "--acc",
         f"{accuracy:.12g}",
     ]
@@ -198,6 +236,20 @@ def run_gxtb_hessian(
     version_text = _parse_version(version_result.stdout + "\n" + version_result.stderr)
 
     _remove_stale_gxtb_outputs(work)
+    scf_starts: tuple[ScfStart, ...] = ()
+    if config.scf_annealing_kelvin:
+        scf_starts = _search_scf_states(
+            executable=executable,
+            source_xyz=source_xyz,
+            work=work,
+            charge=charge,
+            spin=spin,
+            config=config,
+            environment=environment,
+            file_prefix=file_prefix,
+        )
+        # xTB reads the wavefunction it finds beside the input.
+        shutil.copyfile(scf_starts[0].work_dir / "xtbrestart", work / "xtbrestart")
     hessian_path = work / "hessian"
     command = build_gxtb_hessian_command(
         executable=str(executable),
@@ -224,7 +276,11 @@ def run_gxtb_hessian(
                 "low-spin Fe(III) heme in seconds)."
                 if config.electronic_temperature_kelvin is None
                 else " Its SCF did not converge, even at an electronic "
-                f"temperature of {config.electronic_temperature_kelvin:g} K."
+                f"temperature of {config.electronic_temperature_kelvin:g} K. A "
+                "high-spin heme can take a thousand cycles or more from a cold "
+                "start: raise mcpb.pyscf.xtb.max_scf_iterations, and set "
+                "scf_annealing_kelvin to start it from a converged hotter SCF "
+                "as well (see docs/metals.md)."
             )
         raise GxtbHessianError(
             f"{backend} Hessian failed with exit code {command_result.returncode}.{hint} "
@@ -260,6 +316,15 @@ def run_gxtb_hessian(
         )
     hessian = 0.5 * (hessian + hessian.T)
     energy = _parse_total_energy(command_result.stdout)
+    if scf_starts and (
+        abs(energy - float(scf_starts[0].energy_hartree))  # type: ignore[arg-type]
+        > SCF_STATE_ENERGY_TOLERANCE_HARTREE
+    ):
+        raise GxtbHessianError(
+            f"The {backend} Hessian's SCF started from the lowest state the search "
+            f"found ({scf_starts[0].label}, {scf_starts[0].energy_hartree:.8f} Eh) "
+            f"and ended in another ({energy:.8f} Eh). See {stdout_path}."
+        )
     gradient_norm = _parse_gradient_norm(command_result.stdout)
     raw_asymmetry_warning_count = len(
         re.findall(
@@ -296,12 +361,105 @@ def run_gxtb_hessian(
         gradient_norm_hartree_per_bohr=gradient_norm,
         raw_hessian_asymmetry_warning_count=raw_asymmetry_warning_count,
         unoptimized_geometry_warning=unoptimized_geometry_warning,
+        scf_starts=scf_starts,
     )
     report_path.write_text(
         json.dumps(result.to_dict(), indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return result
+
+
+def _search_scf_states(
+    *,
+    executable: Path,
+    source_xyz: Path,
+    work: Path,
+    charge: int,
+    spin: int,
+    config: McpbXtbHessianConfig,
+    environment: dict[str, str],
+    file_prefix: str = "gxtb",
+) -> tuple[ScfStart, ...]:
+    """Converge the SCF from each start; the lowest converged one first.
+
+    Single-threaded, so that which state a start reaches is decided by the
+    start and not by how the sums were split between threads. Each single
+    point's output is kept in its start's folder, as the Hessian's is beside
+    them, so that a run stopped later still shows what every start reached.
+    """
+
+    serial = dict(environment)
+    serial.update(
+        {"OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"}
+    )
+
+    def single_point(kelvin: float | None) -> list[str]:
+        return build_gxtb_hessian_command(
+            executable=str(executable),
+            xyz_name=source_xyz.name,
+            charge=charge,
+            spin=spin,
+            accuracy=config.accuracy,
+            model=config.model,
+            max_scf_iterations=config.max_scf_iterations,
+            electronic_temperature_kelvin=kelvin,
+            hessian=False,
+        )
+
+    starts: list[ScfStart] = []
+    for hot in [None, *config.scf_annealing_kelvin]:
+        label = "direct" if hot is None else f"from {hot:g} K"
+        start_dir = work / ("scf_start_direct" if hot is None else f"scf_start_{hot:g}K")
+        start_dir.mkdir(parents=True, exist_ok=True)
+        _remove_stale_gxtb_outputs(start_dir)
+        shutil.copyfile(source_xyz, start_dir / source_xyz.name)
+        # Hot first, if annealed; then at the Hessian's temperature, reading
+        # the wavefunction the hot SCF left.
+        steps = ([hot] if hot is not None else []) + [config.electronic_temperature_kelvin]
+        commands: list[CommandResult] = []
+        for kelvin in steps:
+            result = run_command(single_point(kelvin), cwd=start_dir, env=serial)
+            commands.append(result)
+            stem = f"{file_prefix}.sp_{'xtb_default' if kelvin is None else f'{kelvin:g}K'}"
+            (start_dir / f"{stem}.stdout.txt").write_text(result.stdout, encoding="utf-8")
+            (start_dir / f"{stem}.stderr.txt").write_text(result.stderr, encoding="utf-8")
+            if not _terminated_normally(result):
+                break
+        converged = len(commands) == len(steps) and _terminated_normally(commands[-1])
+        energy = _parse_total_energy(commands[-1].stdout) if converged else None
+        if converged and not (start_dir / "xtbrestart").is_file():
+            raise GxtbHessianError(
+                f"xTB converged the SCF {label} but left no wavefunction to start "
+                f"the Hessian from in {start_dir}."
+            )
+        starts.append(
+            ScfStart(
+                label=label,
+                annealed_from_kelvin=hot,
+                converged=converged,
+                energy_hartree=energy,
+                work_dir=start_dir,
+                commands=tuple(commands),
+            )
+        )
+    found = sorted(
+        (start for start in starts if start.converged),
+        key=lambda start: float(start.energy_hartree),  # type: ignore[arg-type]
+    )
+    if not found:
+        raise GxtbHessianError(
+            "The SCF did not converge from any start ("
+            + ", ".join(start.label for start in starts)
+            + f"). Raise mcpb.pyscf.xtb.max_scf_iterations; see {work}/scf_start_*."
+        )
+    return tuple(found) + tuple(start for start in starts if not start.converged)
+
+
+def _terminated_normally(result: CommandResult) -> bool:
+    return result.returncode == 0 and "normal termination of xtb" in (
+        result.stdout + "\n" + result.stderr
+    ).lower()
 
 
 def parse_gxtb_hessian(path: str | Path, *, atom_count: int) -> np.ndarray:
@@ -475,10 +633,12 @@ def _validate_open_shell_metadata(
             stdout,
             flags=re.IGNORECASE,
         )
+    # The setup summary's own line. A run started from a converged SCF says
+    # "Wavefunction read from restart file" before it.
     wavefunction_match = re.search(
-        r"wavefunction\s+([A-Za-z-]+)",
+        r"^\s*wavefunction\s+([A-Za-z-]+)\s*$",
         stdout,
-        flags=re.IGNORECASE,
+        flags=re.IGNORECASE | re.MULTILINE,
     )
     if charge_match is None or spin_match is None:
         raise GxtbHessianError(
