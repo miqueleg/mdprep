@@ -93,16 +93,15 @@ to the Python surface.
 
 ### Executing the official notebook outside Colab
 
-`examples/mdprep_colab.ipynb` runs anywhere with a Linux GPU. Its uploads and
+`examples/mdprep_colab.ipynb` runs anywhere with a Linux GPU. Its upload and
 installs are redirected by environment variables, so a Python with mdprep,
-`pymol-open-source-whl`, `py3Dmol`, `pandas`, `matplotlib` and `nbclient`
-can execute it against a micromamba runtime built once:
+`py3Dmol`, `pandas`, `matplotlib` and `nbclient` can execute it against a
+micromamba runtime built once:
 
 ```bash
 MDPREP_COLAB_PREFIX=/scratch/colab \
 MDPREP_SKIP_KERNEL_INSTALL=1 \
 MDPREP_SPEC=$PWD \
-MDPREP_TEST_UPLOAD_MODEL=/path/to/predicted_model.cif \
 MDPREP_TEST_UPLOAD_BUNDLE=/path/to/mdprep-bundle.zip \
 python -c "import nbformat; from nbclient import NotebookClient; \
 nb = nbformat.read('examples/mdprep_colab.ipynb', 4); \
@@ -110,6 +109,6 @@ NotebookClient(nb, timeout=5400).execute(); nbformat.write(nb, 'executed.ipynb')
 ```
 
 `MDPREP_COLAB_PREFIX` stands in for `/content` (micromamba goes in its `bin/`,
-the environment in `mamba-root/`), and `MDPREP_TEST_EXAMPLE_DIR=examples`
-makes the SyrB2 example read the manifest from the checkout instead of GitHub.
+the environment in `mamba-root/`). The bundle is one the web builder
+downloaded; its SyrB2 button gives one for 2FCT.
 

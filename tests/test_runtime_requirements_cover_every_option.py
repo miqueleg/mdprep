@@ -28,7 +28,11 @@ from typing import Any, Callable
 
 import pytest
 
-from mdprep.workflows.runtime import conda_packages_for
+from mdprep.workflows.runtime import (
+    conda_packages_for,
+    full_toolchain_manifest,
+    manifest_wants_gxtb,
+)
 
 
 # --------------------------------------------------------------------------
@@ -322,3 +326,21 @@ def test_nothing_is_installed_that_the_run_will_not_touch(package):
         f"{package} is installed but unused for {len(spurious)} "
         f"combination(s); first: {spurious[0]}"
     )
+
+
+def test_the_full_toolchain_runs_every_combination():
+    """The official notebook installs from full_toolchain_manifest before the
+    student's bundle exists, so whatever that bundle asks for has to be there.
+    The g-xTB build it downloads answers to plain `xtb` for the GFN2 steps."""
+
+    full = full_toolchain_manifest()
+    provided = set(conda_packages_for(full))
+    if manifest_wants_gxtb(full)[0]:
+        provided.add("xtb")
+    missing: dict[str, dict[str, Any]] = {}
+    for options in COMBINATIONS:
+        manifest = build_manifest(**options)
+        for package, expects in ORACLE.items():
+            if package not in provided and package not in missing and expects(manifest):
+                missing[package] = options
+    assert not missing, f"not in the full toolchain: {missing}"

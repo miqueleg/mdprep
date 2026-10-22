@@ -13,8 +13,9 @@ week. You then build the starting model yourself, in three steps:
 The result is an ordinary PDB file for the
 [web input builder](https://miqueleg.github.io/mdprep/) or `mdprep init
 --interactive`, and from there the preparation is the same as for a crystal
-structure. The [official Colab notebook](../examples/mdprep_colab.ipynb) runs
-steps 2 and 3 for you.
+structure. `mdprep closest-xray` and `mdprep transplant-waters` run steps 2
+and 3 for you; [PyMOL by hand](#the-same-thing-by-hand-in-pymol) does step 3
+too.
 
 ## 1. Predict the complex
 
@@ -121,7 +122,7 @@ Useful options:
 | `--clash-polar`, `--clash-apolar` | Change the clash distances. |
 
 PyMOL itself is a dependency of this command only: `conda install -c
-conda-forge pymol-open-source`. The Colab notebook installs it.
+conda-forge pymol-open-source`.
 
 ### The same thing by hand in PyMOL
 

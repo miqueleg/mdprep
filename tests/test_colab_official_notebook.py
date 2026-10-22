@@ -53,12 +53,45 @@ def test_it_installs_mdprep_from_the_same_place_as_the_web_builder():
     assert url in all_source()
 
 
-def test_the_toolchain_is_derived_from_the_manifest_with_micromamba():
-    executed = "\n".join(code_cells())
+def test_the_programs_are_installed_before_there_is_a_bundle():
+    """Section A runs while the student is still answering the builder, so it
+    installs every program mdprep runs rather than reading a manifest; B then
+    checks the bundle's manifest against what A installed."""
 
-    assert "conda_packages_for" in executed
-    assert "micromamba_setup_commands" in executed
-    assert "condacolab" not in executed
+    a = _cell("#@title A.")
+
+    assert "full_toolchain_manifest()" in a
+    assert "micromamba_setup_commands(toolchain" in a
+    assert "MANIFEST" not in a
+    assert "condacolab" not in "\n".join(code_cells())
+    assert 'mdprep_in_runtime("doctor", MANIFEST.name)' in _cell("#@title B.")
+
+
+def test_the_structure_comes_only_from_the_builders_bundle():
+    """The input builder decides the structure. The notebook neither builds
+    one -- no predicted model, no crystal waters -- nor offers a ready-made
+    example or an earlier run to load in its place."""
+
+    executed = "\n".join(code_cells())
+    b = _cell("#@title B.")
+
+    assert 'upload("bundle", (".zip",))' in b
+    assert "#@param" not in b
+    for gone in ("FINISHED_RUN", "search_closest_xray", "transplant_waters", "urlretrieve"):
+        assert gone not in executed, gone
+
+
+def test_the_cells_run_in_the_order_the_class_does():
+    """Install while the student is in the builder; prepare and the MD back to
+    back, so a run from top to bottom never waits on a student reading a
+    report; then everything that reads what they wrote."""
+
+    order = [source.splitlines()[0].removeprefix("#@title ").split(".")[0] for source in code_cells()]
+
+    assert order == [
+        "1", "Helper functions (run once; expand to read them)", "A", "B", "C", "D",
+        "E1", "E2", "E3", "E4", "E5", "E6", "E7", "E8", "F", "F2", "G", "H", "I",
+    ]
 
 
 def test_md_runs_once_in_its_own_cell():
@@ -85,18 +118,16 @@ def test_every_step_the_course_needs_is_looked_at_through_mdprep():
 
     executed = "\n".join(code_cells())
     for call in (
-        "search_closest_xray",  # A: the closest X-ray structure
-        "transplant_waters",  # A: its waters
         "intermediate",  # E: the structure at each stage
         "protonation_report.csv",  # E: protonation states
         "charge_tables.summary",  # E: charges
         "charge_tables.atom_charges",
         "site_bonds",  # E: the metal site's force constants
-        "eq.equilibration_table",  # G: how it equilibrated
+        "eq.equilibration_table",  # F: how it equilibrated
         "eq.stage_spans",
         "eq.production_table",
-        "md_dir() / f\"{STEP}.pdb\"",  # H: each step's structure
-        "tr.load_trajectory",  # I: the MD
+        "md_dir() / f\"{STEP}.pdb\"",  # G: each step's structure
+        "tr.load_trajectory",  # H: the MD
         "tr.rmsd",
         "tr.rmsf",
         "tr.pdb_models",
@@ -155,10 +186,10 @@ def test_a_lone_ion_is_drawn_and_the_added_salt_is_not():
 
 
 def test_reinstalling_caps_the_cuda_runtime_at_the_driver():
-    """Rerunning section C is what repairs a session whose CUDA platform would
+    """Rerunning section A is what repairs a session whose CUDA platform would
     not start, so the existing-environment path has to apply the cap too."""
 
-    c = _cell("#@title C.")
+    a = _cell("#@title A.")
 
-    assert "micromamba_install_commands(manifest_data" in c
-    assert "micromamba_setup_commands(manifest_data" in c
+    assert "micromamba_install_commands(toolchain" in a
+    assert "micromamba_setup_commands(toolchain" in a

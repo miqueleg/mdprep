@@ -158,13 +158,15 @@ explicitly request their removal.
 
 For a guided workflow, use the [web input builder](https://miqueleg.github.io/mdprep/):
 it shows the structure in 3D, asks only the questions your structure needs, and
-writes a validated manifest and a bundle. Then open the
+writes a validated manifest and a bundle. With no structure of your own, it
+loads SyrB2 (PDB 2FCT) in one click. Then open the
 [official Colab notebook](https://colab.research.google.com/github/miqueleg/mdprep/blob/master/examples/mdprep_colab.ipynb)
-([`examples/mdprep_colab.ipynb`](examples/mdprep_colab.ipynb)), upload the
-bundle, and it installs what the manifest needs, prepares the system,
-equilibrates it, and lets you investigate every step: the structure at each
-stage, the protonation states, the charge on every atom, the metal site's
-force constants, how the box equilibrated, and the MD trajectory.
+([`examples/mdprep_colab.ipynb`](examples/mdprep_colab.ipynb)): it installs
+the programs mdprep runs while you are still in the builder, and with the
+bundle uploaded it prepares the system, equilibrates it, and lets you
+investigate every step: the structure at each stage, the protonation states,
+the charge on every atom, the metal site's force constants, how the box
+equilibrated, and the MD trajectory.
 
 No crystal structure of your protein? Predict the complex with its cofactors
 (Boltz or AlphaFold3 in ColabFold), then let mdprep find the closest X-ray

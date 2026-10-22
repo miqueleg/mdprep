@@ -893,7 +893,7 @@ Either way the site holds. Through the Roe-Brooks equilibration and 200 ps of
 production on the crystal parameters, the four Fe-N bonds average 2.00-2.04 A,
 Fe-S 2.29 A and Fe-O 2.25 A (crystal: 1.98-2.01, 2.27 and 2.27 A), the softest
 Fe-N fluctuating only slightly more than the others. The water, at 22
-kcal/mol/A^2, moves most. Sections E7 and H of the official notebook show your
+kcal/mol/A^2, moves most. Sections E7 and G of the official notebook show your
 own site's constants and its distances after every step: look at both.
 
 ### What is not supported

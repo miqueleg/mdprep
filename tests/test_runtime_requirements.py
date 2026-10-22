@@ -9,7 +9,10 @@ import pytest
 
 from mdprep.config.decisions import build_manifest, plan_decisions
 from mdprep.workflows.runtime import (
+    GXTB_ARCHIVE,
     conda_packages_for,
+    full_toolchain_manifest,
+    manifest_wants_gxtb,
     micromamba_setup_commands,
 )
 
@@ -510,4 +513,16 @@ def test_a_cuda_runtime_newer_than_the_driver_is_explained(monkeypatch):
     )
 
     assert '"cuda-version<=12.4"' in advice
-    assert "section C" in advice and "OpenCL works meanwhile" in advice
+    assert "section A" in advice and "OpenCL works meanwhile" in advice
+
+
+def test_the_full_toolchain_is_every_package_and_the_gxtb_build():
+    """What the official notebook installs before any bundle exists."""
+
+    full = full_toolchain_manifest()
+
+    assert conda_packages_for(full) == [
+        "ambertools", "propka", "openmm", "pdbfixer", "pyscf", "rdkit", "parmed",
+    ]
+    assert manifest_wants_gxtb(full) == (True, None)
+    assert GXTB_ARCHIVE in "\n".join(micromamba_setup_commands(full))
