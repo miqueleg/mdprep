@@ -44,13 +44,22 @@ def test_every_code_cell_is_valid_python(index):
     ast.parse(code_cells()[index])
 
 
-def test_it_installs_mdprep_from_the_same_place_as_the_web_builder():
+def test_it_installs_the_same_mdprep_as_the_web_builder():
+    """A student answers the builder and runs the notebook; the two have to
+    agree on which mdprep prepared the system, or a manifest the page wrote
+    can reach a version that reads it differently."""
+
     app = WEB_APP.read_text(encoding="utf-8")
     spec = re.search(r"const MDPREP_INSTALL = '([^']+)'", app)
     assert spec, "web/app.js no longer declares MDPREP_INSTALL"
-    url = re.search(r"git\+https://[^\"' ]+", spec.group(1)).group(0)
+    pinned = re.search(r'mdprep==([0-9][^"\' ]*)', spec.group(1))
+    assert pinned, f"the builder no longer pins a release: {spec.group(1)}"
 
-    assert url in all_source()
+    # Equality with this tree's version is not required: the pin is raised
+    # once the tag has published to PyPI, so between a version bump and its
+    # tag the two legitimately differ. What may never differ is the builder
+    # and the notebook.
+    assert f'MDPREP_VERSION = "{pinned.group(1)}"' in all_source()
 
 
 def test_the_programs_are_installed_before_there_is_a_bundle():
