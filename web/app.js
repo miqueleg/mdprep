@@ -21,6 +21,9 @@ const MDPREP_INSTALL = '"mdprep @ git+https://github.com/miqueleg/mdprep@master"
 // equilibrates the system, and shows every step of it.
 const COLAB_NOTEBOOK_URL =
   "https://colab.research.google.com/github/miqueleg/mdprep/blob/master/examples/mdprep_colab.ipynb";
+// The worked example, for a student with no structure of their own: SyrB2, an
+// Fe(II)/alpha-ketoglutarate halogenase with a water on its iron.
+const EXAMPLE_PDB_ID = "2FCT";
 
 const state = {
   pyodide: null,
@@ -910,6 +913,33 @@ async function copyText(text, button) {
 
 /* ------------------------------------------------------------------ wiring */
 
+async function fetchFromRcsb(id) {
+  setStatus(`Downloading ${id} from RCSB…`);
+  try {
+    // Large entries -- ribosomes, capsids -- are mmCIF only, and the PDB
+    // download 404s for them. That is indistinguishable from a wrong ID,
+    // and this page reads mmCIF perfectly well, so ask for it before
+    // giving up. Colab re-fetches by the same name, so the suffix that
+    // worked here is the one recorded.
+    let response = await fetch(`https://files.rcsb.org/download/${id}.pdb`);
+    let suffix = "pdb";
+    if (!response.ok) {
+      response = await fetch(`https://files.rcsb.org/download/${id}.cif`);
+      suffix = "cif";
+    }
+    if (!response.ok) {
+      throw new Error(
+        response.status === 404
+          ? `RCSB has no entry ${id}`
+          : `RCSB returned ${response.status}`,
+      );
+    }
+    await loadStructure(await response.text(), `${id}.${suffix}`, id);
+  } catch (error) {
+    setStatus(`Could not download ${id}: ${error.message}`, true);
+  }
+}
+
 function wire() {
   el("fetch-pdb").addEventListener("click", async () => {
     const id = el("pdb-id").value.trim().toUpperCase();
@@ -917,30 +947,14 @@ function wire() {
       setStatus("Enter a PDB ID such as 1AKI.", true);
       return;
     }
-    setStatus(`Downloading ${id} from RCSB…`);
-    try {
-      // Large entries -- ribosomes, capsids -- are mmCIF only, and the PDB
-      // download 404s for them. That is indistinguishable from a wrong ID,
-      // and this page reads mmCIF perfectly well, so ask for it before
-      // giving up. Colab re-fetches by the same name, so the suffix that
-      // worked here is the one recorded.
-      let response = await fetch(`https://files.rcsb.org/download/${id}.pdb`);
-      let suffix = "pdb";
-      if (!response.ok) {
-        response = await fetch(`https://files.rcsb.org/download/${id}.cif`);
-        suffix = "cif";
-      }
-      if (!response.ok) {
-        throw new Error(
-          response.status === 404
-            ? `RCSB has no entry ${id}`
-            : `RCSB returned ${response.status}`,
-        );
-      }
-      await loadStructure(await response.text(), `${id}.${suffix}`, id);
-    } catch (error) {
-      setStatus(`Could not download ${id}: ${error.message}`, true);
-    }
+    await fetchFromRcsb(id);
+  });
+
+  // The same fetch as a typed ID, so the bundle and the Colab cells treat the
+  // example exactly like one.
+  el("load-example").addEventListener("click", async () => {
+    el("pdb-id").value = EXAMPLE_PDB_ID;
+    await fetchFromRcsb(EXAMPLE_PDB_ID);
   });
 
   el("pdb-file").addEventListener("change", async (event) => {

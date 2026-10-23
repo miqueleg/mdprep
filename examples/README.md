@@ -84,13 +84,13 @@ Standard conda-forge xTB is not treated as proof that g-xTB is available.
 
 `mdprep_colab.ipynb` is the **official notebook**
 ([open in Colab](https://colab.research.google.com/github/miqueleg/mdprep/blob/master/examples/mdprep_colab.ipynb)).
-Build a manifest in the browser with the [input builder](../web/README.md) and
-upload the bundle, or run the SyrB2 example without any input. The notebook:
+Build a manifest in the browser with the [input builder](../web/README.md),
+which decides the structure -- yours, or SyrB2 (PDB 2FCT) in one click -- and
+upload the bundle. The notebook:
 
-- *(optionally)* takes a predicted model, finds the closest X-ray structure and
-  transplants its crystal waters (`mdprep closest-xray`, `mdprep transplant-waters`);
-- installs only the external programs the manifest will invoke, prepares the
-  system, and validates it;
+- installs every external program mdprep runs before the bundle arrives, so
+  the install can run while you answer the builder's questions;
+- prepares the system and validates it;
 - shows every stage: the reports, the structure after each stage, the
   protonation states, the charge on every atom (in tables and in 3D), the
   metal site's MCPB force constants, the solvated box;

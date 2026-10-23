@@ -73,7 +73,7 @@ newest runtime the driver's major version allows, which can be newer than
 the driver itself: on Colab's T4 runtime, CUDA never started.
 
 The environments mdprep sets up cap the runtime at what the driver supports:
-the official notebook's section C, and the setup cell the web builder writes.
+the official notebook's section A, and the setup cell the web builder writes.
 They read the driver's CUDA version from `nvidia-smi` and install with
 `cuda-version<=X.Y`. To repair an environment by hand:
 

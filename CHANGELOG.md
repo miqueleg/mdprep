@@ -4,6 +4,12 @@
 
 ### Added
 
+- The web builder's **Load SyrB2 (PDB 2FCT)** button: the workshop's worked
+  example, for a student with no structure of their own, fetched from RCSB as
+  a typed ID would be.
+- `mdprep.workflows.runtime.full_toolchain_manifest()`: a manifest that calls
+  every program mdprep installs, for an environment built before the real
+  manifest exists.
 - Hemes and other metals deposited inside a cofactor. The PDB writes heme b as
   one residue, HEM, with its iron among its atoms; mdprep now moves the metal
   into a residue of its own as any structure is read, named after the element
@@ -58,6 +64,15 @@
   `ions[].multiplicity` and MCPB model spins.
 - Crystallisation additives are no longer offered one by one as ligands
   unless their removal is declined.
+- The official Colab notebook takes its structure only from the builder's
+  bundle. Its predicted-model section (closest X-ray structure, crystal
+  waters), the SyrB2 example and the upload of an earlier run's results are
+  gone; `mdprep closest-xray` and `mdprep transplant-waters` still bring
+  waters across on the command line. It installs every program mdprep runs
+  first, before there is a bundle, so the install runs while the builder's
+  questions are answered; the MD follows the preparation directly, and the
+  investigation of both comes after. Sections, old to new: C to A, D to C,
+  F to D, G to F, H to G, I to H, J to I; B and E1-E8 keep their letters.
 
 - The protonation of a titratable side chain on a metal is asked right after
   the coordination shell is confirmed, before the spin and the model charge.

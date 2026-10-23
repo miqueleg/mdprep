@@ -5,6 +5,13 @@ structure, answer only the decisions that structure actually needs while a 3D
 viewer shows you what each question is about, and leave with a validated
 manifest plus the Colab cell that runs it.
 
+A structure comes from RCSB by ID, from a file of your own, or -- with no
+structure of your own -- from the **Load SyrB2 (PDB 2FCT)** button, the
+worked example of the workshop: an Fe(II)/alpha-ketoglutarate halogenase with
+a water on its iron. The button fetches 2FCT as a typed ID would, so the
+bundle and the Colab cells treat it as one;
+`tests/test_web_builder_example_button.py` drives it in a real browser.
+
 ## Why there is no JavaScript copy of the logic
 
 The page runs the **real mdprep package** under

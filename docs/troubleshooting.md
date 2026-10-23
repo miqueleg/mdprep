@@ -161,7 +161,7 @@ remain explicit in the manifest.
 `CUDA_ERROR_UNSUPPORTED_PTX_VERSION` means the CUDA runtime installed with
 OpenMM is newer than the GPU's driver. Install one no newer than the version
 `nvidia-smi` prints, `micromamba install -n mdprep-runtime -c conda-forge
-"cuda-version<=12.4"`, or rerun section C of the official notebook, which does
+"cuda-version<=12.4"`, or rerun section A of the official notebook, which does
 it. See [Roe--Brooks OpenMM MD](molecular_dynamics.md#cuda-and-the-gpu-driver).
 
 ## 12-6-4 In OpenMM

@@ -76,6 +76,24 @@ h1 {
   margin-bottom: 6px;
 }
 
+.loader.example {
+  grid-column: 1 / -1;
+}
+
+.loader.example .row {
+  align-items: center;
+  gap: 14px;
+}
+
+.loader.example .hint {
+  margin: 0;
+}
+
+.loader.example button {
+  flex: none;
+  white-space: nowrap;
+}
+
 .row {
   display: flex;
   gap: 8px;
@@ -321,6 +339,11 @@ footer code {
   .loaders,
   .split {
     grid-template-columns: 1fr;
+  }
+
+  .loader.example .row {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   #viewer {

@@ -160,6 +160,26 @@ def conda_packages_for(manifest: Mapping[str, Any]) -> list[str]:
     return packages
 
 
+def full_toolchain_manifest() -> dict[str, Any]:
+    """A manifest that calls every program mdprep can install.
+
+    For an environment built before the manifest exists: the official notebook
+    starts its install while the student is still answering the builder's
+    questions, so whatever the bundle turns out to need is there when it
+    arrives. Passed to the same functions as a real manifest, it gets the same
+    CUDA cap and the same g-xTB download.
+    """
+
+    return {
+        "protonation": {"method": "propka_xtb_his"},
+        "ligands": [{"charge_method": "mcpb_resp_pyscf", "smiles": "C"}],
+        "metals": [{"model": "bonded_mcpb"}],
+        "structure": {"repair": {"backend": "pdbfixer"}},
+        "refinement": {"enabled": True},
+        "molecular_dynamics": {"enabled": True},
+    }
+
+
 def gxtb_bin_directory(prefix: str = "/content") -> str:
     """The directory gxtb_setup_commands unpacks the binaries into."""
 
@@ -328,7 +348,7 @@ def explain_cuda_failure(message: str) -> str:
             "The CUDA runtime installed with OpenMM is newer than this GPU's "
             f"driver{f' (CUDA {driver})' if driver else ''} can run. Install one no "
             f"newer: micromamba install -n mdprep-runtime -c conda-forge {cap} -- "
-            "rerunning section C of the official notebook does this. OpenCL "
+            "rerunning section A of the official notebook does this. OpenCL "
             "works meanwhile."
         )
     return (
