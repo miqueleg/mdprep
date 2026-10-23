@@ -74,11 +74,17 @@ To cut a release:
 2. Retitle the changelog's `## Unreleased` section to `## <version> - <date>`.
    The workflow refuses a tag with no such heading.
 3. Update the `mdprep[md,qm]==` pin in `examples/*.ipynb` and the assertion in
-   `tests/test_colab_smoke_notebook.py`. The web builder installs from git
-   master and needs no bump.
+   `tests/test_colab_smoke_notebook.py`.
 4. Execute the official notebook end to end (below) and fix whatever it
    finds: it is what students run, and nothing else exercises it whole.
 5. Merge, then `git tag -a vX.Y.Z` and push the tag.
+6. **Once the tag has published to PyPI**, raise the release the students'
+   tools install: `MDPREP_INSTALL` in `web/app.js` and the `MDPREP_VERSION`
+   default in `examples/mdprep_colab.ipynb`. They are pinned so that everyone
+   in a workshop installs the same code, and the manifest the builder writes
+   is read by the version that wrote it. Doing this after the tag keeps the
+   deployed builder from pointing at a release PyPI does not have yet; a test
+   checks that the page and the notebook name the same one.
 
 The workflow then refuses a tag that does not match the version in the tree,
 builds, checks that the sdist carries the project and nothing that was lying

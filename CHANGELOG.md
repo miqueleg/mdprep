@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The web builder and the official Colab notebook install a pinned mdprep
+  release (0.5.0) instead of git master, so everyone in a workshop runs the
+  same code and the manifest the builder writes is read by the version that
+  wrote it. CONTRIBUTING's release steps raise the pin after the tag has
+  published, and a test checks that the page and the notebook name the same
+  release.
+
 ## 0.5.0 - 2026-10-23
 
 ### Added

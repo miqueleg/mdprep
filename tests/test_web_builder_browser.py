@@ -208,9 +208,14 @@ def test_the_rcsb_path_refetches_by_id_instead(report):
     assert "files.upload()" not in cell
 
 
-def test_the_colab_cell_does_not_promise_a_pypi_release_that_lacks_the_fixes(report):
-    """0.2.0 is the published wheel and predates the stage-2 NaN fix."""
-    assert "git+https://github.com/miqueleg/mdprep" in report["colabSetup"]
+def test_the_colab_cell_installs_the_release_this_tree_is(report):
+    """Every student installs the same code, and it is the code that wrote
+    their manifest -- not whatever master happens to be that morning."""
+
+    import re
+
+    assert re.search(r"mdprep==[0-9]", report["colabSetup"]), report["colabSetup"][:200]
+    assert "git+https://github.com/miqueleg/mdprep" not in report["colabSetup"]
 
 
 def test_the_setup_cell_actually_installs_the_toolchain(report):
