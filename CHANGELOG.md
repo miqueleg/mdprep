@@ -11,6 +11,16 @@
   published, and a test checks that the page and the notebook name the same
   release.
 
+### Fixed
+
+- The official notebook's 3D views hid the metal site they were drawn to
+  show: an Fe/alpha-KG enzyme holds its iron inside a beta-barrel, and the
+  opaque cartoon covered it. With a metal present the cartoon is now
+  translucent, every residue within the site radius is drawn as sticks (it
+  was only those within 3 A), and the view is framed on the site. Section
+  H's `SITE_RADIUS` reached the atoms it selected but not the drawing, so
+  raising it changed nothing visible; it now does both.
+
 ## 0.5.0 - 2026-10-23
 
 ### Added
