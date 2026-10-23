@@ -71,9 +71,8 @@
   waters across on the command line. It installs every program mdprep runs
   first, before there is a bundle, so the install runs while the builder's
   questions are answered; the MD follows the preparation directly, and the
-  investigation of both comes after. The short production defaults to 20 ps.
-  Sections, old to new: C to A, D to C, F to D, G to F, H to G, I to H, J to
-  I; B and E1-E8 keep their letters.
+  investigation of both comes after. Sections, old to new: C to A, D to C,
+  F to D, G to F, H to G, I to H, J to I; B and E1-E8 keep their letters.
 
 - The protonation of a titratable side chain on a metal is asked right after
   the coordination shell is confirmed, before the spin and the model charge.
