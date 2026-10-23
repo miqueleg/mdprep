@@ -291,6 +291,7 @@ def test_small_model_can_use_gxtb_without_small_model_pyscf(
             stderr_path=stderr,
             raw_hessian_asymmetry_warning_count=0,
             to_dict=lambda: {
+                "scf_starts": [],
                 "version_command": {
                     "command": ["xtb", "--version"],
                     "cwd": str(tmp_path),
@@ -428,3 +429,175 @@ def test_a_missing_gxtb_build_says_how_to_get_one(monkeypatch, tmp_path):
     assert GXTB_EXECUTABLE_ENVIRONMENT_VARIABLE in message
     # And names the escape hatch, with the reason it is not the default.
     assert "model: gfn2" in message
+
+
+# --------------------------------------------------------------------------
+# Which SCF state the Hessian is taken in
+# --------------------------------------------------------------------------
+
+
+def _fake_xtb_with_states(energies: dict[str, float], calls: list, *, hessian_state=None):
+    """An xtb whose SCF lands in a state named by how it was started.
+
+    Straight at the cold temperature it lands in "direct"; converged hot first,
+    it lands in the state named after the hot temperature; a Hessian stays in
+    whatever state its restart file names, unless told otherwise.
+    """
+
+    def stdout(energy: float) -> str:
+        return _gxtb_stdout(charge=-1, spin=5).replace(
+            "-1.2345678900000E+02", f"{energy:.13E}"
+        )
+
+    def fake_run_command(command, *, cwd, env):
+        cwd = Path(cwd)
+        calls.append((tuple(command), cwd.name, env["OMP_NUM_THREADS"]))
+        if "--version" in command:
+            return CommandResult(
+                command=tuple(command), cwd=str(cwd), returncode=0,
+                stdout="xtb version 6.7.1 (test)\n", stderr="", runtime_seconds=0.01,
+            )
+        kelvin = command[command.index("--etemp") + 1]
+        restart = cwd / "xtbrestart"
+        if "--hess" in command:
+            state = hessian_state or restart.read_text(encoding="utf-8")
+            (cwd / "hessian").write_text(
+                "$hessian\n" + "\n".join(" ".join(f"{v:.10E}" for v in row) for row in np.eye(6)) + "\n",
+                encoding="utf-8",
+            )
+        elif kelvin == "1000":
+            state = restart.read_text(encoding="utf-8") if restart.exists() else "direct"
+        else:
+            state = kelvin
+        if energies.get(state) is None:
+            return CommandResult(
+                command=tuple(command), cwd=str(cwd), returncode=128,
+                stdout="SCF not converged in 3000 cycles\n",
+                stderr="abnormal termination of xtb\n", runtime_seconds=1.0,
+            )
+        # As xTB does, before its setup summary.
+        read = "Wavefunction read from restart file\n" if restart.exists() else ""
+        restart.write_text(state, encoding="utf-8")
+        return CommandResult(
+            command=tuple(command), cwd=str(cwd), returncode=0,
+            stdout=read + stdout(energies[state]), stderr="", runtime_seconds=1.0,
+        )
+
+    return fake_run_command
+
+
+def _searching_config(executable: Path, **settings) -> McpbXtbHessianConfig:
+    return McpbXtbHessianConfig(
+        executable=str(executable),
+        num_threads=8,
+        electronic_temperature_kelvin=1000.0,
+        max_scf_iterations=3000,
+        scf_annealing_kelvin=[2000.0, 5000.0],
+        **settings,
+    )
+
+
+def _two_atoms(tmp_path: Path) -> tuple[Path, Path]:
+    executable = tmp_path / "xtb"
+    executable.write_bytes(b"fake")
+    xyz = tmp_path / "work" / "small.xyz"
+    xyz.parent.mkdir()
+    xyz.write_text("2\nfixed\nFe 0 0 0\nN 2 0 0\n", encoding="utf-8")
+    return executable, xyz
+
+
+def test_the_hessian_is_taken_in_the_lowest_state_any_start_reaches(monkeypatch, tmp_path):
+    """2QFK's high-spin Fe(III) settled straight at 1000 K 27 kcal/mol above the
+    state a start annealed from a hotter SCF reached, and the Fe-N force
+    constants of the two differ by up to 1.7 times."""
+
+    executable, xyz = _two_atoms(tmp_path)
+    calls: list = []
+    energies = {"direct": -100.000, "2000": -100.043, "5000": -100.040}
+    monkeypatch.setattr(
+        "mdprep.metals.gxtb_hessian.run_command", _fake_xtb_with_states(energies, calls)
+    )
+
+    result = run_gxtb_hessian(
+        xyz_path=xyz, atom_count=2, charge=-1, spin=5,
+        config=_searching_config(executable), work_dir=xyz.parent,
+    )
+
+    assert result.energy_hartree == pytest.approx(-100.043)
+    assert [start.label for start in result.scf_starts] == ["from 2000 K", "from 5000 K", "direct"]
+    # Every start is single-threaded; the Hessian uses the threads asked for.
+    searched = [call for call in calls if "--hess" not in call[0] and "--version" not in call[0]]
+    assert len(searched) == 5 and {call[2] for call in searched} == {"1"}
+    (hessian,) = [call for call in calls if "--hess" in call[0]]
+    assert hessian[2] == "8"
+    report = json.loads(result.report_path.read_text(encoding="utf-8"))
+    assert [start["energy_hartree"] for start in report["scf_starts"]] == [-100.043, -100.04, -100.0]
+    # Each single point's output is kept beside it.
+    assert sorted(path.name for path in (xyz.parent / "scf_start_2000K").glob("*.stdout.txt")) == [
+        "gxtb.sp_1000K.stdout.txt", "gxtb.sp_2000K.stdout.txt",
+    ]
+
+
+def test_a_start_that_does_not_converge_is_recorded_and_passed_over(monkeypatch, tmp_path):
+    executable, xyz = _two_atoms(tmp_path)
+    calls: list = []
+    energies = {"direct": -100.000, "2000": None, "5000": -100.040}
+    monkeypatch.setattr(
+        "mdprep.metals.gxtb_hessian.run_command", _fake_xtb_with_states(energies, calls)
+    )
+
+    result = run_gxtb_hessian(
+        xyz_path=xyz, atom_count=2, charge=-1, spin=5,
+        config=_searching_config(executable), work_dir=xyz.parent,
+    )
+
+    assert result.energy_hartree == pytest.approx(-100.040)
+    failed = [start for start in result.scf_starts if not start.converged]
+    assert [(start.label, start.energy_hartree) for start in failed] == [("from 2000 K", None)]
+
+
+def test_no_start_converging_says_which_were_tried(monkeypatch, tmp_path):
+    executable, xyz = _two_atoms(tmp_path)
+    energies = {"direct": None, "2000": None, "5000": None}
+    monkeypatch.setattr(
+        "mdprep.metals.gxtb_hessian.run_command", _fake_xtb_with_states(energies, [])
+    )
+
+    with pytest.raises(GxtbHessianError, match=r"direct, from 2000 K, from 5000 K.*max_scf_iterations"):
+        run_gxtb_hessian(
+            xyz_path=xyz, atom_count=2, charge=-1, spin=5,
+            config=_searching_config(executable), work_dir=xyz.parent,
+        )
+
+
+def test_a_hessian_that_leaves_the_chosen_state_is_refused(monkeypatch, tmp_path):
+    executable, xyz = _two_atoms(tmp_path)
+    energies = {"direct": -100.000, "2000": -100.043, "5000": -100.040}
+    monkeypatch.setattr(
+        "mdprep.metals.gxtb_hessian.run_command",
+        _fake_xtb_with_states(energies, [], hessian_state="direct"),
+    )
+
+    with pytest.raises(GxtbHessianError, match="ended in another"):
+        run_gxtb_hessian(
+            xyz_path=xyz, atom_count=2, charge=-1, spin=5,
+            config=_searching_config(executable), work_dir=xyz.parent,
+        )
+
+
+def test_annealing_starts_hotter_than_it_ends():
+    with pytest.raises(ValidationError, match="hotter than"):
+        McpbXtbHessianConfig(electronic_temperature_kelvin=1000.0, scf_annealing_kelvin=[800.0])
+
+
+def test_a_run_from_a_restart_file_is_still_read_as_unrestricted():
+    """xTB announces the restart as "Wavefunction read from restart file",
+    which the check once took for the wavefunction's kind."""
+    from mdprep.metals.gxtb_hessian import _validate_open_shell_metadata
+
+    restarted = "Wavefunction read from restart file\n" + _gxtb_stdout(charge=-1, spin=5)
+    _validate_open_shell_metadata(restarted, expected_charge=-1, expected_spin=5)
+
+    restricted = restarted.replace("unrestricted", "restricted")
+    with pytest.raises(GxtbHessianError, match="unrestricted"):
+        _validate_open_shell_metadata(restricted, expected_charge=-1, expected_spin=5)

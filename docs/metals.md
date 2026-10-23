@@ -294,6 +294,19 @@ GFN2 is parameterised for main-group chemistry and describes transition-metal
 coordination poorly, which is what the negative value is. The geometry is not
 at fault: every distance is normal.
 
+g-xTB has its own case: the dehaloperoxidase of 2QFK, a high-spin aquo
+Fe(III) on a histidine. In the lowest SCF state the search finds, the angle
+His89 NE2-Fe-NC of the porphyrin comes out near -6.6 kcal/mol/rad^2, and the
+run stops, naming it. In another state of the same family, 1.3 kcal/mol lower,
+which a multi-threaded SCF can stumble into, the same angle is +15.9 and the
+run validates. A metal's angles are the softest terms of its site, and taken
+at the crystal geometry with only the hydrogens relaxed -- not a minimum of
+g-xTB, whose Hessian there has seven or eight negative eigenvalues -- their
+sign hangs on which of these near-degenerate states the Hessian is taken in.
+mdprep does not prepare this site, rather than ship either; a Hessian at a
+relaxed geometry or from DFT (`hessian_backend: pyscf`, expensive at 91
+atoms) is the way to parameterise it.
+
 ### g-xTB is the default, and why
 
 A bonded metal site takes `hessian_backend: xtb` with `xtb.model: gxtb`
@@ -644,8 +657,9 @@ silently choosing one charge model.
 - Metal charges are limited to +1 through +4 because the mandatory provisional
   hydrogenation/QMMESP environment uses Amber Li/Merz ion models.
 - No metal-metal bond inference, metal clusters, covalent ligands (heme c
-  among them), noncanonical polymer residues, ORCA backend, or Multiwfn
-  dependency. A metal inside a cofactor is supported; see
+  among them), noncanonical polymer residues (a modified residue with a
+  standard parent can be replaced by it; see [heterogens.md](heterogens.md)),
+  ORCA backend, or Multiwfn dependency. A metal inside a cofactor is supported; see
   [A metal inside a cofactor](#a-metal-inside-a-cofactor-hemes).
 - No small-model optimization inside the MCPB Hessian stage. Geometry must come
   from a completed ASH QM/MM refinement or an explicitly supplied optimized PDB.
@@ -791,7 +805,7 @@ six donors, NA, NB, NC and ND, the cysteine's SG and the water's O, and asks:
 | --- | --- | --- |
 | Oxidation state | +3 | `HEM` does not say: Fe(III) in a resting P450, Fe(II) in deoxymyoglobin |
 | Cysteine protonation | `CYM` | The proximal thiolate. Asked before the model charge, which counts it |
-| Spin multiplicity | 2 | Six-coordinate low-spin Fe(III). Five-coordinate, with the water gone, it is high-spin: 6 |
+| Spin of the QM region | 2 | Six-coordinate low-spin Fe(III). Five-coordinate, with the water gone, it is high-spin: 6 |
 
 It also proposes, filled in and changeable:
 
@@ -829,6 +843,42 @@ It applies to both the Hessian and the GFN2 ESP of the large model, and it is
 in every command record. A site that fails this way without it says which
 setting to add.
 
+### More than one SCF state
+
+Smearing makes an open-shell heme's SCF converge; it does not make the state
+it converges to unique. On the high-spin aquo Fe(III) of a dehaloperoxidase
+(2QFK: histidine, heme and water, spin 6), g-xTB at 1000 K reaches two kinds
+of solution with the same charge and spin: one with 3.1 unpaired electrons on
+the iron, and a family 27 kcal/mol lower with 3.6-3.7. Which one a cold start
+finds depends on as little as the number of threads -- with one to four it
+settled in the first, with eight in either from one run to the next, after up
+to 1,100 cycles -- and the Fe-N force constants of the two differ by up to 1.7
+times, while those within the lower family agree to about 10%.
+
+So for a heme site the builder also writes
+
+```yaml
+          max_scf_iterations: 3000
+          scf_annealing_kelvin: [2000.0, 3000.0, 5000.0]
+```
+
+and mdprep converges the SCF four times before the Hessian: once straight at
+1000 K, and once from a converged SCF at each of these temperatures, cooled to
+1000 K. Each is single-threaded, so the thread count cannot decide. The lowest
+energy wins, the Hessian starts from its wavefunction, and the run stops if
+the Hessian's own SCF ends in another state. Every start, converged or not, is
+in `gxtb_hessian.json` and among the small model's command records, with its
+files in the `scf_start_*` folders beside them.
+
+On 2QFK the search takes about two and a half minutes and finds the lower
+family -- where the site then stops, at a negative angle force constant (see
+below). On a peroxygenase's low-spin Fe(III) (5OXU) every start reaches the
+same state, and on chloroperoxidase's five-coordinate high-spin one (1CPO) the
+direct start is the lowest -- the annealed ones settle 18-28 kcal/mol above
+it -- so there the search changes nothing. No set of starts is guaranteed to
+find the lowest state there is: the energies each reached are recorded so you
+can see how far apart they were.
+
 ### The iron's force constants
 
 The Seminario method reads a bond's force constant from the 3 x 3 block of the
@@ -855,11 +905,34 @@ own site's constants and its distances after every step: look at both.
   makes it a covalent ligand, and it is refused by name. A bond cannot be told
   from a clash by distance alone, and predicted complexes have clashes that
   short.
-- Heme b is the only cofactor whose SMILES is proposed. Another single-metal
-  cofactor is split the same way, and its metal-free SMILES has to be typed.
+- **A heme bonded to the protein** -- the heme of a myeloperoxidase or a
+  lactoperoxidase, held by ester and sulfonium bonds the file declares in its
+  LINK records -- is refused the same way: it cannot be built bonded, and
+  cannot be left out without its metal site. See
+  [heterogens.md](heterogens.md).
+- **An oxoanion** is not split: the vanadate of a vanadium haloperoxidase
+  would leave four oxygens bonded to nothing, so it stays whole and is
+  refused, being neither a metal site nor a ligand.
+- Heme b is the only metal cofactor whose SMILES is proposed. Another
+  single-metal cofactor is split the same way, and its metal-free SMILES has
+  to be typed.
 
 [examples/19_cyp119_heme_mcpb.yaml](../examples/19_cyp119_heme_mcpb.yaml) is
 the manifest for CYP119's chain A.
+
+## Magnesium, calcium, and metals that are not part of the system
+
+Magnesium and calcium are proposed nonbonded even when the planner finds a
+coordination shell: they are closed-shell ions held by electrostatics, which a
+Li/Merz ion model describes, and a QM calculation would add cost and nothing
+else. 5OXU's magnesium, held by the heme's propionate, is one. A nonbonded ion
+next to a bonded site's QM region is part of the MM environment of its QM/MM
+refinement, like a crystal chloride.
+
+A metal that is not inside a cofactor can also be left out: its model
+question offers **Remove it**, for a nickel from a His-tag purification or a
+cadmium from the crystallisation buffer, and the metal goes into
+`structure.remove_residues` with its reason. Nothing else is asked about it.
 
 ## Free ions in the crystal
 

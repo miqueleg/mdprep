@@ -5,7 +5,10 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
+
+if TYPE_CHECKING:
+    from mdprep.structure.links import StructureLink
 
 
 RecordName = Literal["ATOM", "HETATM"]
@@ -91,6 +94,15 @@ class PdbStructure:
     # name would: nothing may be inferred from it that was not already known
     # from the atoms.
     assigned_resnames: frozenset[str] = frozenset()
+    # Bonds between residues the file declares (LINK, _struct_conn), under
+    # the names the reader settled on. Only a reader sets these: they say
+    # what the deposition knew, and nothing downstream adds to it.
+    links: tuple["StructureLink", ...] = ()
+    # Polymer residues the file declares modified (MODRES,
+    # _pdbx_struct_mod_residue), each with its standard parent.
+    modified_residue_parents: dict[tuple[str, str, int, str | None], str] = field(
+        default_factory=dict
+    )
 
 
 def build_residues(atoms: list[AtomRecord]) -> list[ResidueRecord]:

@@ -9,7 +9,9 @@ total depends on whether the spins align, which is a fact about the chemistry
 and not a function of the parts.
 
 So it is asked, in the GUI and in the wizard, and a manifest that leaves it
-out of an open-shell region is refused.
+out of an open-shell region is refused. It is the only spin question: one site
+is fitted per preparation, so the region's spin is also the spin of the site's
+MCPB.py models, and asking the metal's as well asked the same thing twice.
 """
 
 import pytest
@@ -19,7 +21,6 @@ from mdprep.config.decisions import (
     DecisionError,
     build_manifest,
     plan_decisions,
-    proposal_explanations,
     proposed_answers,
     resolve_answers,
 )
@@ -34,7 +35,6 @@ BONDED = {
     "metal.z_zn_500_site.model": "bonded_mcpb",
     "metal.z_zn_500_site.charge": 2,
     "metal.z_zn_500_site.confirm_donors": True,
-    "metal.z_zn_500_site.multiplicity": 1,
     "metal.z_zn_500_site.model_charge": 2,
 }
 
@@ -49,7 +49,14 @@ def test_the_question_is_asked_and_has_no_default():
     assert decision.requires_user_input is True
     assert decision.default is None
     assert decision.minimum == 1
-    assert "whole QM region" in decision.question
+    assert "QM region" in decision.question
+
+
+def test_it_is_the_only_spin_question():
+    plan = _plan()
+
+    assert not [d.id for d in plan.decisions if d.id.endswith(".multiplicity") and d.section == "metals"]
+    assert "high-spin" in plan.by_id("refinement.total_qm_multiplicity").why
 
 
 def test_it_is_blocking_until_answered():
@@ -87,46 +94,25 @@ def test_it_is_not_asked_when_the_coordination_shell_was_rejected():
     assert "refinement.total_qm_multiplicity" not in asked
 
 
-def test_the_answer_is_what_reaches_the_manifest():
-    """Not the ion's multiplicity, which is what it used to be."""
+def test_the_answer_is_the_region_s_and_the_site_s():
+    """The site's ion and its MCPB.py models take the region's spin: one
+    site is fitted, and the cofactors in it are closed shell."""
 
     manifest = build_manifest(
         _plan(), {**BONDED, "refinement.total_qm_multiplicity": 3}
     )
 
     assert manifest["refinement"]["total_qm_multiplicity"] == 3
-    assert manifest["metals"][0]["ions"][0]["multiplicity"] == 1
+    [site] = manifest["metals"]
+    assert site["ions"][0]["multiplicity"] == 3
+    assert site["mcpb"]["small_model_spin"] == site["mcpb"]["large_model_spin"] == 3
     ManifestConfig.model_validate(manifest)
 
 
-def test_a_closed_shell_region_is_proposed_as_a_singlet():
-    plan = _plan()
+def test_nothing_is_proposed_for_it():
+    """The spin is chemistry the structure does not show."""
 
-    assert proposed_answers(plan, BONDED)["refinement.total_qm_multiplicity"] == "1"
-    assert "closed shell" in (
-        proposal_explanations(plan, BONDED)["refinement.total_qm_multiplicity"]
-    )
-
-
-def test_a_single_open_shell_ion_is_proposed_with_the_term_it_came_from():
-    plan = _plan()
-    high_spin = {**BONDED, "metal.z_zn_500_site.multiplicity": 5}
-
-    value = proposed_answers(plan, high_spin)["refinement.total_qm_multiplicity"]
-    why = proposal_explanations(plan, high_spin)["refinement.total_qm_multiplicity"]
-
-    assert value == "5"
-    assert "z_zn_500_site" in why
-    assert "nothing else in the region is open shell" in why
-
-
-def test_nothing_is_proposed_before_the_ion_multiplicity_is_known():
-    """Half an answer looks like an answer."""
-
-    plan = _plan()
-    partial = {key: value for key, value in BONDED.items() if "multiplicity" not in key}
-
-    assert "refinement.total_qm_multiplicity" not in proposed_answers(plan, partial)
+    assert "refinement.total_qm_multiplicity" not in proposed_answers(_plan(), BONDED)
 
 
 def test_an_open_shell_region_without_a_total_is_refused_by_the_schema():
@@ -136,7 +122,6 @@ def test_an_open_shell_region_without_a_total_is_refused_by_the_schema():
         _plan(),
         {
             **BONDED,
-            "metal.z_zn_500_site.multiplicity": 5,
             "refinement.total_qm_multiplicity": 5,
         },
     )
@@ -161,7 +146,6 @@ def test_the_selection_refuses_rather_than_guessing_if_it_is_reached():
             _plan(),
             {
                 **BONDED,
-                "metal.z_zn_500_site.multiplicity": 5,
                 "refinement.total_qm_multiplicity": 5,
             },
         )

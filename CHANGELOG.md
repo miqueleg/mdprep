@@ -22,8 +22,42 @@
 - A residue still holding several metal atoms (an iron-sulfur cluster) and
   heme c, a covalent ligand, are refused with the reason before any question
   is asked.
+- Heterogens that are not ligands. mdprep reads the bonds a deposition
+  declares (PDB LINK, mmCIF `_struct_conn`) and its modified residues (MODRES,
+  `_pdbx_struct_mod_residue`), and sorts the heterogens before asking about
+  ligands: modified residues in a chain, glycans, other heterogens bonded to
+  the protein, and crystallisation additives. Each group is one question with
+  every member listed. Glycans and additives are proposed for removal, a
+  selenomethionine for replacement by methionine; anything else is asked
+  without a proposal, and keeping what cannot be built stops at the question.
+  See `docs/heterogens.md`.
+- `structure.remove_residues`: residues left out on purpose, each with its
+  reason, applied before anything else looks at the structure and reported.
+- `structure.repair.replace_modified_residues`: modified residues replaced by
+  their standard parents through PDBFixer, exactly the ones listed.
+- A metal that is not inside a cofactor can be removed on its model question
+  (a nickel from a His-tag purification). Magnesium and calcium are proposed
+  nonbonded.
+- The SMILES and net charge of FAD, FMN, SAM, SAH, NAD+, NADH, NADP+ and NADPH
+  are proposed, at pH 7, with the protonation stated; each is tested against
+  a deposited cofactor.
+- `examples/20_upo_5oxu_heme_glycans.yaml` (an unspecific peroxygenase:
+  heme-thiolate, magnesium, N-glycans, additives) and
+  `examples/21_prna_fad_halogenase.yaml` (a flavin-dependent halogenase),
+  with their depositions. `docs/enzyme_families.md` lists what mdprep does
+  with each family of halogenating and dehalogenating enzymes.
+- Refused when the structure is loaded, with the reason: a cofactor bonded to
+  the protein that holds a metal (myeloperoxidase's heme), an oxoanion such as
+  vanadate, a modified residue with no standard parent, and a declared bond
+  between protein residues that is neither a peptide bond nor a disulfide.
 
 ### Changed
+
+- The spin is asked once, for the QM region. The per-metal multiplicity
+  question is gone; the QM region's answer is also the bonded site's
+  `ions[].multiplicity` and MCPB model spins.
+- Crystallisation additives are no longer offered one by one as ligands
+  unless their removal is declined.
 
 - The protonation of a titratable side chain on a metal is asked right after
   the coordination shell is confirmed, before the spin and the model charge.
@@ -39,6 +73,47 @@
   cysteine stated as CYM counted as neutral and an aspartate stated as ASH as
   -1. It now counts the state given, and proposes nothing until it is given.
 - The builder named a residue once per highlighted atom.
+- The ligand bond-order check measured conjugated single bonds against
+  saturated lengths, so every amide, amino-heterocycle and flavin looked like
+  a wrong tautomer and a SMILES for FAD, NAD or SAM could not be applied.
+- A heme on both a bonded iron and a nonbonded magnesium, as in a
+  peroxygenase, was refused for taking its charges from the magnesium's
+  non-existent fit.
+- QM/MM refinement stopped on a nonbonded metal or a crystal ion next to the
+  QM region; both are MM environment with known parameters.
+- A lysine PropKa made neutral lost a hydrogen's charge in the embedding of
+  the xTB histidine comparison: OpenMM names its amine hydrogens HZ1 and HZ2,
+  ff14SB's LYN HZ2 and HZ3. The histidines around it were compared beside a
+  lysine at -0.39 e, and the report asked for the lysine to be declared as a
+  ligand. PrnA's Lys79 reached this: its four histidines keep their states,
+  but their HID-HIE gaps moved by 1 to 3 kcal/mol, enough to flip a closer
+  call.
+- A vanadate was split into a vanadium and four unbonded oxygens.
+- Replacing a modified residue stopped the run unless
+  `structure.repair.add_missing_heavy_atoms` was set: PDBFixer keeps a blank
+  insertion code as a space, so the replaced residue's own new atoms counted
+  as unrequested. Any replacement in a structure missing nothing else reached
+  this, 1CPO's pyroglutamate among them. A chain's terminal OXT, which the
+  planner never asks about, stopped such a run too; it is left to tleap.
+- A pyroglutamate replaced by glutamine kept its lactam's CD 1.5 A from its
+  own backbone nitrogen. A replaced side chain bonded to its own backbone is
+  rebuilt beyond CB from the parent's template, listed under
+  `side_chain_rebuilt`, with a warning naming its closest contact.
+- The g-xTB Hessian of a high-spin heme site could fail to converge, or
+  converge in whichever of two states the thread count led it to: on 2QFK's
+  aquo Fe(III), 27 kcal/mol apart, with Fe-N force constants up to 1.7 times
+  different. `mcpb.pyscf.xtb.scf_annealing_kelvin` converges the SCF straight
+  and from each hotter temperature listed, single-threaded, and takes the
+  Hessian from the lowest; the builder sets it, with `max_scf_iterations:
+  3000`, for every heme site. Examples 19 and 20 carry both. 2QFK itself now
+  stops every time at the same place, a negative His-Fe-N angle constant,
+  instead of passing or failing by the thread count. See `docs/metals.md`.
+- A Seminario term MCPB.py found negative and wrote as zero was reported only
+  as a 0.0 in the frcmod; the error now names it, its atoms and its value.
+- The bond-order check read a porphyrin bond by bond, so 2QFK's heme, refined
+  with one pyrrole's beta-beta bond at single-bond length, was refused as a
+  wrong tautomer of heme b. A porphyrin's core is skipped like a carboxylate;
+  a chlorin's reduced ring is still checked.
 
 ## 0.4.0 - 2026-10-20
 

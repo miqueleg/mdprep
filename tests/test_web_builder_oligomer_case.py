@@ -33,7 +33,7 @@ ANSWERS = {
     "ligand.a_akg_897.net_charge": "-2",
     "ligand.a_akg_897.smiles": "[O-]C(=O)CCC(=O)C(=O)[O-]",
     "metal.a_fe2_900_site.confirm_donors": "true",
-    "metal.a_fe2_900_site.multiplicity": "5",
+    "refinement.total_qm_multiplicity": "5",
 }
 
 
@@ -154,7 +154,7 @@ def test_keeping_one_copy_of_a_prediction_keeps_its_own_ligand_chains(page, tmp_
             "ligand.j_akg_1.net_charge": "-2",
             "ligand.j_akg_1.smiles": "[O-]C(=O)CCC(=O)C(=O)[O-]",
             "metal.g_fe2_1_site.confirm_donors": "true",
-            "metal.g_fe2_1_site.multiplicity": "5",
+            "refinement.total_qm_multiplicity": "5",
         },
     )
 

@@ -62,12 +62,11 @@ def test_the_answers_reproduce_the_example_manifest(plan):
         "ligand.a_akg_897.net_charge": -2,
         "ligand.a_akg_897.smiles": "[O-]C(=O)CCC(=O)C(=O)[O-]",
         "metal.a_fe2_900_site.confirm_donors": True,
-        "metal.a_fe2_900_site.multiplicity": 5,
+        "refinement.total_qm_multiplicity": 5,
     }
     proposals = proposed_answers(plan, answers)
     # Fe +2, AKG -2, His 0, His 0, water 0, Cl -1.
     assert proposals["metal.a_fe2_900_site.model_charge"] == "-1"
-    assert proposals["refinement.total_qm_multiplicity"] == "5"
     answers.update({key: int(value) for key, value in proposals.items()})
 
     manifest = ManifestConfig.model_validate(build_manifest(plan, answers))

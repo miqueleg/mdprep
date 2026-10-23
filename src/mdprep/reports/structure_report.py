@@ -59,6 +59,21 @@ def _render_markdown(report: dict[str, Any]) -> str:
         lines.append("- None")
     lines.extend(["", "## Unknown Heterogens Removed", ""])
     lines.extend(_residue_lines(report["unknown_heterogens_removed"]))
+    lines.extend(["", "## Residues Removed By The Manifest", ""])
+    removed = report.get("residues_removed", [])
+    lines.extend(
+        [f"- {_format_residue(item)}: {item['reason']}" for item in removed] or ["- None"]
+    )
+    lines.extend(["", "## Modified Residues Replaced By Their Parents", ""])
+    replaced = (report.get("structure_repair") or {}).get("modified_residues_replaced", [])
+    lines.extend(
+        [
+            f"- {item['chain'] or '<blank>'}:{item['resname']}{item['resid']}"
+            f"{item.get('icode') or ''} -> {item['replacement']}"
+            for item in replaced
+        ]
+        or ["- None"]
+    )
     lines.extend(["", "## Histidines", ""])
     lines.extend(_residue_lines(report["histidines"]))
     lines.extend(["", "## Titratable Residues", ""])

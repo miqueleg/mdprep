@@ -191,3 +191,50 @@ def test_compare_mcpb_cli_report_only_preserves_invalid_zero_terms(tmp_path):
     )
     assert report["status"] == "fail"
     assert report["nonpositive_reference_force_constants"] == ["BOND:M1-Y1"]
+
+
+# MCPB.py's own account of 2QFK's iron site (step 2s), cut to what matters:
+# the atom types it gave the site, and the angle it found negative.
+MCPB_STEP_2S_2QFK = """\
+89-HID@1429-NE2 : NB --> Y1
+138-HEM@2200-NA : nd --> Y2
+138-HEM@2202-NC : nd --> Y4
+139-FE@2234-FE : Fe3+ --> M1
+=======================Generate the angle parameters==============
+For angletype: Y1-M1-Y3. There are 1 angle(s) in this type: 
+  The angle value(s) is(are): [90.67]
+  The average angle value is: 90.67 Degree.
+  The force constant(s) is(are): [np.float64(15.16)]
+  The average force constant is: 15.16 Kcal*mol^-1*Rad^-2.
+For angletype: Y1-M1-Y4. There are 1 angle(s) in this type: 
+  The angle value(s) is(are): [87.35]
+  The average angle value is: 87.35 Degree.
+  The force constant(s) is(are): [np.float64(-6.62)]
+  The average force constant is: -6.62 Kcal*mol^-1*Rad^-2.
+  *The average force constant is negative, treat is as 0.00.
+"""
+
+
+def test_a_term_mcpb_wrote_as_zero_is_named_with_its_atoms():
+    """The frcmod only shows 0.00 against three atom types; what came out
+    negative, and between which atoms, is in MCPB.py's output."""
+    from types import SimpleNamespace
+
+    from mdprep.metals.mcpb import negative_seminario_terms
+
+    def atom(resname, resid, name):
+        return SimpleNamespace(chain_id="A", resname=resname, resid=resid, icode=None, name=name)
+
+    numbering = SimpleNamespace(
+        original_by_mcpb_atom_id={
+            1429: atom("HIS", 89, "NE2"),
+            2200: atom("HEM", 139, "NA"),
+            2202: atom("HEM", 139, "NC"),
+            2234: atom("FE", 139, "FE"),
+        }
+    )
+
+    assert negative_seminario_terms(MCPB_STEP_2S_2QFK, numbering) == [
+        "Y1-M1-Y4 (A:HIS89 NE2, A:FE139 FE, A:HEM139 NC) at -6.62"
+    ]
+    assert negative_seminario_terms(MCPB_STEP_2S_2QFK.split("For angletype: Y1-M1-Y4")[0], numbering) == []

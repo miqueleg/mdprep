@@ -36,7 +36,7 @@ CHAIN_A = {
     "metal.a_fe_1401_site.charge": "3",
     "metal.a_fe_1401_site.confirm_donors": "true",
     "metal.a_fe_1401_site.donor_state.a_cys_317": "CYM",
-    "metal.a_fe_1401_site.multiplicity": "2",
+    "refinement.total_qm_multiplicity": "2",
 }
 
 
@@ -118,7 +118,8 @@ def test_every_other_atom_keeps_its_place(tmp_path):
             _atom(1, "FE", "HEM", 401, "FE", 0.0),
             _atom(2, "NA", "HEM", 401, "N", 2.0),
             _atom(3, "O", "HOH", 501, "O", 9.0),
-            _atom(4, "NB", "HEM", 401, "N", -2.0),
+            # Bonded to NA: what remains of the cofactor is one molecule.
+            _atom(4, "C1A", "HEM", 401, "C", 3.4),
             _atom(5, "O", "HOH", 502, "O", -9.0),
         ],
     )
@@ -126,7 +127,7 @@ def test_every_other_atom_keeps_its_place(tmp_path):
     atoms = read_pdb(path).atoms
 
     assert [(atom.resname, atom.name) for atom in atoms] == [
-        ("HEM", "NA"), ("HOH", "O"), ("HEM", "NB"), ("FE", "FE"), ("HOH", "O"),
+        ("HEM", "NA"), ("HOH", "O"), ("HEM", "C1A"), ("FE", "FE"), ("HOH", "O"),
     ]
 
 
@@ -217,7 +218,7 @@ def test_the_oxidation_state_is_asked_not_read_off_the_name(plan):
     assert charge.requires_user_input
     assert "came out of A:HEM1401" in charge.why
     assert "Fe(III) in a resting cytochrome P450" in charge.why
-    assert "low-spin, 2" in plan.by_id("metal.a_fe_1401_site.multiplicity").why
+    assert "low-spin, 2" in plan.by_id("refinement.total_qm_multiplicity").why
 
 
 def test_the_cysteine_state_is_asked_before_the_model_charge(plan):
@@ -226,7 +227,6 @@ def test_the_cysteine_state_is_asked_before_the_model_charge(plan):
     assert (
         ids.index("metal.a_fe_1401_site.confirm_donors")
         < ids.index("metal.a_fe_1401_site.donor_state.a_cys_317")
-        < ids.index("metal.a_fe_1401_site.multiplicity")
         < ids.index("metal.a_fe_1401_site.model_charge")
     )
 
@@ -272,8 +272,11 @@ def test_chain_a_builds_a_manifest_mdprep_accepts(plan, tmp_path):
     assert (site.ions[0].charge, site.ions[0].multiplicity) == (3, 2)
     assert site.mcpb.small_model_charge == -2
     # Smeared, because a low-spin Fe(III) heme's SCF does not converge at
-    # xTB's own 300 K.
+    # xTB's own 300 K; and the lowest of several starts, because a high-spin
+    # one can settle in more than one state.
     assert site.mcpb.pyscf.xtb.electronic_temperature_kelvin == 1000.0
+    assert site.mcpb.pyscf.xtb.scf_annealing_kelvin == [2000.0, 3000.0, 5000.0]
+    assert site.mcpb.pyscf.xtb.max_scf_iterations == 3000
     (ligand,) = config.ligands
     assert (ligand.selector.resname, ligand.net_charge, ligand.smiles) == ("HEM", -4, HEME_SMILES)
     assert [override.state for override in config.protonation.overrides] == ["CYM"]

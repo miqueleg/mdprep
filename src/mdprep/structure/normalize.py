@@ -57,6 +57,7 @@ class StructureNormalizationResult:
     configured_ligands_kept: list[NormalizedLigand] = field(default_factory=list)
     configured_metal_ions_kept: list[NormalizedMetalIon] = field(default_factory=list)
     unknown_heterogens_removed: list[dict[str, object]] = field(default_factory=list)
+    residues_removed: list[dict[str, object]] = field(default_factory=list)
     chains_removed: list[dict[str, object]] = field(default_factory=list)
     unknown_heterogens_causing_failure: list[dict[str, object]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
@@ -89,6 +90,7 @@ class StructureNormalizationResult:
                 for metal in self.configured_metal_ions_kept
             ],
             "unknown_heterogens_removed": self.unknown_heterogens_removed,
+            "residues_removed": self.residues_removed,
             "chains_removed": self.chains_removed,
             "unknown_heterogens_causing_failure": self.unknown_heterogens_causing_failure,
             "histidines": _residue_dicts(self.input_summary.histidines),
@@ -136,6 +138,9 @@ def normalize_structure_stage(
             altloc_policy=manifest.structure.altloc_policy,
         )
 
+    # Residues the manifest leaves out on purpose go first, so none of them
+    # is mistaken below for an unknown heterogen, a ligand or a donor.
+    removed = _resolve_removed_residues(structure, manifest)
     configured_ligands = _resolve_configured_ligands(structure, manifest)
     configured_metals = _resolve_configured_metals(structure, manifest)
     _validate_disulfide_selectors(structure, manifest)
@@ -180,6 +185,7 @@ def normalize_structure_stage(
         residue
         for residue in structure.residues
         if is_likely_ligand_or_cofactor(residue)
+        and id(residue) not in removed
         and (not kept_chains or residue.id.chain_id in kept_chains)
     ]
     unknown_heterogens = [
@@ -204,6 +210,7 @@ def normalize_structure_stage(
     ions_kept: list[ResidueRecord] = []
     ions_removed: list[ResidueRecord] = []
     unknown_removed: list[ResidueRecord] = []
+    residues_removed: list[dict[str, object]] = []
     chains_removed: list[ResidueRecord] = []
 
     selected_chains = {chain.strip() for chain in manifest.structure.keep_chains}
@@ -219,6 +226,9 @@ def normalize_structure_stage(
     for residue in structure.residues:
         if selected_chains and residue.id.chain_id not in selected_chains:
             chains_removed.append(residue)
+            continue
+        if id(residue) in removed:
+            residues_removed.append({**_residue_dict(residue), "reason": removed[id(residue)]})
             continue
         if is_standard_protein_residue(residue):
             keep_residue_ids.add(id(residue))
@@ -321,6 +331,7 @@ def normalize_structure_stage(
             for site_id, (element, charge, atom), residue in configured_metals
         ],
         unknown_heterogens_removed=_residue_dicts(unknown_removed),
+        residues_removed=residues_removed,
         chains_removed=_residue_dicts(chains_removed),
         unknown_heterogens_causing_failure=unknown_heterogen_dicts
         if unknown_heterogens and not manifest.structure.remove_unknown_heterogens
@@ -354,6 +365,24 @@ def inspect_pdb_structure_from_structure(structure: PdbStructure) -> InspectionS
         titratable_residues=titratable,
         possible_disulfides=disulfides,
     )
+
+
+def _resolve_removed_residues(
+    structure: PdbStructure, manifest: ManifestConfig
+) -> dict[int, str]:
+    """Each residue structure.remove_residues names, with its reason."""
+
+    removed: dict[int, str] = {}
+    for item in manifest.structure.remove_residues:
+        try:
+            residue = resolve_residue_selector(structure, item.selector.model_dump())
+        except SelectorError as exc:
+            raise StructureNormalizationError(
+                f"structure.remove_residues names a residue the structure does not "
+                f"have: {exc}"
+            ) from exc
+        removed[id(residue)] = item.reason
+    return removed
 
 
 def _resolve_configured_ligands(

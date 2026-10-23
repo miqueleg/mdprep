@@ -374,7 +374,6 @@ def test_the_manifest_the_builder_produces_installs_what_that_run_invokes():
         "ligand.k_lg2_1.smiles": "OCC=O",
         "metal.f_fe_1_site.charge": 2,
         "metal.f_fe_1_site.confirm_donors": True,
-        "metal.f_fe_1_site.multiplicity": 5,
         "refinement.total_qm_multiplicity": 5,
         "metal.f_fe_1_site.donor_state.a_asp_131": "ASP",
         "molecular_dynamics.enabled": False,

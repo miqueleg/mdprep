@@ -12,10 +12,10 @@ starts. Nothing here repairs anything; it only reports.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Collection, Iterable, Sequence
 
 from mdprep.structure.classify import is_standard_protein_residue
-from mdprep.structure.models import ResidueRecord
+from mdprep.structure.models import ResidueId, ResidueRecord
 
 
 # Heavy atoms of each standard residue, backbone included. OXT is omitted
@@ -120,14 +120,24 @@ def incomplete_residues(
     return found
 
 
-def chain_breaks(residues: Sequence[ResidueRecord]) -> list[ChainBreak]:
+def chain_breaks(
+    residues: Sequence[ResidueRecord],
+    *,
+    also_in_chain: Collection[ResidueId] = (),
+) -> list[ChainBreak]:
     """Discontinuities between consecutive protein residues of one chain.
 
     A gap in residue numbering is reported even when the two ends happen to sit
     close together, because the numbering is what says residues are absent.
+    ``also_in_chain`` are heterogens that are residues of a chain -- a
+    selenomethionine -- which leave no gap where they are.
     """
 
-    protein = [residue for residue in residues if is_standard_protein_residue(residue)]
+    protein = [
+        residue
+        for residue in residues
+        if is_standard_protein_residue(residue) or residue.id in also_in_chain
+    ]
     breaks: list[ChainBreak] = []
     for before, after in zip(protein, protein[1:]):
         if before.id.chain_id != after.id.chain_id:

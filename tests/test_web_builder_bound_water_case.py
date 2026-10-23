@@ -27,8 +27,8 @@ pytestmark = [pytest.mark.external, pytest.mark.slow]
 DRIVER = REPO / "tests" / "browser" / "student_flow.mjs"
 STRUCTURE = REPO / "examples" / "tutorials" / "syrb2_2fct" / "2FCT.pdb"
 
-# Only what the engine will not default or propose. The model charge and the
-# QM region's spin are left to the page's proposals on purpose.
+# Only what the engine will not default or propose. The model charge is left
+# to the page's proposal on purpose.
 ANSWERS = {
     "structure.chains": "A",
     # The detergent is declined below, so it has to be allowed to go.
@@ -38,7 +38,7 @@ ANSWERS = {
     "ligand.a_akg_897.net_charge": "-2",
     "ligand.a_akg_897.smiles": "[O-]C(=O)CCC(=O)C(=O)[O-]",
     "metal.a_fe2_900_site.confirm_donors": "true",
-    "metal.a_fe2_900_site.multiplicity": "5",
+    "refinement.total_qm_multiplicity": "5",
 }
 
 
@@ -107,13 +107,17 @@ def test_the_bound_chloride_is_a_coordinating_ion_and_the_free_one_stays(site, m
     assert manifest["structure"]["keep_crystal_waters"] is True
 
 
-def test_the_model_charge_and_spin_were_proposed_and_accepted(report, site, manifest):
-    """Neither was typed: the page filled them in from the answers given."""
+def test_the_model_charge_was_proposed_and_the_spin_asked_once(report, site, manifest):
+    """The charge is arithmetic over earlier answers, so the page fills it
+    in; the spin is chemistry, asked once for the QM region, and that one
+    answer is also the site's."""
 
     steps = {step["id"]: step for step in report["asked"] if step.get("id")}
     assert steps["metal.a_fe2_900_site.model_charge"]["prefilled"] == "-1"
-    assert steps["refinement.total_qm_multiplicity"]["prefilled"] == "5"
+    assert steps["refinement.total_qm_multiplicity"]["prefilled"] == ""
+    assert not any(key.startswith("metal.") and key.endswith(".multiplicity") for key in steps)
     assert site["mcpb"]["small_model_charge"] == -1
+    assert site["mcpb"]["small_model_spin"] == site["ions"][0]["multiplicity"] == 5
     assert manifest["refinement"]["total_qm_multiplicity"] == 5
 
 

@@ -10,9 +10,11 @@ reader that pulls in a compiled dependency would work everywhere except the
 place a student is most likely to use it. The atom_site loop is a whitespace
 separated table, which is little enough to read directly.
 
-Only atom_site is read. Everything mdprep decides, it decides from atoms,
-residue names and coordinates; the chemical component dictionary a file
-carries is not consulted, so a wrong one cannot mislead it.
+Coordinates come from atom_site. Besides it, only what a deposition declares
+about bonds is read -- ``_struct_conn`` and ``_pdbx_struct_mod_residue``, see
+``structure/links.py`` -- because a bond cannot be told from a clash by
+distance. The chemical component dictionary a file carries is not consulted,
+so a wrong one cannot mislead it.
 """
 
 from __future__ import annotations
@@ -20,6 +22,12 @@ from __future__ import annotations
 from math import isfinite
 from pathlib import Path
 
+from mdprep.structure.links import (
+    parse_mmcif_links,
+    parse_mmcif_modres,
+    resolve_links,
+    resolve_residue_keys,
+)
 from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 from mdprep.structure.pdb_fields import fit_atoms_to_pdb_fields
 from mdprep.structure.pdb import (
@@ -130,7 +138,8 @@ def read_mmcif(
     if altloc_policy not in VALID_ALTLOC_POLICIES:
         raise MmcifParseError(f"Invalid altloc policy: {altloc_policy}")
 
-    rows = read_atom_site_rows(source.read_text(encoding="utf-8", errors="replace"))
+    text = source.read_text(encoding="utf-8", errors="replace")
+    rows = read_atom_site_rows(text)
     if not rows:
         raise MmcifParseError(f"mmCIF contains no atoms: {source}")
 
@@ -221,6 +230,7 @@ def read_mmcif(
             )
         )
 
+    as_written = atoms
     atoms = _apply_altloc_policy(atoms, altloc_policy)
     if not atoms:
         raise MmcifParseError(f"mmCIF contains no usable atoms: {source}")
@@ -236,6 +246,10 @@ def read_mmcif(
         model_count=len(models),
         warnings=warnings,
         assigned_resnames=assigned_resnames,
+        links=resolve_links(parse_mmcif_links(text), as_written, atoms),
+        modified_residue_parents=resolve_residue_keys(
+            parse_mmcif_modres(text), as_written, atoms
+        ),
     )
 
 

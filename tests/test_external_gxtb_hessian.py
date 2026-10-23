@@ -125,3 +125,46 @@ def test_the_pinned_gxtb_release_still_exists_with_the_checksum_we_claim():
         f"but mdprep pins {GXTB_SHA256}. Every Colab metal run will fail its "
         "checksum until this is updated."
     )
+
+
+DHP_SMALL_MODEL = Path(__file__).parent / "data" / "metals" / "dhp_2qfk_small_model.xyz"
+
+
+@pytest.mark.external
+@pytest.mark.xtb
+@pytest.mark.slow
+def test_the_scf_search_finds_the_lower_state_of_a_high_spin_heme(tmp_path):
+    """2QFK's aquo Fe(III), spin 6: straight at 1000 K a single-threaded SCF
+    settles about 27 kcal/mol above the states the annealed starts reach.
+    Two and a half minutes on one thread."""
+
+    from mdprep.metals.gxtb_hessian import _search_scf_states
+
+    configured = os.environ.get("MDPREP_GXTB_EXECUTABLE")
+    if not configured or not Path(configured).expanduser().is_file():
+        pytest.skip("set MDPREP_GXTB_EXECUTABLE to an official g-xTB-enabled xtb binary")
+    xyz = tmp_path / DHP_SMALL_MODEL.name
+    shutil.copyfile(DHP_SMALL_MODEL, xyz)
+    config = McpbXtbHessianConfig(
+        executable=str(Path(configured).expanduser()),
+        electronic_temperature_kelvin=1000.0,
+        max_scf_iterations=3000,
+        scf_annealing_kelvin=[2000.0, 3000.0, 5000.0],
+    )
+
+    starts = _search_scf_states(
+        executable=Path(configured).expanduser().resolve(),
+        source_xyz=xyz,
+        work=tmp_path,
+        charge=-1,
+        spin=5,
+        config=config,
+        environment=dict(os.environ),
+    )
+
+    lowest = starts[0]
+    (direct,) = [start for start in starts if start.label == "direct"]
+    assert lowest.label != "direct"
+    assert direct.converged
+    assert direct.energy_hartree - lowest.energy_hartree > 0.03
+    assert (tmp_path / "scf_start_5000K" / "xtbrestart").is_file()

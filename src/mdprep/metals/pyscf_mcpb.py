@@ -587,6 +587,11 @@ def _run_small_model(
         gxtb_metadata = gxtb_result.to_dict()
         external_command_records = (
             dict(gxtb_metadata["version_command"]),  # type: ignore[arg-type]
+            *(
+                dict(command)
+                for start in gxtb_metadata["scf_starts"]  # type: ignore[union-attr]
+                for command in start["commands"]
+            ),
             dict(gxtb_metadata["hessian_command"]),  # type: ignore[arg-type]
         )
         hessian_backend = "gfn2_xtb" if xtb_config.model == "gfn2" else "gxtb"

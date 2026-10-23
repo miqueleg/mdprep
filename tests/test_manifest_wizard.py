@@ -136,7 +136,10 @@ def test_unreachable_questions_are_never_asked(tmp_path):
 
 
 def test_preset_answers_are_not_asked(tmp_path):
-    prompt = scripted_prompter({"structure.remove_unknown_heterogens": "no"})
+    # The sulfate is a crystallisation additive, kept here to be a ligand.
+    prompt = scripted_prompter(
+        {"structure.remove_unknown_heterogens": "no", "structure.remove_additives": "no"}
+    )
 
     run_wizard(
         DATA / "protein_with_waters.pdb",
@@ -193,7 +196,6 @@ def test_a_confirmed_coordination_shell_is_written(tmp_path):
             "metal.z_zn_500_site.model": "bonded_mcpb",
             "metal.z_zn_500_site.charge": "2",
             "metal.z_zn_500_site.confirm_donors": "yes",
-            "metal.z_zn_500_site.multiplicity": "1",
             "metal.z_zn_500_site.model_charge": "2",
             "refinement.total_qm_multiplicity": "1",
         }
