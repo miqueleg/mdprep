@@ -10,6 +10,6 @@ def test_colab_smoke_notebook_is_valid_and_targets_pypi() -> None:
     source = "\n".join(
         line for cell in notebook["cells"] for line in cell.get("source", [])
     )
-    assert "mdprep[md,qm]==0.5.0" in source
+    assert "mdprep[md,qm]==0.5.1" in source
     assert "https://test.pypi.org/simple/" not in source
     assert "selftest\", \"--quick" in source
