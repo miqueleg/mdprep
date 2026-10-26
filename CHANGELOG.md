@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- `ligands[].keep_input_hydrogens`: whether a ligand keeps the hydrogens it
+  has in the input. Unset, it keeps them when it has a `user_mol2` or no
+  `smiles`; otherwise the SMILES's replace them. Kept hydrogens on a ligand
+  with a SMILES are compared with it heavy atom by heavy atom, and a
+  difference stops the run naming the atoms.
+- The structure report's input-hydrogen record (how many were removed from
+  protein, water and each other residue, and which ligands kept theirs) and
+  its ligand-hydrogen record (placed from the SMILES, or kept and checked).
+  The builder's findings list the removed hydrogens too.
+
 ### Changed
 
 - The web builder and the official Colab notebook install a pinned mdprep
@@ -13,6 +25,31 @@
 
 ### Fixed
 
+- A structure that arrives with hydrogens -- a deposition refined with riding
+  hydrogens, or a model run through PyMOL, reduce, PDBFixer or a format converter --
+  no longer stops the run. `structure.remove_input_hydrogens` used to act only
+  at the end of protonation, so the hydrogens reached everything before it:
+  PyMOL and format converters protonate chlorides, and the builder refused the HCl as
+  a ligand named after an Amber ion; reduce numbers every hydrogen it adds 0,
+  and the reader refused the file for its CONECT records; a lysine's riding
+  HZ3 stopped the temporary hydrogenation for xTB, which built the neutral
+  lysine PropKa asked for; and PDBFixer's alpha-ketoglutarate, protonated as
+  the neutral acid, was kept and gave MCPB negative angle force constants.
+  The hydrogens are now removed as the structure is read, in the builder,
+  `mdprep plan`, `mdprep init` and the structure stage alike, so the plan is
+  made about the structure that is built and PDBFixer repairs that structure
+  too. A ligand with a SMILES takes the SMILES's hydrogens.
+- CONECT records in a file whose atom serials repeat are followed to the
+  atoms' new numbers when the serial they name is unique, and dropped with a
+  warning when it is not, instead of the file being refused.
+- The temporary hydrogenation for the xTB histidine comparison stops only
+  when a heavy atom goes missing. A hydrogen the residue had and its assigned
+  state does not is dropped, as the hydrogens are temporary anyway.
+- One test of what a hydrogen is, the element the reader settled on, instead
+  of five that disagreed. A mercury ion written without an element column was
+  a hydrogen to two of them, and deuterium was one to only two.
+- A four-character atom name starting with H in a residue without element
+  columns (HG21, HO2') is read as a hydrogen, not as mercury or holmium.
 - The official notebook's 3D views hid the metal site they were drawn to
   show: an Fe/alpha-KG enzyme holds its iron inside a beta-barrel, and the
   opaque cartoon covered it. With a metal present the cartoon is now

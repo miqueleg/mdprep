@@ -19,6 +19,7 @@ from mdprep.structure.classify import (
     is_standard_protein_residue,
     is_water_residue,
 )
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord
 from mdprep.structure.selectors import SelectorError, resolve_residue_selector
 
@@ -292,7 +293,7 @@ def select_refinement_regions(
         active_atoms = [
             index
             for index in active_region_atoms
-            if (topology_structure.atoms[index].element or "").strip().upper() == "H"
+            if is_hydrogen(topology_structure.atoms[index])
         ]
         if not active_atoms:
             raise RefinementSelectionError(

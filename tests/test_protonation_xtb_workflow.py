@@ -17,6 +17,19 @@ from tests.test_protonation_propka_workflow import fake_propka_result
 from tests.test_structure_normalize import make_manifest, manifest_data
 
 
+def hydrogenated_input(path: str) -> dict:
+    """A manifest whose xTB environment is the hydrogens the input carries.
+
+    The structure stage removes input hydrogens by default, and PDBFixer then
+    builds temporary ones for xTB. Keeping the input's is what these tests
+    are about, and what lets them run without PDBFixer.
+    """
+
+    data = manifest_data(path)
+    data["structure"]["remove_input_hydrogens"] = False
+    return data
+
+
 def run_with_fakes(monkeypatch, tmp_path, data: dict, *, hid_energy: float, hie_energy: float):
     # These exercise the cluster backend, which is no longer the default. The
     # embedded QM/MM backend has its own tests in test_histidine_qmmm.py.
@@ -68,7 +81,7 @@ def run_with_fakes(monkeypatch, tmp_path, data: dict, *, hid_energy: float, hie_
 
 
 def test_propka_xtb_his_runs_hid_hie_comparison_and_selects_lower_hid(monkeypatch, tmp_path):
-    data = manifest_data("tests/data/protein_histidine_ring_hydrogenated.pdb")
+    data = hydrogenated_input("tests/data/protein_histidine_ring_hydrogenated.pdb")
     data["protonation"]["method"] = "propka_xtb_his"
 
     result = run_with_fakes(monkeypatch, tmp_path, data, hid_energy=-40.01, hie_energy=-40.00)
@@ -89,7 +102,7 @@ def test_propka_xtb_his_runs_hid_hie_comparison_and_selects_lower_hid(monkeypatc
 
 
 def test_xtb_tautomers_use_clean_isolated_work_directories(monkeypatch, tmp_path):
-    data = manifest_data("tests/data/protein_histidine_ring_hydrogenated.pdb")
+    data = hydrogenated_input("tests/data/protein_histidine_ring_hydrogenated.pdb")
     data["protonation"]["method"] = "propka_xtb_his"
     histidine_dir = tmp_path / "prepared" / "protonation" / "histidine_xtb" / "A_HIS2"
     for tautomer in ("HID", "HIE"):
@@ -152,7 +165,7 @@ def test_xtb_tautomers_use_clean_isolated_work_directories(monkeypatch, tmp_path
 
 
 def test_propka_xtb_his_selects_lower_hie(monkeypatch, tmp_path):
-    data = manifest_data("tests/data/protein_histidine_ring_hydrogenated.pdb")
+    data = hydrogenated_input("tests/data/protein_histidine_ring_hydrogenated.pdb")
     data["protonation"]["method"] = "propka_xtb_his"
 
     result = run_with_fakes(monkeypatch, tmp_path, data, hid_energy=-40.00, hie_energy=-40.01)
@@ -162,7 +175,7 @@ def test_propka_xtb_his_selects_lower_hie(monkeypatch, tmp_path):
 
 
 def test_xtb_close_call_is_reported(monkeypatch, tmp_path):
-    data = manifest_data("tests/data/protein_histidine_ring_hydrogenated.pdb")
+    data = hydrogenated_input("tests/data/protein_histidine_ring_hydrogenated.pdb")
     data["protonation"]["method"] = "propka_xtb_his"
 
     result = run_with_fakes(monkeypatch, tmp_path, data, hid_energy=-40.0001, hie_energy=-40.0)
@@ -173,7 +186,7 @@ def test_xtb_close_call_is_reported(monkeypatch, tmp_path):
 
 def test_multiple_neutral_histidines_with_ambiguous_input_hydrogens_do_not_fail(monkeypatch, tmp_path):
     pdb = _two_histidine_pdb_with_ambiguous_neighbor(tmp_path)
-    data = manifest_data(str(pdb))
+    data = hydrogenated_input(str(pdb))
     data["protonation"]["method"] = "propka_xtb_his"
     data["protonation"].setdefault("histidine", {}).setdefault("xtb", {})[
         "embedding"
@@ -235,7 +248,7 @@ def test_missing_histidine_ring_atom_fails_clearly(monkeypatch, tmp_path):
         "\n".join(line for line in source.splitlines() if " ND1 " not in line) + "\n",
         encoding="utf-8",
     )
-    data = manifest_data(str(pdb))
+    data = hydrogenated_input(str(pdb))
     data["protonation"]["method"] = "propka_xtb_his"
     monkeypatch.setattr(
         "mdprep.protonation.apply.run_propka_workflow",
@@ -365,7 +378,7 @@ def test_dehydrogenated_histidine_cluster_uses_temporary_pdbfixer_environment(
 
 
 def test_xtb_unavailable_fails_only_when_neutral_his_needs_it(monkeypatch, tmp_path):
-    data = manifest_data("tests/data/protein_histidine_ring_hydrogenated.pdb")
+    data = hydrogenated_input("tests/data/protein_histidine_ring_hydrogenated.pdb")
     data["protonation"]["method"] = "propka_xtb_his"
     monkeypatch.setattr(
         "mdprep.protonation.apply.run_propka_workflow",

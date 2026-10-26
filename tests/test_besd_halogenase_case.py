@@ -230,6 +230,9 @@ BESD_ANSWERS = {
     # say where they go, so the protonation is stated.
     "ligand.a_lig_301.smiles": "C(CCN)CC(C(=O)O)N",
     "ligand.a_akg_304.net_charge": -2,
+    # 6NIE resolves the cofactor's CH2 hydrogens too, but those are replaced
+    # by the SMILES's like any input hydrogens, so it is stated as well.
+    "ligand.a_akg_304.smiles": "C(CC(=O)[O-])C(=O)C(=O)[O-]",
     "ligand.a_cl_303.net_charge": -1,
     "metal.a_fe2_302_site.model": "bonded_mcpb",
     "metal.a_fe2_302_site.charge": 2,

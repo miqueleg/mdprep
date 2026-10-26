@@ -371,9 +371,15 @@ class LigandConfig(StrictModel):
     multiplicity: int = Field(default=1, ge=1)
     # The protonation the user intends, stated explicitly. A crystal structure
     # carries no ligand hydrogens; supplying a SMILES lets mdprep place them
-    # without guessing a tautomer or a charge. A ligand that already has
-    # hydrogens is left alone whatever this says.
+    # without guessing a tautomer or a charge. Hydrogens the input already
+    # has on the ligand are replaced by the SMILES's, unless
+    # keep_input_hydrogens says otherwise.
     smiles: str | None = None
+    # Whether the ligand keeps the hydrogens it has in the input rather than
+    # losing them with structure.remove_input_hydrogens. Unset, it keeps them
+    # when a user mol2 lists them or when there is no SMILES to place others
+    # from. Kept hydrogens are checked against the SMILES's formula.
+    keep_input_hydrogens: bool | None = None
     expected_formula: str | None = Field(
         default=None,
         pattern=r"^(?:[A-Z][a-z]?[0-9]*)+$",
@@ -409,6 +415,17 @@ class LigandConfig(StrictModel):
     def validate_charge_inputs(self) -> "LigandConfig":
         if self.charge_method == "user_mol2" and not self.user_mol2:
             raise ValueError("charge_method: user_mol2 requires user_mol2")
+        if self.keep_input_hydrogens is False:
+            if self.user_mol2 is not None:
+                raise ValueError(
+                    "keep_input_hydrogens: false cannot be used with user_mol2: the mol2 "
+                    "has to match the residue atom for atom, its hydrogens included"
+                )
+            if self.smiles is None:
+                raise ValueError(
+                    "keep_input_hydrogens: false requires smiles: nothing else would "
+                    "place this ligand's hydrogens"
+                )
         if self.charge_method in {"gas_resp_pyscf", "qmmesp_pyscf"} and self.qmmesp is None:
             raise ValueError(f"charge_method: {self.charge_method} requires qmmesp")
         if self.charge_method == "mcpb_resp_pyscf":

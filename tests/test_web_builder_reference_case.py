@@ -44,6 +44,7 @@ ANSWERS = {
     "ligand.a_lig_301.net_charge": "0",
     "ligand.a_lig_301.smiles": "C(CCN)CC(C(=O)O)N",
     "ligand.a_akg_304.net_charge": "-2",
+    "ligand.a_akg_304.smiles": "C(CC(=O)[O-])C(=O)C(=O)[O-]",
     "metal.a_fe2_302_site.charge": "2",
     "metal.a_fe2_302_site.confirm_donors": "true",
     "metal.a_fe2_302_site.model_charge": "-1",
@@ -167,14 +168,15 @@ def test_the_coordinating_halide_is_declared_as_an_ion(manifest):
     assert ions[0]["charge"] == -1
 
 
-def test_the_ligand_without_hydrogens_carries_its_smiles(manifest):
-    """6NIE resolves the cofactor's CH2 groups but nothing on the free lysine,
-    so only the lysine needs its protonation stated."""
+def test_every_ligand_carries_its_smiles(manifest):
+    """6NIE resolves the cofactor's CH2 groups but nothing on the free lysine.
+    Either way the input's hydrogens are replaced, so both state their
+    protonation."""
 
     ligands = {item["id"]: item for item in manifest["ligands"]}
 
     assert ligands["a_lig_301"]["smiles"]
-    assert "smiles" not in ligands["a_akg_304"]
+    assert ligands["a_akg_304"]["smiles"] == "C(CC(=O)[O-])C(=O)C(=O)[O-]"
     assert ligands["a_lig_301"]["charge_method"] == "am1bcc"
     assert ligands["a_lig_301"]["atom_types"] == "gaff2"
 

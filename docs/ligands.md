@@ -66,8 +66,30 @@ so a perception algorithm fills the spare valence with bond order instead: on
 this same alpha-ketoglutarate, RDKit returns a C-C triple bond where the
 molecule has a CH2-CH2.
 
-A ligand that already carries hydrogens is left alone, and a SMILES is neither
-asked for nor applied to it.
+## A ligand that arrives with hydrogens
+
+A ligand's hydrogens in the input were put there by something: PyMOL's
+`h_add`, reduce, PDBFixer, a format converter, a docking program, a riding-model
+refinement. Each follows its own rules, and none of them is the protonation
+you meant -- PDBFixer, for instance, takes alpha-ketoglutarate's hydrogens from
+its chemical component definition, which is the neutral acid, where at pH 7 it
+is a dianion. So with a SMILES, the input's hydrogens on that ligand are
+removed as the structure is read and the SMILES's are placed instead, exactly
+as for a crystal structure that had none. The structure report lists how many
+each residue lost.
+
+Two cases keep them, because nothing else can stand in for them:
+
+- a ligand with a `user_mol2`, which has to match the residue atom for atom;
+- a ligand with no SMILES, whose input hydrogens are the only statement of its
+  protonation there is (add `expected_formula` to have them checked).
+
+`keep_input_hydrogens: true` keeps them in any other case -- hydrogens whose
+positions you placed on purpose, say. They are then compared with the SMILES
+heavy atom by heavy atom, and any difference stops the run with the atoms that
+differ: a formula is not enough, since the keto and enol forms share one.
+`keep_input_hydrogens: false` replaces them where they would otherwise be
+kept; it needs a SMILES, and a `user_mol2` refuses it.
 
 ## Cofactors whose SMILES is proposed
 

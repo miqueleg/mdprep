@@ -14,6 +14,7 @@ from mdprep.structure.classify import (
     is_water_residue,
 )
 from mdprep.structure.coordination import metal_bound_waters
+from mdprep.structure.hydrogens import InputHydrogenRemoval, remove_input_hydrogens
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord
 from mdprep.structure.pdb import read_pdb
@@ -62,6 +63,10 @@ class StructureNormalizationResult:
     unknown_heterogens_causing_failure: list[dict[str, object]] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     repair_result: StructureRepairResult | None = None
+    input_hydrogens: InputHydrogenRemoval = field(default_factory=InputHydrogenRemoval)
+    # Each ligand with a SMILES: the hydrogens placed from it, or the input
+    # hydrogens it kept and how they compared with it.
+    ligand_hydrogens: list[dict[str, object]] = field(default_factory=list)
 
     def to_report_dict(self) -> dict[str, object]:
         normalized_summary = inspect_pdb_structure_from_structure(self.normalized_structure)
@@ -93,6 +98,8 @@ class StructureNormalizationResult:
             "residues_removed": self.residues_removed,
             "chains_removed": self.chains_removed,
             "unknown_heterogens_causing_failure": self.unknown_heterogens_causing_failure,
+            "input_hydrogens": self.input_hydrogens.to_dict(),
+            "ligand_hydrogens": self.ligand_hydrogens,
             "histidines": _residue_dicts(self.input_summary.histidines),
             "titratable_residues": _residue_dicts(self.input_summary.titratable_residues),
             "possible_disulfides": [
@@ -118,6 +125,12 @@ def normalize_structure_stage(
         altloc_policy=manifest.structure.altloc_policy,
         disulfide_cutoff_angstrom=manifest.disulfides.detection_cutoff_angstrom,
     )
+    # Hydrogens the input arrived with go before anything looks at the
+    # structure: every stage after this one places its own, and the ones a
+    # file brings were placed by another program under its own names and
+    # its own idea of the protonation. Counted on the whole input, so the
+    # record does not depend on whether PDBFixer read it first.
+    _, input_hydrogens = remove_input_hydrogens(input_summary.structure, manifest)
     repair_result: StructureRepairResult | None = None
     if manifest.structure.repair.backend != "none":
         if output_path is None:
@@ -133,9 +146,9 @@ def normalize_structure_stage(
         assert repair_result is not None
         structure = repair_result.structure
     else:
-        structure = read_structure(
-            input_path,
-            altloc_policy=manifest.structure.altloc_policy,
+        structure, _ = remove_input_hydrogens(
+            read_structure(input_path, altloc_policy=manifest.structure.altloc_policy),
+            manifest,
         )
 
     # Residues the manifest leaves out on purpose go first, so none of them
@@ -270,8 +283,7 @@ def normalize_structure_stage(
     # Ligand hydrogens belong to the structure, not just to the ligand's own
     # file: the QM/MM refinement, the leap build and the ligand parameters all
     # have to see the same molecule. Placing them here is what keeps them
-    # consistent; configured ligands are exempt from remove_input_hydrogens so
-    # they survive the protonation stage intact.
+    # consistent.
     filtered_atoms, hydrogenations = _hydrogenate_configured_ligands(
         structure, manifest, keep_residue_ids, filtered_atoms
     )
@@ -299,10 +311,6 @@ def normalize_structure_stage(
     warnings = list(structure.warnings)
     if repair_result is not None:
         warnings.extend(repair_result.warnings)
-    if manifest.structure.remove_input_hydrogens:
-        warnings.append(
-            "structure.remove_input_hydrogens is not applied during the structure-only stage."
-        )
 
     return StructureNormalizationResult(
         input_path=input_path,
@@ -338,6 +346,8 @@ def normalize_structure_stage(
         else [],
         warnings=warnings,
         repair_result=repair_result,
+        input_hydrogens=input_hydrogens,
+        ligand_hydrogens=hydrogenations,
     )
 
 
@@ -435,7 +445,7 @@ def _hydrogenate_configured_ligands(
             )
         except LigandHydrogenationError as exc:
             raise StructureNormalizationError(str(exc)) from exc
-        results.append(outcome.to_dict())
+        results.append({"id": ligand.id, **outcome.to_dict()})
         if outcome.skipped:
             continue
         existing = {id(atom) for atom in residue.atoms}

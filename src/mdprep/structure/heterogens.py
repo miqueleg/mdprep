@@ -30,6 +30,7 @@ from mdprep.structure.classify import (
     is_water_residue,
 )
 from mdprep.structure.completeness import BACKBONE_HEAVY_ATOMS, PEPTIDE_BOND_MAX_ANGSTROM
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.links import StructureLink
 from mdprep.structure.models import AtomRecord, ResidueId, ResidueRecord
 
@@ -174,7 +175,7 @@ class ModifiedResidue:
             (
                 (atom.name, (atom.x, atom.y, atom.z))
                 for atom in self.residue.atoms
-                if (atom.element or atom.name[:1]).strip().upper() != "H"
+                if not is_hydrogen(atom)
             ),
             self.parent,
         )
@@ -434,7 +435,7 @@ def _named(residue: ResidueRecord, name: str) -> AtomRecord | None:
 
 
 def _heavy(atom: AtomRecord) -> bool:
-    return (atom.element or "").strip().upper() not in {"H", "D"}
+    return not is_hydrogen(atom)
 
 
 class _AtomGrid:

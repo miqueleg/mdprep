@@ -537,6 +537,7 @@ def _write_manifest_lock(
             ],
             "unknown_heterogens_removed": structure_report["unknown_heterogens_removed"],
             "unknown_heterogens_causing_failure": structure_report["unknown_heterogens_causing_failure"],
+            "input_hydrogens": structure_report.get("input_hydrogens"),
             "possible_disulfides": structure_report["possible_disulfides"],
             "structure_repair": structure_report.get("structure_repair"),
         },

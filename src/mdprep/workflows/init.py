@@ -24,7 +24,8 @@ def generate_starter_manifest(
     if target.exists() and not overwrite:
         raise FileExistsError(f"Output manifest already exists: {target}. Use --overwrite to replace it.")
 
-    summary = inspect_pdb_structure(input_path)
+    # As the manifest written here builds it, with remove_input_hydrogens on.
+    summary = inspect_pdb_structure(input_path, remove_input_hydrogens=True)
     project_name = input_path.stem
     resolved_output_dir = output_dir or f"prepared/{project_name}"
     manifest_text = _render_manifest(

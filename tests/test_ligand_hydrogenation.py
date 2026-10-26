@@ -5,9 +5,9 @@ deposited ligand cannot be parameterized at all without this. The SMILES is the
 user stating the protonation they intend; mdprep only places the atoms.
 
 Two rules are load-bearing and are tested from several directions:
-a ligand that already has hydrogens is never touched, and adding any always
-warns, because geometric placement of a wrong tautomer looks perfectly
-reasonable.
+a ligand that keeps the hydrogens it already has is never touched -- only
+checked, atom by atom, against the SMILES -- and adding any always warns,
+because geometric placement of a wrong tautomer looks perfectly reasonable.
 """
 
 from pathlib import Path
@@ -100,37 +100,69 @@ def _heavy_only_akg():
     )
 
 
+def methane(hydrogens: int = 4) -> ResidueRecord:
+    """A carbon with ``hydrogens`` of its four tetrahedral hydrogens."""
+
+    from dataclasses import replace
+
+    corners = [(1, 1, 1), (1, -1, -1), (-1, 1, -1), (-1, -1, 1)]
+    carbon = replace(atom("C1", "C", 0), x=0.0)
+    placed = [
+        replace(
+            atom(f"H{index + 1}", "H", index + 1),
+            x=0.629 * cx,
+            y=0.629 * cy,
+            z=0.629 * cz,
+        )
+        for index, (cx, cy, cz) in enumerate(corners[:hydrogens])
+    ]
+    return residue_of(carbon, *placed)
+
+
 def test_a_protonated_ligand_is_left_exactly_as_it_was():
-    before = residue_of(atom("C1", "C", 1), atom("H1", "H", 2))
+    before = methane()
 
     result = add_ligand_hydrogens(before, "C", ligand_id="lig")
 
     assert result.skipped is True
     assert result.added_hydrogens == 0
     assert result.residue is before
-    assert [a.name for a in result.residue.atoms] == ["C1", "H1"]
+    assert [a.name for a in result.residue.atoms] == ["C1", "H1", "H2", "H3", "H4"]
 
 
-def test_skipping_is_reported_rather_than_silent():
-    before = residue_of(atom("C1", "C", 1), atom("H1", "H", 2))
-
-    result = add_ligand_hydrogens(before, "C", ligand_id="lig")
+def test_keeping_them_is_reported_rather_than_silent():
+    result = add_ligand_hydrogens(methane(), "C", ligand_id="lig")
 
     assert result.warnings
-    assert "already carries" in result.warnings[0]
+    assert "kept its 4 input hydrogen(s)" in result.warnings[0]
+
+
+def test_kept_hydrogens_that_are_not_the_smiles_are_refused():
+    """The SMILES states the protonation; hydrogens saying otherwise are a different molecule."""
+    with pytest.raises(LigandHydrogenationError, match="C1 has 3 in the input and 4 in the SMILES"):
+        add_ligand_hydrogens(methane(3), "C", ligand_id="lig")
+
+
+def test_a_kept_hydrogen_bonded_to_nothing_is_refused():
+    stray = residue_of(atom("C1", "C", 0), atom("H1", "H", 2))
+
+    with pytest.raises(LigandHydrogenationError, match="bonded to none of its atoms"):
+        add_ligand_hydrogens(stray, "C", ligand_id="lig")
 
 
 def test_a_single_hydrogen_is_enough_to_count_as_protonated():
-    """Partial protonation is a different problem, caught by the formula check.
+    """Partial protonation is never quietly finished off: that is the guess mdprep refuses to make.
 
-    Quietly finishing it off would be exactly the guess mdprep refuses to make.
+    The ligand counts as protonated, keeps what it has, and fails the
+    comparison with its SMILES.
     """
     partial = residue_of(
         atom("C1", "C", 1), atom("C2", "C", 2), atom("H1", "H", 3)
     )
 
     assert is_already_protonated(partial)
-    assert add_ligand_hydrogens(partial, "CC", ligand_id="lig").skipped
+    with pytest.raises(LigandHydrogenationError):
+        add_ligand_hydrogens(partial, "CC", ligand_id="lig")
 
 
 def test_hydrogens_are_recognised_by_element_and_by_name():

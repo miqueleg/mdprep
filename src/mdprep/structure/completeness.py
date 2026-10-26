@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Collection, Iterable, Sequence
 
 from mdprep.structure.classify import is_standard_protein_residue
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import ResidueId, ResidueRecord
 
 
@@ -99,8 +100,7 @@ def missing_heavy_atoms(residue: ResidueRecord) -> tuple[str, ...]:
     present = {
         atom.name.strip()
         for atom in residue.atoms
-        if (atom.element or "").strip().upper() not in {"H", "D"}
-        and not atom.name.strip().startswith("H")
+        if not is_hydrogen(atom)
     }
     return tuple(sorted(expected - present))
 

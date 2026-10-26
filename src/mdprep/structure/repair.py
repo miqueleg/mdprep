@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass, replace
 from importlib.metadata import PackageNotFoundError, version
 from math import dist
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 
@@ -14,6 +16,11 @@ from mdprep.structure.classify import is_standard_protein_residue
 from mdprep.structure.heterogens import (
     KEPT_WHEN_SIDE_CHAIN_REBUILT,
     side_chain_closes_onto_backbone,
+)
+from mdprep.structure.hydrogens import (
+    input_hydrogen_keeper,
+    is_hydrogen,
+    strip_input_hydrogens,
 )
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord, build_residues
 from mdprep.structure.pdb import read_pdb
@@ -129,6 +136,7 @@ def repair_structure(
         repair_input,
         chains=selected_chains,
         altloc_policy=manifest.structure.altloc_policy,
+        keep_hydrogens=input_hydrogen_keeper(manifest),
     )
 
     try:
@@ -381,7 +389,7 @@ def _closest_rebuilt_contact(structure: PdbStructure, item: dict[str, object]) -
     chain, resid, icode = str(item["chain"]), int(item["resid"]), item["icode"]
 
     def heavy(atom: AtomRecord) -> bool:
-        return (atom.element or atom.name[:1]).strip().upper() != "H"
+        return not is_hydrogen(atom)
 
     def own(atom: AtomRecord) -> bool:
         return (atom.chain_id, atom.resid, atom.icode or None) == (chain, resid, icode)
@@ -414,6 +422,7 @@ def _write_repair_input(
     *,
     chains: list[str],
     altloc_policy: str,
+    keep_hydrogens: Callable[[ResidueRecord], bool] | None = None,
 ) -> None:
     """Prepare the file PDBFixer reads: chosen chains, chosen conformers.
 
@@ -432,9 +441,15 @@ def _write_repair_input(
     `unresolved_residues: leave_absent` asks for anyway; it can still complete
     a side chain, because that comes from its residue templates rather than
     from the header.
+
+    With ``keep_hydrogens``, the input's hydrogens go too, except in the
+    residues it names: PDBFixer is then repairing the structure the rest of
+    mdprep will build, not the one some other program protonated.
     """
 
     structure = read_structure(source, altloc_policy=altloc_policy)  # type: ignore[arg-type]
+    if keep_hydrogens is not None:
+        structure, _ = strip_input_hydrogens(structure, keep=keep_hydrogens)
     if is_mmcif_path(source):
         selected_chains = set(chains)
         kept_atoms = [
@@ -457,8 +472,19 @@ def _write_repair_input(
         )
         return
 
-    selected_serials = {
-        atom.serial for atom in structure.atoms if atom.serial is not None
+    # Each atom the structure kept, by the line it was read from. Serials
+    # would do if they were unique, but reduce writes every hydrogen it adds
+    # with serial 0, the reader renumbers a file like that, and its lines no
+    # longer carry the serials the structure does. An atom the reader
+    # rewrote -- a residue name too wide for its column -- has no line of
+    # its own any more, and is found by its serial instead.
+    kept_lines = Counter(
+        atom.original_line for atom in structure.atoms if atom.original_line
+    )
+    rewritten_serials = {
+        atom.serial
+        for atom in structure.atoms
+        if not atom.original_line and atom.serial is not None
     }
     selected_chains = set(chains)
     kept: list[str] = []
@@ -466,8 +492,9 @@ def _write_repair_input(
         if line.startswith(("ATOM", "HETATM")):
             if selected_chains and len(line) > 21 and line[21] not in selected_chains:
                 continue
-            serial = _parse_serial_for_filter(line)
-            if serial is not None and serial not in selected_serials:
+            if kept_lines[line] > 0:
+                kept_lines[line] -= 1
+            elif _parse_serial_for_filter(line) not in rewritten_serials:
                 continue
             # The chosen conformer loses its altloc marker, so nothing
             # downstream has a choice left to make.

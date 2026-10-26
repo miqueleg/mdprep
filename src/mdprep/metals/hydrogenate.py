@@ -20,8 +20,9 @@ from mdprep.leap.residues import (
 from mdprep.leap.runner import TLeapRun, run_tleap
 from mdprep.ligands.workflow import LigandStageResult
 from mdprep.metals.coordination import resolve_metal_sites
-from mdprep.protonation.apply import ProtonationResult, is_hydrogen_atom
+from mdprep.protonation.apply import ProtonationResult
 from mdprep.structure.classify import WATER_RESIDUES
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord, build_residues
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.writer import write_pdb
@@ -330,6 +331,6 @@ def _nearby_hydrogens(atom: AtomRecord, residue: ResidueRecord) -> int:
     return sum(
         1
         for candidate in residue.atoms
-        if is_hydrogen_atom(candidate)
+        if is_hydrogen(candidate)
         and dist((atom.x, atom.y, atom.z), (candidate.x, candidate.y, candidate.z)) <= 1.25
     )

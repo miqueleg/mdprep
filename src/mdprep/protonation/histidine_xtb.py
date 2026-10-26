@@ -14,7 +14,6 @@ from mdprep.protonation.histidine_geometry import (
     XyzAtom,
     build_tautomer_cluster_model,
     heavy_atom_distance,
-    is_hydrogen_like,
     write_xcontrol_constraint_file,
     write_xyz,
 )
@@ -34,6 +33,7 @@ from mdprep.structure.classify import (
     is_likely_ligand_or_cofactor,
     is_water_residue,
 )
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import PdbStructure, ResidueRecord
 from mdprep.structure.selectors import SelectorError, resolve_residue_selector
 
@@ -669,7 +669,7 @@ def build_histidine_cluster(
     *,
     cutoff_angstrom: float,
 ) -> list[ResidueRecord]:
-    hist_heavy = [atom for atom in histidine.atoms if not is_hydrogen_like(atom)]
+    hist_heavy = [atom for atom in histidine.atoms if not is_hydrogen(atom)]
     if not hist_heavy:
         raise HistidineXtbError(f"Histidine {histidine.id.display()} has no heavy atoms.")
     cluster: list[ResidueRecord] = []
@@ -678,7 +678,7 @@ def build_histidine_cluster(
             cluster.append(residue)
             continue
         for atom in residue.atoms:
-            if is_hydrogen_like(atom):
+            if is_hydrogen(atom):
                 continue
             if any(heavy_atom_distance(atom, hist_atom) <= cutoff_angstrom for hist_atom in hist_heavy):
                 cluster.append(residue)

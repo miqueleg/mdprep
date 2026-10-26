@@ -15,6 +15,7 @@ import random
 
 from typing import Mapping
 
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.pdb_fields import expected_split_metal_numbering
@@ -356,7 +357,15 @@ def _restore_and_validate(
                 f"Input residue {expected.id.display()} has duplicate atom names."
             )
         actual_names = {atom.name for atom in actual.atoms}
-        missing = sorted(set(expected_by_name) - actual_names)
+        # A hydrogen the residue already had can be one its assigned state
+        # does not: a refinement's HZ3 on a lysine PropKa made neutral.
+        # OpenMM builds the state, and these hydrogens are temporary either
+        # way, so only a heavy atom going missing means the structure changed.
+        missing = sorted(
+            name
+            for name in set(expected_by_name) - actual_names
+            if not is_hydrogen(expected_by_name[name])
+        )
         if missing:
             raise TemporaryHydrogenationError(
                 f"Temporary PDBFixer hydrogenation removed atoms from "
@@ -377,7 +386,7 @@ def _restore_and_validate(
                         "Temporary PDBFixer hydrogenation moved an original atom by "
                         f"{displacement:.6f} A: {original.atom_identity}."
                     )
-            elif (atom.element or "").strip().upper() != "H":
+            elif not is_hydrogen(atom):
                 raise TemporaryHydrogenationError(
                     "Temporary PDBFixer hydrogenation added a non-hydrogen atom "
                     f"to {expected.id.display()}: {atom.name}."

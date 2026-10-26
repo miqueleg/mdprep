@@ -43,6 +43,7 @@ from mdprep.structure.classify import (
     is_standard_protein_residue,
 )
 from mdprep.structure.coordination import COORDINATION_CUTOFF_ANGSTROM
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 from mdprep.structure.reader import read_structure
 from mdprep.structure.writer import write_pdb
@@ -274,7 +275,7 @@ class WaterSelection:
 
 
 def _heavy(atom: AtomRecord) -> bool:
-    return (atom.element or "").strip().upper() not in {"H", "D"}
+    return not is_hydrogen(atom)
 
 
 def _is_metal(atom: AtomRecord) -> bool:
