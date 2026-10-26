@@ -2,7 +2,10 @@
 
 The top-level YAML files are manifest examples and are validated by the test
 suite. Most reference placeholder input paths so users can copy and adapt them
-to real systems.
+to real systems. Adapting one with ligands means giving each its `smiles:`
+(examples 03-14 leave it out, having no molecule to describe): preparation
+refuses a ligand without one, unless a `user_mol2` describes it, and compares
+any hydrogens the structure has on it with the SMILES.
 
 | File | Purpose | Notes |
 | --- | --- | --- |

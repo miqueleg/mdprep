@@ -11,9 +11,9 @@ temporary hydrogenation would not give its third hydrogen back to, an
 alpha-ketoglutarate PDBFixer protonated as the neutral acid of a dianion.
 
 So they are removed as the structure is read, before anything looks at it,
-and the removal is recorded. A ligand keeps its own when they are part of
-its parameters (a user mol2 lists them) or when nothing else states its
-protonation (it has no SMILES).
+and the removal is recorded. A ligand's are the exception: they are kept to
+be compared with its SMILES, which the structure stage does atom by atom --
+keeping them if they agree, replacing them if not.
 """
 
 from __future__ import annotations
@@ -174,22 +174,16 @@ def _ter_after_kept_atoms(structure: PdbStructure, removed_ids: set[int]) -> set
     return boundaries
 
 
-def ligand_keeps_input_hydrogens(
-    ligand: "LigandConfig", *, remove_input_hydrogens: bool
-) -> bool:
-    """Whether a ligand keeps the hydrogens it has in the input.
+def ligand_keeps_input_hydrogens(ligand: "LigandConfig") -> bool:
+    """Whether a ligand's input hydrogens survive the reading of the structure.
 
-    What the ligand says wins. Otherwise it keeps them when a user mol2
-    lists them, since the mol2 has to match the residue atom for atom, and
-    when there is no SMILES to place others from: those hydrogens are then
-    the only statement of its protonation there is.
+    They do unless the ligand says otherwise: the structure stage compares
+    them with its SMILES and decides there, which it cannot do with
+    hydrogens already thrown away. ``keep_input_hydrogens: false`` replaces
+    them without looking.
     """
 
-    if ligand.keep_input_hydrogens is not None:
-        return ligand.keep_input_hydrogens
-    if not remove_input_hydrogens:
-        return True
-    return ligand.user_mol2 is not None or ligand.smiles is None
+    return ligand.keep_input_hydrogens is not False
 
 
 def input_hydrogen_keeper(manifest: "ManifestConfig") -> Callable[[ResidueRecord], bool]:
@@ -205,7 +199,7 @@ def input_hydrogen_keeper(manifest: "ManifestConfig") -> Callable[[ResidueRecord
     decisions = [
         (
             coerce_residue_selector(ligand.selector.model_dump()),
-            ligand_keeps_input_hydrogens(ligand, remove_input_hydrogens=remove),
+            ligand_keeps_input_hydrogens(ligand),
         )
         for ligand in manifest.ligands
     ]

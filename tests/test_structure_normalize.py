@@ -160,7 +160,11 @@ def test_undeclared_heterogen_in_a_kept_chain_is_still_demanded():
 def test_atom_record_ligand_can_be_configured_by_resname_only():
     data = manifest_data("tests/data/protein_atom_record_ligand_blank_chain.pdb")
     data["structure"]["remove_unknown_heterogens"] = False
-    data["ligands"] = [ligand_entry_resname_only("ligand", "5NB")]
+    # A four-atom fragment, declared hydrogen-free: what is under test is the
+    # selector, and a ligand needs its chemistry stated to get that far.
+    data["ligands"] = [
+        {**ligand_entry_resname_only("ligand", "5NB"), "expected_formula": "C2NO"}
+    ]
 
     result = normalize_structure_stage(make_manifest(data))
 

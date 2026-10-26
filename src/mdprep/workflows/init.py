@@ -143,6 +143,10 @@ def _render_manifest(
                     f"      icode: {_yaml_null_or_string(residue.id.icode)}",
                     "    net_charge: 0",
                     "    multiplicity: 1",
+                    # Left empty on purpose: a manifest with it unset is
+                    # refused at preparation, which is the point, since only
+                    # the user knows the ligand's protonation.
+                    "    smiles: null  # REQUIRED: the ligand at this pH, matching net_charge",
                     "    atom_types: gaff2",
                     "    charge_method: am1bcc",
                     "    user_mol2: null",
@@ -203,6 +207,7 @@ def _comment_ligand_placeholders(residues: list[object]) -> list[str]:
             "#     selector: {chain: B, resname: SUB, resid: 501, icode: null}",
             "#     net_charge: 0  # CHECK THIS VALUE",
             "#     multiplicity: 1",
+            "#     smiles: CHANGE_ME  # the ligand at this pH, matching net_charge",
             "#     atom_types: gaff2",
             "#     charge_method: am1bcc",
             "#     user_mol2: null",
@@ -222,6 +227,7 @@ def _comment_ligand_placeholders(residues: list[object]) -> list[str]:
                 f"#     selector: {{chain: {_yaml_string(residue_id.chain_id)}, resname: {residue_id.resname}, resid: {residue_id.resid}, icode: {_yaml_null_or_string(residue_id.icode)}}}",
                 "#     net_charge: 0  # CHECK THIS VALUE",
                 "#     multiplicity: 1",
+                "#     smiles: CHANGE_ME  # the ligand at this pH, matching net_charge",
                 "#     atom_types: gaff2",
                 "#     charge_method: am1bcc",
                 "#     user_mol2: null",

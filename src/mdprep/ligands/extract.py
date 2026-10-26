@@ -216,17 +216,23 @@ def _validate_ligand_formula(
     """Require explicit ligand hydrogens and validate an optional exact formula.
 
     PDB coordinates do not encode bond orders or protonation. A molecule that
-    contains no hydrogen is therefore rejected unless the user explicitly
-    declares a hydrogen-free expected formula. An exact formula is the only
-    reliable way to detect a partially hydrogenated ligand, so production
-    examples should always set expected_formula.
+    contains no hydrogen is therefore rejected unless its SMILES or an
+    expected_formula says it has none. A SMILES has already been compared
+    with the residue atom by atom in the structure stage; an exact formula
+    is the check available without one.
     """
 
     observed = Counter((atom.element or "").strip().capitalize() for atom in residue.atoms)
     observed.pop("", None)
     expected = _parse_formula(ligand.expected_formula) if ligand.expected_formula else None
 
-    if observed.get("H", 0) == 0 and (expected is None or expected.get("H", 0) > 0):
+    # A SMILES was checked against the residue in the structure stage, which
+    # placed its hydrogens; one that gives none states a hydrogen-free molecule.
+    if (
+        observed.get("H", 0) == 0
+        and ligand.smiles is None
+        and (expected is None or expected.get("H", 0) > 0)
+    ):
         warning = (
             f"WARNING [LIGAND_HYDROGENS_MISSING] Ligand {ligand.id} "
             f"({residue.id.chain_id}:{residue.id.resname}:{residue.id.resid}) contains no "

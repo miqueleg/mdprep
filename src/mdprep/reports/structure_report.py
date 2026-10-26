@@ -144,14 +144,18 @@ def _input_hydrogen_lines(record: dict[str, Any]) -> list[str]:
 def _ligand_hydrogen_lines(outcomes: list[dict[str, Any]]) -> list[str]:
     if not outcomes:
         return ["- None"]
-    return [
-        f"- {item['id']} ({item['residue']}): "
-        + (
-            "kept its input hydrogens, which match the SMILES"
-            if item["skipped"]
-            else f"{item['added_hydrogens']} placed from the SMILES"
-        )
-        + f" `{item['smiles']}`"
-        for item in outcomes
-    ]
+    lines: list[str] = []
+    for item in outcomes:
+        if item["skipped"]:
+            what = "kept its input hydrogens, which match the SMILES"
+        elif item.get("replaced_hydrogens"):
+            what = (
+                f"replaced its {item['replaced_hydrogens']} input hydrogen(s), which "
+                f"were not the SMILES's, with {item['added_hydrogens']} from it"
+            )
+        else:
+            what = f"{item['added_hydrogens']} placed from the SMILES"
+        lines.append(f"- {item['id']} ({item['residue']}): {what} `{item['smiles']}`")
+        lines.extend(f"  - {difference}" for difference in item.get("differences", []))
+    return lines
 

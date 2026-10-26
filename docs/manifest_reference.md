@@ -68,7 +68,7 @@ relative executable path when needed.
   protonation stage the titratable ones, a SMILES a ligand's -- so hydrogens
   another program added (PyMOL, reduce, PDBFixer, a format converter, a riding-model
   refinement) are only that program's names and that program's protonation.
-  A ligand keeps its own when `keep_input_hydrogens` says so (see below). The
+  A ligand's are kept to be compared with its SMILES (see below). The
   number removed, by protein, water and everything else, is in
   `reports/structure_report.md`. `false` keeps every input hydrogen as it is.
 - `repair`: what PDBFixer may do to the protein, every part of it asked for
@@ -149,21 +149,21 @@ Each ligand has:
 
 - `id`
 - `selector`
-- `smiles`: the protonation you intend, stated explicitly. A crystal structure
-  carries no ligand hydrogens; a SMILES lets mdprep place them rather than
-  refusing to proceed, and fixes the tautomer and the charge. Hydrogens the
-  input already has on the ligand are replaced by the SMILES's, and adding any
-  always warns. Needs RDKit (`pip install mdprep[ligands]`). See
-  [ligands.md](ligands.md).
-- `keep_input_hydrogens` (optional): whether the ligand keeps the hydrogens it
-  has in the input instead of losing them with
-  `structure.remove_input_hydrogens`. Unset, it keeps them when it has a
-  `user_mol2` (which has to match the residue atom for atom) or no `smiles`
-  (nothing else states its protonation), and otherwise loses them to the
-  SMILES's. Hydrogens kept on a ligand with a SMILES are checked against it,
-  heavy atom by heavy atom, and a difference stops the run: PDBFixer, for
-  one, gives alpha-ketoglutarate the hydrogens of the neutral acid. `false`
-  needs a `smiles` and cannot be combined with a `user_mol2`.
+- `smiles`: the protonation you intend, stated explicitly, and used whether or
+  not the input has hydrogens on the ligand. A crystal structure carries none;
+  a SMILES lets mdprep place them rather than refusing to proceed, and fixes
+  the tautomer and the charge. Hydrogens the input does have are compared with
+  it heavy atom by heavy atom: kept if they agree, replaced by the SMILES's if
+  not, with the disagreeing atoms in the structure report. Required for a
+  ligand that arrives with hydrogens or needs them placed; only a ligand with
+  a `user_mol2`, or a hydrogen-free one declared with `expected_formula`, can
+  do without. Needs RDKit (`pip install mdprep[ligands]`). See
+  [ligands.md](ligands.md#a-ligand-that-arrives-with-hydrogens).
+- `keep_input_hydrogens` (optional): what to do with input hydrogens that
+  disagree with the SMILES. Unset, they are replaced and reported; `true`
+  makes the disagreement an error, for hydrogens placed on purpose (a
+  `user_mol2` implies it, since the mol2 lists them); `false` replaces them
+  without comparing, and needs a `smiles`.
 - `net_charge`
 - `multiplicity`
 - `atom_types`: `gaff` or `gaff2`

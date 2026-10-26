@@ -208,31 +208,17 @@ def _ligand(**fields) -> LigandConfig:
     return LigandConfig.model_validate({**base, **fields})
 
 
-def test_a_smiles_replaces_the_input_hydrogens():
-    assert not ligand_keeps_input_hydrogens(_ligand(smiles="C"), remove_input_hydrogens=True)
-
-
-def test_without_a_smiles_the_input_hydrogens_are_the_protonation():
-    assert ligand_keeps_input_hydrogens(_ligand(), remove_input_hydrogens=True)
-
-
-def test_a_user_mol2_keeps_the_hydrogens_it_lists():
-    ligand = _ligand(smiles="C", charge_method="user_mol2", user_mol2="lig.mol2")
-
-    assert ligand_keeps_input_hydrogens(ligand, remove_input_hydrogens=True)
-
-
-def test_what_the_ligand_says_wins():
+def test_a_ligands_hydrogens_survive_the_reading_to_be_compared():
+    """Thrown away as the structure is read, they could not be checked against the SMILES."""
+    assert ligand_keeps_input_hydrogens(_ligand(smiles="C"))
+    assert ligand_keeps_input_hydrogens(_ligand())
     assert ligand_keeps_input_hydrogens(
-        _ligand(smiles="C", keep_input_hydrogens=True), remove_input_hydrogens=True
-    )
-    assert not ligand_keeps_input_hydrogens(
-        _ligand(smiles="C", keep_input_hydrogens=False), remove_input_hydrogens=False
+        _ligand(smiles="C", charge_method="user_mol2", user_mol2="lig.mol2")
     )
 
 
-def test_nothing_is_removed_when_input_hydrogens_are_kept():
-    assert ligand_keeps_input_hydrogens(_ligand(smiles="C"), remove_input_hydrogens=False)
+def test_a_ligand_can_have_them_replaced_without_comparing():
+    assert not ligand_keeps_input_hydrogens(_ligand(smiles="C", keep_input_hydrogens=False))
 
 
 def test_dropping_a_ligands_hydrogens_needs_something_to_place_them():
@@ -371,33 +357,128 @@ def test_pdbfixer_gets_the_structure_without_the_input_hydrogens(tmp_path):
     assert not any(is_hydrogen(atom) for atom in read_pdb(prepared).atoms)
 
 
+def test_a_ligands_hydrogens_go_round_pdbfixer_rather_than_through_it(tmp_path):
+    """PDBFixer keeps one of several atoms sharing a name; the converter names every hydrogen H.
+
+    Six went into the repair and one came out, before the comparison with
+    the SMILES ever saw them.
+    """
+    from mdprep.structure.repair import _return_held_hydrogens
+
+    prepared = tmp_path / "repair_input.pdb"
+
+    held = _write_repair_input(
+        DATA / "syrb2_site.converter.pdb",
+        prepared,
+        chains=[],
+        altloc_policy="highest_occupancy",
+        keep_hydrogens=lambda residue: residue.id.resname == "AKG",
+    )
+
+    assert not any(is_hydrogen(atom) for atom in read_pdb(prepared).atoms)
+    assert [atom.name for atom in held[("A", "AKG", 897, None)]] == ["H"] * 6
+    returned = _return_held_hydrogens(read_pdb(prepared), held)
+    akg = next(residue for residue in returned.residues if residue.id.resname == "AKG")
+    assert sum(is_hydrogen(atom) for atom in akg.atoms) == 6
+    assert [atom for residue in returned.residues for atom in residue.atoms] == returned.atoms
+
+
+def test_a_returned_hydrogen_does_not_end_up_beyond_its_chain_boundary(tmp_path):
+    from mdprep.structure.repair import _return_held_hydrogens
+
+    path = _write(
+        tmp_path / "l.pdb",
+        [_line(1, "C1", "SUB", 1, 0.0, "C"), _line(2, "H1", "SUB", 1, 1.09, "H"), "TER"],
+    )
+    structure = read_pdb(path)
+    stripped, _ = strip_input_hydrogens(structure)
+
+    returned = _return_held_hydrogens(stripped, {("A", "SUB", 1, None): [structure.atoms[1]]})
+
+    assert [atom.name for atom in returned.atoms] == ["C1", "H1"]
+    assert returned.ter_after_serials == {returned.atoms[-1].serial}
+
+
+def test_atoms_pdbfixer_merges_are_reported_not_lost():
+    from mdprep.structure.repair import StructureRepairError, _restore_existing_atom_metadata
+
+    def structure(names):
+        atoms = [
+            AtomRecord(
+                serial=index + 1, name=name, altloc=None, resname="SUB", chain_id="A",
+                resid=1, icode=None, x=float(index), y=0.0, z=0.0, occupancy=1.0,
+                bfactor=0.0, element="C", record_name="HETATM", original_line="",
+            )
+            for index, name in enumerate(names)
+        ]
+        return PdbStructure(path=Path("x.pdb"), atoms=atoms, residues=build_residues(atoms), model_count=1)
+
+    with pytest.raises(StructureRepairError, match=r"A:SUB1 C \(2 in, 1 out\)"):
+        _restore_existing_atom_metadata(
+            structure(["C", "C", "O"]), structure(["C", "O"]), output_path=Path("out.pdb")
+        )
+
+
 # --------------------------------------------------------------------------
 # A ligand's hydrogens come from its SMILES
 # --------------------------------------------------------------------------
 
 
+def _hydrogens_per_heavy_atom(structure: PdbStructure, resname: str) -> dict[str, int]:
+    atoms = [atom for atom in structure.atoms if atom.resname == resname]
+    heavy = [atom for atom in atoms if not is_hydrogen(atom)]
+    counts = {atom.name: 0 for atom in heavy}
+    for hydrogen in (atom for atom in atoms if is_hydrogen(atom)):
+        parent = min(
+            heavy,
+            key=lambda atom: (atom.x - hydrogen.x) ** 2
+            + (atom.y - hydrogen.y) ** 2
+            + (atom.z - hydrogen.z) ** 2,
+        )
+        counts[parent.name] += 1
+    return counts
+
+
 @pytest.mark.parametrize("tool", TOOLS)
-def test_a_ligands_hydrogens_are_the_smiles_whatever_the_file_had(tool):
-    pytest.importorskip("rdkit", reason="RDKit places ligand hydrogens")
+def test_a_ligand_ends_up_with_the_smiles_hydrogens_whatever_the_file_had(tool):
+    """Kept where they agree with the SMILES, replaced where they do not."""
+    pytest.importorskip("rdkit", reason="RDKit reads the SMILES")
     expected = normalize_structure_stage(_manifest(CLEAN, [_akg()]))
+    source = read_pdb(DATA / f"syrb2_site.{tool}.pdb")
+    had = sum(1 for atom in source.atoms if atom.resname == "AKG" and is_hydrogen(atom))
+
     result = normalize_structure_stage(_manifest(DATA / f"syrb2_site.{tool}.pdb", [_akg()]))
 
-    def ligand_hydrogens(structure):
-        return sorted(
-            (atom.name, atom.x, atom.y, atom.z)
-            for atom in structure.atoms
-            if atom.resname == "AKG" and is_hydrogen(atom)
-        )
-
-    assert ligand_hydrogens(result.normalized_structure) == ligand_hydrogens(
-        expected.normalized_structure
+    assert _hydrogens_per_heavy_atom(result.normalized_structure, "AKG") == (
+        _hydrogens_per_heavy_atom(expected.normalized_structure, "AKG")
     )
-    assert len(ligand_hydrogens(result.normalized_structure)) == 4
-    assert result.ligand_hydrogens[0]["added_hydrogens"] == 4
+    outcome = result.ligand_hydrogens[0]
+    if had == 0:
+        assert outcome["added_hydrogens"] == 4
+    elif outcome["skipped"]:
+        # PyMOL and reduce protonate it as the dianion the SMILES states.
+        assert had == 4 and outcome["added_hydrogens"] == 0
+    else:
+        assert outcome["replaced_hydrogens"] == had
+        assert any("LIGAND_HYDROGENS_REPLACED" in warning for warning in result.warnings)
 
 
-def test_kept_hydrogens_from_another_programs_protonation_are_refused():
+def test_another_programs_protonation_is_replaced_and_the_difference_reported():
     """PDBFixer protonates AKG as the neutral acid; the SMILES says dianion."""
+    pytest.importorskip("rdkit", reason="RDKit reads the SMILES")
+
+    result = normalize_structure_stage(_manifest(DATA / "syrb2_site.pdbfixer.pdb", [_akg()]))
+
+    outcome = result.ligand_hydrogens[0]
+    assert outcome["replaced_hydrogens"] == 6
+    assert "O2 has 1 in the input and 0 in the SMILES" in outcome["differences"]
+    assert "O4 has 1 in the input and 0 in the SMILES" in outcome["differences"]
+    report = result.to_report_dict()
+    assert report["ligand_hydrogens"][0]["replaced_hydrogens"] == 6
+
+
+def test_keeping_another_programs_protonation_on_purpose_is_refused():
+    """keep_input_hydrogens: true turns the disagreement into an error."""
     pytest.importorskip("rdkit", reason="RDKit reads the SMILES")
 
     with pytest.raises(StructureNormalizationError, match="O2 has 1 in the input and 0 in the SMILES"):
@@ -425,6 +506,86 @@ def test_kept_hydrogens_that_match_the_smiles_are_used_as_they_are():
     assert after == before
     assert result.ligand_hydrogens[0]["skipped"] is True
     assert result.input_hydrogens.kept_residues == (("A:AKG897", 4),)
+
+
+# --------------------------------------------------------------------------
+# A docked ligand: only its polar hydrogens
+# --------------------------------------------------------------------------
+
+
+DOCKED = DATA / "docked_polar_only.pdb"
+LIDOCAINE = "CCN(CC)CC(=O)Nc1c(C)cccc1C"
+
+
+def _docked(**extra) -> dict:
+    return {
+        "id": "substrate",
+        "selector": {"chain": "L", "resname": "LIG", "resid": 1},
+        "net_charge": 0,
+        "atom_types": "gaff2",
+        "charge_method": "am1bcc",
+        **extra,
+    }
+
+
+def test_a_docked_ligand_without_a_smiles_is_refused_before_anything_runs():
+    """It used to reach antechamber, after protonation, with an odd number of electrons."""
+    with pytest.raises(StructureNormalizationError, match="arrives with 1 hydrogen.s. and no SMILES"):
+        normalize_structure_stage(_manifest(DOCKED, [_docked()]))
+
+
+def test_a_docked_ligand_gets_every_hydrogen_its_smiles_states():
+    pytest.importorskip("rdkit", reason="RDKit reads the SMILES")
+
+    result = normalize_structure_stage(_manifest(DOCKED, [_docked(smiles=LIDOCAINE)]))
+
+    hydrogens = [atom for atom in result.normalized_structure.atoms if is_hydrogen(atom)]
+    assert len(hydrogens) == 22
+    outcome = result.ligand_hydrogens[0]
+    assert outcome["replaced_hydrogens"] == 1
+    # The methyls a docking program leaves bare are among the differences.
+    assert "C1 has 0 in the input and 3 in the SMILES" in outcome["differences"]
+    assert any("LIGAND_HYDROGENS_REPLACED" in warning for warning in result.warnings)
+    markdown = _structure_markdown(result)
+    assert "replaced its 1 input hydrogen(s)" in markdown
+
+
+@pytest.mark.parametrize(
+    ("path", "ligands"),
+    [(DOCKED, [_docked(smiles=LIDOCAINE)]), (DATA / "syrb2_site.pdbfixer.pdb", [_akg()])],
+)
+def test_the_residues_handed_on_hold_the_atoms_handed_on(path, ligands):
+    """The temporary hydrogenation for xTB checks every atom of every residue.
+
+    It found a replaced hydrogen 2.4 A from where a stale residue record still
+    had it, on a docked substrate whose two polar hydrogens had been replaced.
+    """
+    pytest.importorskip("rdkit", reason="RDKit reads the SMILES")
+
+    structure = normalize_structure_stage(_manifest(path, ligands)).normalized_structure
+
+    assert [atom for residue in structure.residues for atom in residue.atoms] == structure.atoms
+
+
+def test_a_ligand_without_hydrogens_or_a_smiles_is_refused_early():
+    with pytest.raises(StructureNormalizationError, match="no hydrogens in the input and no SMILES"):
+        normalize_structure_stage(_manifest(CLEAN, [{**_akg(), "smiles": None}]))
+
+
+def test_the_electron_count_has_to_fit_the_multiplicity():
+    """antechamber only mentioned this in passing, before its semi-empirical step failed."""
+    pytest.importorskip("rdkit", reason="RDKit reads the SMILES")
+
+    with pytest.raises(StructureNormalizationError, match="128 electrons .* multiplicity 2 cannot have"):
+        normalize_structure_stage(
+            _manifest(DOCKED, [_docked(smiles=LIDOCAINE, multiplicity=2)])
+        )
+
+
+def _structure_markdown(result) -> str:
+    from mdprep.reports.structure_report import _render_markdown
+
+    return _render_markdown(result.to_report_dict())
 
 
 # --------------------------------------------------------------------------

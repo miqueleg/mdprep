@@ -11,8 +11,13 @@ places them.
 
 Two rules govern this module:
 
-* A ligand that already carries hydrogens is never touched. The coordinates
-  someone else prepared are not second-guessed.
+* The SMILES is the protonation, whether or not the residue already has
+  hydrogens. Ones it has are compared with the SMILES heavy atom by heavy
+  atom and kept, positions and all, only if they agree; a docking program's
+  polar hydrogens or another program's idea of the protonation are replaced,
+  and the disagreement is reported. A ligand that already had hydrogens used
+  to be left untouched, which is how a docked substrate with two of its
+  twenty-five reached antechamber with an odd number of electrons.
 * Adding hydrogens always warns. Placement is geometric, and a tautomer or a
   rotamer that is wrong for the active site will look perfectly reasonable, so
   the result is something a person has to look at.
@@ -37,7 +42,12 @@ class HydrogenationResult:
     added_hydrogens: int
     smiles: str
     warnings: tuple[str, ...]
+    # The residue's own hydrogens were the SMILES's and were kept as they are.
     skipped: bool = False
+    # Hydrogens the residue arrived with that were not the SMILES's, and so
+    # were replaced: how many, and where they disagreed with it.
+    replaced_hydrogens: int = 0
+    differences: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -45,23 +55,14 @@ class HydrogenationResult:
             "added_hydrogens": self.added_hydrogens,
             "smiles": self.smiles,
             "skipped": self.skipped,
+            "replaced_hydrogens": self.replaced_hydrogens,
+            "differences": list(self.differences),
             "warnings": list(self.warnings),
         }
 
 
 def count_hydrogens(residue: ResidueRecord) -> int:
     return sum(1 for atom in residue.atoms if is_hydrogen(atom))
-
-
-def is_already_protonated(residue: ResidueRecord) -> bool:
-    """Whether the input already carries explicit ligand hydrogens.
-
-    Any hydrogen at all counts. A partially hydrogenated ligand is a different
-    problem, caught downstream by the formula check, and is not something this
-    module should quietly finish off.
-    """
-
-    return count_hydrogens(residue) > 0
 
 
 def hydrogen_names_for(parent: AtomRecord, count: int, taken: set[str]) -> list[str]:
@@ -259,11 +260,20 @@ def add_ligand_hydrogens(
     *,
     ligand_id: str,
     net_charge: int | None = None,
+    keep_input_hydrogens: bool | None = None,
 ) -> HydrogenationResult:
-    """Place explicit hydrogens on a ligand according to ``smiles``.
+    """Give a ligand the hydrogens ``smiles`` states.
 
-    Heavy atoms keep their names, their order and their coordinates; hydrogens
-    are appended after them. Anything that would disturb a heavy atom is an
+    The SMILES is used whether or not the residue already has hydrogens. Ones
+    it has are compared with the SMILES first, heavy atom by heavy atom: if
+    every heavy atom has the hydrogens the SMILES gives it, they are kept as
+    they are, names and positions included. If not -- a docking program's
+    polar hydrogens, PDBFixer's neutral acid -- they are replaced by the
+    SMILES's and every disagreement is reported, unless
+    ``keep_input_hydrogens`` is true, which makes a disagreement an error.
+
+    Heavy atoms keep their names, their order and their coordinates; placed
+    hydrogens come after them. Anything that would disturb a heavy atom is an
     error rather than a silent correction.
 
     ``net_charge`` is the charge the manifest declares. The SMILES decides the
@@ -273,15 +283,40 @@ def add_ligand_hydrogens(
     molecules.
     """
 
-    if is_already_protonated(residue):
-        return _check_kept_hydrogens(
-            residue, smiles, ligand_id=ligand_id, net_charge=net_charge
-        )
-
     heavy_atoms = [atom for atom in residue.atoms if not is_hydrogen(atom)]
     molecule = _match_smiles_onto_residue(
         residue, heavy_atoms, smiles, ligand_id=ligand_id, net_charge=net_charge
     )
+    display = residue.id.display()
+
+    input_hydrogens = count_hydrogens(residue)
+    differences: list[str] = []
+    if input_hydrogens:
+        differences = _hydrogen_differences(residue, heavy_atoms, molecule)
+        if not differences:
+            return HydrogenationResult(
+                residue=residue,
+                added_hydrogens=0,
+                smiles=smiles,
+                skipped=True,
+                warnings=(
+                    f"Ligand {ligand_id} ({display}) kept its {input_hydrogens} "
+                    "input hydrogen(s); each heavy atom has the hydrogens the "
+                    f"SMILES {smiles!r} gives it.",
+                ),
+            )
+        if keep_input_hydrogens:
+            raise LigandHydrogenationError(
+                f"Ligand {ligand_id} ({display}) keeps its input hydrogens "
+                f"(keep_input_hydrogens: true), but they are not the SMILES's "
+                f"{smiles!r}: "
+                + "; ".join(differences)
+                + ". The SMILES states the protonation, so these hydrogens "
+                "describe a different molecule -- often the protonation another "
+                "program chose. Let mdprep replace them with the SMILES's (leave "
+                "keep_input_hydrogens unset), or correct whichever of the two is "
+                "wrong."
+            )
 
     from rdkit import Chem
 
@@ -294,29 +329,58 @@ def add_ligand_hydrogens(
             f"valid ({exc})."
         ) from exc
 
-    new_atoms, added = _collect_new_hydrogens(molecule, heavy_atoms, residue)
-    if added == 0:
-        raise LigandHydrogenationError(
-            f"Ligand {ligand_id}: the SMILES {smiles!r} implies no hydrogens, so "
-            "there is nothing to add. Declare the ligand hydrogen-free with "
-            "expected_formula instead."
-        )
-
+    # Placed on the heavy atoms alone: hydrogens that disagreed with the
+    # SMILES go, and their names are free again.
+    bare = ResidueRecord(
+        id=residue.id,
+        atoms=heavy_atoms,
+        record_names=set(residue.record_names),
+        original_index=residue.original_index,
+    )
+    new_atoms, added = _collect_new_hydrogens(molecule, heavy_atoms, bare)
     updated = ResidueRecord(
         id=residue.id,
-        atoms=list(residue.atoms) + new_atoms,
+        atoms=heavy_atoms + new_atoms,
         record_names=set(residue.record_names),
         original_index=residue.original_index,
     )
     _verify_heavy_atoms_unchanged(residue, updated, ligand_id=ligand_id)
 
+    if input_hydrogens:
+        return HydrogenationResult(
+            residue=updated,
+            added_hydrogens=added,
+            smiles=smiles,
+            replaced_hydrogens=input_hydrogens,
+            differences=tuple(differences),
+            warnings=(
+                f"WARNING [LIGAND_HYDROGENS_REPLACED] Ligand {ligand_id} "
+                f"({display}) arrived with {input_hydrogens} hydrogen(s) that are "
+                f"not the SMILES's {smiles!r}: "
+                + "; ".join(differences)
+                + f". mdprep replaced them with the SMILES's {added}. A docking "
+                "program often writes only the polar hydrogens, and other "
+                "programs protonate by their own rules; the SMILES is the "
+                "protonation this run uses.",
+            ),
+        )
+    if added == 0:
+        return HydrogenationResult(
+            residue=updated,
+            added_hydrogens=0,
+            smiles=smiles,
+            warnings=(
+                f"Ligand {ligand_id} ({display}) has no hydrogens, and its SMILES "
+                f"{smiles!r} gives it none.",
+            ),
+        )
     return HydrogenationResult(
         residue=updated,
         added_hydrogens=added,
         smiles=smiles,
         warnings=(
             f"WARNING [LIGAND_HYDROGENS_ADDED] Ligand {ligand_id} "
-            f"({residue.id.display()}) had no explicit hydrogens; mdprep placed "
+            f"({display}) had no explicit hydrogens; mdprep placed "
             f"{added} from the supplied SMILES {smiles!r}. Their positions are "
             "geometric, and the tautomer and charge are whatever the SMILES "
             "says. Inspect this ligand before trusting the charges derived from "
@@ -330,37 +394,28 @@ def add_ligand_hydrogens(
 _HYDROGEN_BOND_LENGTH_LIMIT_ANGSTROM = 1.45
 
 
-def _check_kept_hydrogens(
+def _hydrogen_differences(
     residue: ResidueRecord,
-    smiles: str,
-    *,
-    ligand_id: str,
-    net_charge: int | None,
-) -> HydrogenationResult:
-    """A ligand keeping its input hydrogens must have the SMILES's, atom by atom.
+    heavy_atoms: Sequence[AtomRecord],
+    molecule: object,
+) -> list[str]:
+    """Where the residue's hydrogens are not the SMILES's, heavy atom by heavy atom.
 
-    The SMILES is the protonation the manifest states, and these hydrogens
-    are the ones the build will use, so the two have to be the same
-    molecule. A formula is not enough -- the keto and enol forms share one --
-    so each heavy atom's hydrogens are counted against the SMILES's. This is
-    what catches a cofactor another program protonated by its own rules:
-    PDBFixer gives alpha-ketoglutarate the hydrogens of the neutral acid.
+    A formula is not enough -- the keto and enol forms share one -- so each
+    heavy atom's hydrogens, assigned by distance, are counted against the
+    hydrogens the SMILES gives the atom matched to it. A hydrogen bonded to
+    none of the residue's atoms is a difference too.
     """
-
-    heavy_atoms = [atom for atom in residue.atoms if not is_hydrogen(atom)]
-    molecule = _match_smiles_onto_residue(
-        residue, heavy_atoms, smiles, ligand_id=ligand_id, net_charge=net_charge
-    )
 
     from rdkit import Chem
 
     expected = [
         sum(1 for neighbour in atom.GetNeighbors() if neighbour.GetAtomicNum() == 1)
-        for atom in Chem.AddHs(molecule).GetAtoms()
+        for atom in Chem.AddHs(molecule).GetAtoms()  # type: ignore[call-overload]
         if atom.GetIdx() < len(heavy_atoms)
     ]
     observed = [0] * len(heavy_atoms)
-    stray: list[str] = []
+    differences: list[str] = []
     for hydrogen in (atom for atom in residue.atoms if is_hydrogen(atom)):
         distance, index = min(
             (
@@ -377,42 +432,18 @@ def _check_kept_hydrogens(
             ),
         )
         if distance > _HYDROGEN_BOND_LENGTH_LIMIT_ANGSTROM:
-            stray.append(f"{hydrogen.name} ({distance:.2f} A from {heavy_atoms[index].name})")
+            differences.append(
+                f"{hydrogen.name} is bonded to none of its atoms "
+                f"({distance:.2f} A from {heavy_atoms[index].name})"
+            )
             continue
         observed[index] += 1
-    if stray:
-        raise LigandHydrogenationError(
-            f"Ligand {ligand_id} ({residue.id.display()}) keeps its input hydrogens, "
-            "but some are bonded to none of its atoms: " + ", ".join(stray) + ". "
-            "Remove them from the input, or let mdprep place the hydrogens from "
-            "the SMILES (keep_input_hydrogens: false)."
-        )
-    differences = [
+    differences.extend(
         f"{heavy.name} has {have} in the input and {want} in the SMILES"
         for heavy, have, want in zip(heavy_atoms, observed, expected)
         if have != want
-    ]
-    if differences:
-        raise LigandHydrogenationError(
-            f"Ligand {ligand_id} ({residue.id.display()}) keeps its input hydrogens, "
-            f"but they are not the SMILES's {smiles!r}: "
-            + "; ".join(differences)
-            + ". The SMILES states the protonation, so these hydrogens describe "
-            "a different molecule -- often the protonation another program "
-            "chose. Let mdprep place them from the SMILES (keep_input_hydrogens: "
-            "false), or correct whichever of the two is wrong."
-        )
-    return HydrogenationResult(
-        residue=residue,
-        added_hydrogens=0,
-        smiles=smiles,
-        skipped=True,
-        warnings=(
-            f"Ligand {ligand_id} ({residue.id.display()}) kept its "
-            f"{count_hydrogens(residue)} input hydrogen(s); each heavy atom has "
-            f"the hydrogens the SMILES {smiles!r} gives it.",
-        ),
     )
+    return differences
 
 
 def _match_smiles_onto_residue(

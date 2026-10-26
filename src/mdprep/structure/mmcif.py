@@ -37,6 +37,7 @@ from mdprep.structure.pdb import (
     AltlocPolicy,
     PdbParseError,
     _apply_altloc_policy,
+    label_unlabeled_alternates,
 )
 
 # CIF spells an absent value these two ways, and neither means the string.
@@ -230,6 +231,8 @@ def read_mmcif(
             )
         )
 
+    atoms, unlabeled = label_unlabeled_alternates(atoms)
+    warnings.extend(unlabeled)
     as_written = atoms
     atoms = _apply_altloc_policy(atoms, altloc_policy)
     if not atoms:

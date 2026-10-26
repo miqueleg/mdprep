@@ -131,7 +131,7 @@ def repair_structure(
         Path(output_path).stem + ".repair_input.pdb"
     )
     repair_input.parent.mkdir(parents=True, exist_ok=True)
-    _write_repair_input(
+    held_hydrogens = _write_repair_input(
         input_path,
         repair_input,
         chains=selected_chains,
@@ -257,6 +257,8 @@ def repair_structure(
             for item in replaced
         },
     )
+    added_atom_count = len(repaired.atoms) - len(original.atoms)
+    repaired = _return_held_hydrogens(repaired, held_hydrogens)
     checks = _validate_repaired_peptide_bonds(
         repaired,
         expected=config.missing_residues,
@@ -298,7 +300,7 @@ def repair_structure(
         missing_residues_left_absent=tuple(left_absent),
         modified_residues_replaced=tuple(replaced),
         missing_heavy_atoms_detected=tuple(detected_atoms),
-        added_atom_count=len(repaired.atoms) - len(original.atoms),
+        added_atom_count=added_atom_count,
         peptide_bond_checks=tuple(checks),
         random_seed=config.random_seed,
         platform=config.platform,
@@ -423,7 +425,7 @@ def _write_repair_input(
     chains: list[str],
     altloc_policy: str,
     keep_hydrogens: Callable[[ResidueRecord], bool] | None = None,
-) -> None:
+) -> dict[tuple[str, str, int, str | None], list[AtomRecord]]:
     """Prepare the file PDBFixer reads: chosen chains, chosen conformers.
 
     PDBFixer applies its own alternate-location rule, which is not mdprep's.
@@ -442,14 +444,23 @@ def _write_repair_input(
     a side chain, because that comes from its residue templates rather than
     from the header.
 
-    With ``keep_hydrogens``, the input's hydrogens go too, except in the
-    residues it names: PDBFixer is then repairing the structure the rest of
-    mdprep will build, not the one some other program protonated.
+    With ``keep_hydrogens``, the input's hydrogens go too: PDBFixer is then
+    repairing the structure the rest of mdprep will build, not the one some
+    other program protonated. The ones it keeps -- a ligand's, to be compared
+    with its SMILES -- are returned by residue instead of written. PDBFixer
+    has nothing to do with them, and keeps only one of several atoms that
+    share a name, which is how a format converter names hydrogens.
     """
 
     structure = read_structure(source, altloc_policy=altloc_policy)  # type: ignore[arg-type]
+    held: dict[tuple[str, str, int, str | None], list[AtomRecord]] = {}
     if keep_hydrogens is not None:
         structure, _ = strip_input_hydrogens(structure, keep=keep_hydrogens)
+        for residue in structure.residues:
+            hydrogens = [atom for atom in residue.atoms if is_hydrogen(atom)]
+            if hydrogens and len(hydrogens) < len(residue.atoms):
+                held[residue.atoms[0].residue_key] = hydrogens
+        structure, _ = strip_input_hydrogens(structure)
     if is_mmcif_path(source):
         selected_chains = set(chains)
         kept_atoms = [
@@ -470,7 +481,7 @@ def _write_repair_input(
             ),
             destination,
         )
-        return
+        return held
 
     # Each atom the structure kept, by the line it was read from. Serials
     # would do if they were unique, but reduce writes every hydrogen it adds
@@ -504,6 +515,51 @@ def _write_repair_input(
                 continue
         kept.append(line)
     destination.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    return held
+
+
+def _return_held_hydrogens(
+    structure: PdbStructure,
+    held: dict[tuple[str, str, int, str | None], list[AtomRecord]],
+) -> PdbStructure:
+    """Put the hydrogens held back from PDBFixer back on their residues.
+
+    PDBFixer moved none of the atoms they are bonded to -- that is checked
+    before this -- so they are where they were. Each residue's go after its
+    last atom, with serials of their own, and a chain boundary after that atom
+    moves after them.
+    """
+
+    if not held:
+        return structure
+    next_serial = max((atom.serial for atom in structure.atoms if atom.serial is not None), default=0)
+    ter_after = set(structure.ter_after_serials)
+    atoms: list[AtomRecord] = []
+    residues: list[ResidueRecord] = []
+    for residue in structure.residues:
+        hydrogens = held.get(residue.atoms[0].residue_key) if residue.atoms else None
+        if not hydrogens:
+            atoms.extend(residue.atoms)
+            residues.append(residue)
+            continue
+        returned = []
+        for hydrogen in hydrogens:
+            next_serial += 1
+            returned.append(replace(hydrogen, serial=next_serial))
+        last = residue.atoms[-1].serial
+        if last in ter_after:
+            ter_after.discard(last)
+            ter_after.add(next_serial)
+        atoms.extend(residue.atoms + returned)
+        residues.append(
+            ResidueRecord(
+                id=residue.id,
+                atoms=residue.atoms + returned,
+                record_names=set(residue.record_names),
+                original_index=residue.original_index,
+            )
+        )
+    return replace(structure, atoms=atoms, residues=residues, ter_after_serials=ter_after)
 
 
 def _parse_serial_for_filter(line: str) -> int | None:
@@ -698,6 +754,29 @@ def _restore_existing_atom_metadata(
         atom.atom_identity: atom for atom in original.atoms if atom.residue_key not in replaced
     }
     repaired_by_identity = {atom.atom_identity: atom for atom in repaired.atoms}
+    # Counted, not just looked up: PDBFixer keeps one of several atoms that
+    # share a name, and a lookup by name sees nothing missing.
+    original_counts = Counter(
+        atom.atom_identity for atom in original.atoms if atom.residue_key not in replaced
+    )
+    repaired_counts = Counter(atom.atom_identity for atom in repaired.atoms)
+    merged = sorted(
+        identity
+        for identity, count in original_counts.items()
+        if count > 1 and repaired_counts[identity] < count
+    )
+    if merged:
+        raise StructureRepairError(
+            "PDBFixer keeps only one of several atoms that share a name within a "
+            "residue, and these lost some: "
+            + ", ".join(
+                f"{chain}:{resname}{resid}{icode or ''} {name} "
+                f"({original_counts[(chain, resname, resid, icode, name)]} in, "
+                f"{repaired_counts[(chain, resname, resid, icode, name)]} out)"
+                for chain, resname, resid, icode, name in merged[:10]
+            )
+            + ". Give every atom of a residue a name of its own in the input."
+        )
     lost = sorted(set(original_by_identity) - set(repaired_by_identity))
     if lost:
         raise StructureRepairError(

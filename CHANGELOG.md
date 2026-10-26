@@ -4,18 +4,32 @@
 
 ### Added
 
-- `ligands[].keep_input_hydrogens`: whether a ligand keeps the hydrogens it
-  has in the input. Unset, it keeps them when it has a `user_mol2` or no
-  `smiles`; otherwise the SMILES's replace them. Kept hydrogens on a ligand
-  with a SMILES are compared with it heavy atom by heavy atom, and a
-  difference stops the run naming the atoms.
+- `ligands[].keep_input_hydrogens`: what to do with input hydrogens that
+  disagree with the ligand's SMILES. Unset, they are replaced and reported;
+  `true` makes the disagreement an error (a `user_mol2` implies it); `false`
+  replaces them without comparing.
 - The structure report's input-hydrogen record (how many were removed from
   protein, water and each other residue, and which ligands kept theirs) and
-  its ligand-hydrogen record (placed from the SMILES, or kept and checked).
-  The builder's findings list the removed hydrogens too.
+  its ligand-hydrogen record (placed from the SMILES, kept because they agree
+  with it, or replaced, with the atoms that disagreed). The builder's findings
+  list the removed hydrogens too.
 
 ### Changed
 
+- A ligand's SMILES is used whether or not the input has hydrogens on it.
+  Hydrogens it has are compared with the SMILES heavy atom by heavy atom and
+  kept only if they agree; otherwise they are replaced by the SMILES's and the
+  disagreeing atoms are reported (`LIGAND_HYDROGENS_REPLACED`). A ligand with
+  any hydrogens at all used to be left as it was and its SMILES ignored, and
+  the builder did not ask for one. In consequence a ligand that arrives with
+  hydrogens needs a SMILES, unless a `user_mol2` describes it: one without is
+  refused as the structure is read, as is one with neither hydrogens nor a
+  SMILES (a hydrogen-free molecule can be declared with `expected_formula`,
+  as before, or with a SMILES that gives it none). The 7E07 tutorial's
+  ligands carry their SMILES now.
+- Every ligand whose hydrogens come from or are checked against a SMILES has
+  its electrons counted against its net charge and multiplicity as the
+  structure is read; a count the multiplicity cannot have stops the run.
 - The web builder and the official Colab notebook install a pinned mdprep
   release (0.5.0) instead of git master, so everyone in a workshop runs the
   same code and the manifest the builder writes is read by the version that
@@ -38,7 +52,23 @@
   The hydrogens are now removed as the structure is read, in the builder,
   `mdprep plan`, `mdprep init` and the structure stage alike, so the plan is
   made about the structure that is built and PDBFixer repairs that structure
-  too. A ligand with a SMILES takes the SMILES's hydrogens.
+  too. A ligand's are compared with its SMILES (see Changed).
+- Structure repair lost atoms without saying so when several in a residue
+  shared a name: PDBFixer keeps one of them, and the check that no atom went
+  missing looked atoms up by name. A format converter names every hydrogen H,
+  so six of an alpha-ketoglutarate's went in and one came out. A ligand's
+  hydrogens now go round PDBFixer, which has nothing to do with them, and any
+  other merge stops the repair with the atoms it affected.
+- Atoms written more than once at partial occupancy without altloc labels --
+  a format converter keeps both conformers of a residue and drops the A and B,
+  leaving two OD2s in an aspartate at 0.50 each -- are read as the alternate
+  locations they are: labelled in file order, chosen by the altloc policy, and
+  reported. PDBFixer used to keep one of each pair without saying which.
+- A docked ligand carrying only its polar hydrogens stopped antechamber with
+  an odd number of electrons, after the protonation stage had run: having
+  hydrogens at all made the builder skip its SMILES question and the
+  preparation keep them. It now gets the SMILES's hydrogens, and a manifest
+  without its SMILES is refused at once with the reason.
 - CONECT records in a file whose atom serials repeat are followed to the
   atoms' new numbers when the serial they name is unique, and dropped with a
   warning when it is not, instead of the file being refused.
