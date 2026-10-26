@@ -41,11 +41,11 @@ that. These have no suggested value, and a front end cannot skip them:
 
 - **Ligand net charge.** It cannot be read from a PDB file, and a wrong value
   produces a plausible-looking topology with the wrong electrostatics.
-- **Ligand SMILES**, for every ligand. The plan is made about the structure
-  without the hydrogens it arrived with, since the manifest it writes removes
-  them (`structure.remove_input_hydrogens`), so a ligand's protonation comes
-  from its SMILES even when the file had hydrogens on it. The question says
-  how many it had. The SMILES of a few well-known cofactors is proposed.
+- **Ligand SMILES**, for every ligand, whether or not the file has hydrogens
+  on it: a ligand's protonation comes from its SMILES, and hydrogens the file
+  has are compared with it when the system is prepared -- kept if they agree,
+  replaced if not. The question says how many the file had. The SMILES of a
+  few well-known cofactors is proposed.
 - **Metal site model and oxidation state.** Neither the residue name nor the
   element implies an oxidation state. Zn is almost always +2; Fe and Cu are not.
 - **Removing unknown heterogens.** Normalization must never discard a residue

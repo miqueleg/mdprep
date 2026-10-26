@@ -371,14 +371,15 @@ class LigandConfig(StrictModel):
     multiplicity: int = Field(default=1, ge=1)
     # The protonation the user intends, stated explicitly. A crystal structure
     # carries no ligand hydrogens; supplying a SMILES lets mdprep place them
-    # without guessing a tautomer or a charge. Hydrogens the input already
-    # has on the ligand are replaced by the SMILES's, unless
-    # keep_input_hydrogens says otherwise.
+    # without guessing a tautomer or a charge. Hydrogens the input already has
+    # on the ligand are compared with it heavy atom by heavy atom: kept if they
+    # agree, replaced by the SMILES's if not. A ligand that arrives with
+    # hydrogens needs one, unless a user mol2 describes it.
     smiles: str | None = None
-    # Whether the ligand keeps the hydrogens it has in the input rather than
-    # losing them with structure.remove_input_hydrogens. Unset, it keeps them
-    # when a user mol2 lists them or when there is no SMILES to place others
-    # from. Kept hydrogens are checked against the SMILES's formula.
+    # What to do with input hydrogens that disagree with the SMILES. Unset,
+    # they are replaced and the disagreement reported; true makes it an error
+    # instead (and is what a user mol2 implies); false replaces them without
+    # comparing.
     keep_input_hydrogens: bool | None = None
     expected_formula: str | None = Field(
         default=None,

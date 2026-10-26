@@ -94,6 +94,8 @@ def read_pdb(
             "file order."
         )
 
+    raw_atoms, unlabeled = label_unlabeled_alternates(raw_atoms)
+    warnings.extend(unlabeled)
     atoms = _apply_altloc_policy(raw_atoms, altloc_policy)
     # A four-character residue name read out of column 21 cannot be written
     # back into three, and everything downstream of here is fixed-column.
@@ -612,6 +614,56 @@ def monatomic_ion_element(
 def canonical_element(symbol: str) -> str:
     upper = symbol.upper()
     return upper[0] + upper[1:].lower()
+
+
+ALTLOC_LABELS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def label_unlabeled_alternates(
+    atoms: list[AtomRecord],
+) -> tuple[list[AtomRecord], list[str]]:
+    """Copies of one atom at partial occupancy, written without altloc labels.
+
+    A format converter that adds hydrogens keeps both conformers of a residue
+    modelled in two and drops the A and B that said so, leaving two OD2s in an
+    aspartate at occupancy 0.50 each. Read as written they are two atoms with
+    one name, and PDBFixer kept one of each without saying which. They are
+    labelled A, B, ... in file order instead, so the altloc policy chooses
+    between them as it would have between the labelled originals, and the
+    reader says so.
+    """
+
+    positions: dict[tuple[str, str, int, str | None, str], list[int]] = defaultdict(list)
+    for index, atom in enumerate(atoms):
+        positions[atom.atom_identity].append(index)
+    labels: dict[int, str] = {}
+    residues: dict[str, list[str]] = {}
+    for identity, indices in positions.items():
+        copies = [atoms[index] for index in indices]
+        if (
+            len(copies) < 2
+            or len(copies) > len(ALTLOC_LABELS)
+            or any(atom.altloc is not None for atom in copies)
+            or not all(atom.occupancy is not None and atom.occupancy < 1.0 for atom in copies)
+        ):
+            continue
+        for label, index in zip(ALTLOC_LABELS, indices):
+            labels[index] = label
+        chain, resname, resid, icode, name = identity
+        residues.setdefault(f"{chain or '<blank>'}:{resname}{resid}{icode or ''}", []).append(name)
+    if not labels:
+        return atoms, []
+    labelled = [
+        replace(atom, altloc=labels[index]) if index in labels else atom
+        for index, atom in enumerate(atoms)
+    ]
+    return labelled, [
+        "Atoms written more than once at partial occupancy and without "
+        "alternate-location labels were read as alternate locations, labelled "
+        "in file order, and the altloc policy chose among them: "
+        + "; ".join(f"{residue} {', '.join(names)}" for residue, names in residues.items())
+        + "."
+    ]
 
 
 def _apply_altloc_policy(atoms: list[AtomRecord], policy: AltlocPolicy) -> list[AtomRecord]:

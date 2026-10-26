@@ -9,19 +9,31 @@ it under `structure.remove_residues` with the reason it goes, or set
 ## The Structure Already Has Hydrogens
 
 A crystal structure refined with riding hydrogens, or a model that went
-through PyMOL, reduce, PDBFixer or a format converter, arrives with hydrogens. mdprep
-removes them as it reads the structure (`structure.remove_input_hydrogens`,
-on by default) and places its own, so there is nothing to strip by hand; the
-structure report says how many went. In mdprep 0.5.0 and earlier they reached
-later stages and stopped the run in several ways: a chloride protonated into HCl refused as
-a ligand with an Amber ion's name, reduce's repeated serial 0 refused next to
-its CONECT records, a lysine's third hydrogen refused by the temporary
-hydrogenation, a cofactor kept as the neutral acid PDBFixer made of it.
+through PyMOL, reduce, PDBFixer or a format converter, arrives with
+hydrogens. mdprep removes them as it reads the structure
+(`structure.remove_input_hydrogens`, on by default) and places its own, so
+there is nothing to strip by hand; the structure report says how many went.
+In mdprep 0.5.0 and earlier they reached later stages and stopped the run in
+several ways: a chloride protonated into HCl refused as a ligand with an Amber
+ion's name, reduce's repeated serial 0 refused next to its CONECT records, a
+lysine's third hydrogen refused by the temporary hydrogenation, a cofactor
+kept as the neutral acid PDBFixer made of it.
 
-A ligand with a SMILES gets the SMILES's hydrogens. To keep the ones in the
-file instead, set `keep_input_hydrogens: true` on it: they must then be the
-SMILES's, heavy atom by heavy atom, or the run stops naming the atoms that
-differ. See [ligands.md](ligands.md#a-ligand-that-arrives-with-hydrogens).
+A ligand's hydrogens are compared with its SMILES instead: kept if they agree,
+replaced by the SMILES's if not, and the structure report lists the atoms that
+disagreed. To have a disagreement stop the run, set `keep_input_hydrogens:
+true` on it. See [ligands.md](ligands.md#a-ligand-that-arrives-with-hydrogens).
+
+## A Docked Ligand Stops antechamber With An Odd Number Of Electrons
+
+antechamber reporting `The number of electrons is odd` before `Cannot properly
+run sqm` is a ligand whose hydrogens are incomplete: a docking program writes
+only the polar ones, and in mdprep 0.5.0 a ligand with any hydrogens at all
+kept them and was never asked for a SMILES. Give the ligand its SMILES
+(`ligands[].smiles`; the builder asks for it): its hydrogens are then compared
+with it and replaced. mdprep now refuses a ligand that arrives with hydrogens
+and no SMILES as the structure is read, and counts every ligand's electrons
+against its charge and multiplicity before antechamber runs.
 
 ## Glycans, Bonded Heterogens Or Modified Residues Stop The Build
 

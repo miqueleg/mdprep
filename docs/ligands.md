@@ -70,26 +70,37 @@ molecule has a CH2-CH2.
 
 A ligand's hydrogens in the input were put there by something: PyMOL's
 `h_add`, reduce, PDBFixer, a format converter, a docking program, a riding-model
-refinement. Each follows its own rules, and none of them is the protonation
-you meant -- PDBFixer, for instance, takes alpha-ketoglutarate's hydrogens from
-its chemical component definition, which is the neutral acid, where at pH 7 it
-is a dianion. So with a SMILES, the input's hydrogens on that ligand are
-removed as the structure is read and the SMILES's are placed instead, exactly
-as for a crystal structure that had none. The structure report lists how many
-each residue lost.
+refinement. Each follows its own rules, and none of them is necessarily the
+protonation you meant. PDBFixer takes alpha-ketoglutarate's hydrogens from its
+chemical component definition, which is the neutral acid, where at pH 7 it is
+a dianion; a docking program usually writes only the polar hydrogens, so a
+docked substrate can arrive with two of its twenty-five.
 
-Two cases keep them, because nothing else can stand in for them:
+So the SMILES is used whether or not the ligand has hydrogens, and the ones it
+has are compared with it, heavy atom by heavy atom -- a formula is not enough,
+since the keto and enol forms share one:
 
-- a ligand with a `user_mol2`, which has to match the residue atom for atom;
-- a ligand with no SMILES, whose input hydrogens are the only statement of its
-  protonation there is (add `expected_formula` to have them checked).
+- if every heavy atom has the hydrogens the SMILES gives it, they are kept as
+  they are, names and positions included;
+- if not, they are replaced by the SMILES's, and the structure report lists the
+  atoms that disagreed (`LIGAND_HYDROGENS_REPLACED`).
 
-`keep_input_hydrogens: true` keeps them in any other case -- hydrogens whose
-positions you placed on purpose, say. They are then compared with the SMILES
-heavy atom by heavy atom, and any difference stops the run with the atoms that
-differ: a formula is not enough, since the keto and enol forms share one.
-`keep_input_hydrogens: false` replaces them where they would otherwise be
-kept; it needs a SMILES, and a `user_mol2` refuses it.
+A ligand that arrives with hydrogens therefore needs a SMILES; without one it
+is refused as the structure is read, rather than handed to antechamber with
+whatever another program left on it. The builder and `mdprep init
+--interactive` ask for every ligand's SMILES. Exceptions: a ligand with a
+`user_mol2`, which states the molecule itself (its hydrogens are compared with
+a SMILES if one is given, but never replaced, since the mol2 lists them), and
+a hydrogen-free molecule declared with `expected_formula`.
+
+`keep_input_hydrogens: true` makes a disagreement an error instead -- for
+hydrogens placed on purpose. `keep_input_hydrogens: false` replaces them
+without comparing.
+
+Once a ligand has its hydrogens, its electrons are counted against its net
+charge and multiplicity: an odd count for a closed shell is a molecule that
+cannot exist, and stops the run with the counts, before antechamber reports it
+as an aside to a failed semi-empirical step.
 
 ## Cofactors whose SMILES is proposed
 

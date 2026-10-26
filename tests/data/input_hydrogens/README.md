@@ -22,3 +22,7 @@ file after:
 `riding_peptide.pdb` is Pro80-Ala88 of chain A of PDB 4YJ6, an X-ray
 structure deposited with its riding hydrogens (Lys84 included, with HZ1-HZ3),
 and the waters within 3.2 A of it.
+
+`docked_polar_only.pdb` is lidocaine as a docking program writes a pose: the
+heavy atoms and the polar hydrogen, nothing else. The pose is RDKit's (ETKDG
+with seed 7, MMFF-optimised), not a docking result.

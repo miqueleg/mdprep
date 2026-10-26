@@ -1631,22 +1631,25 @@ def _ligand_decisions(
             default=None,
             requires_user_input=True,
             why=(
-                "mdprep places this residue's hydrogens itself. The formal "
-                "charge does not settle the chemistry -- a carboxylate and a "
-                "carboxylic acid differ by one hydrogen, and two tautomers can "
-                "share a formula and a charge -- so mdprep takes the bond "
-                "orders and the protonation from this SMILES rather than "
-                "guessing them, or keeping a guess another program made. It "
-                "must describe the same heavy atoms, in the same connectivity, "
-                "as the residue in the file, and its formal charge must match "
-                "the net charge above."
+                "mdprep takes this residue's protonation from this SMILES, "
+                "whether or not the file has hydrogens on it. The formal charge "
+                "does not settle the chemistry -- a carboxylate and a carboxylic "
+                "acid differ by one hydrogen, and two tautomers can share a "
+                "formula and a charge -- so the bond orders and the protonation "
+                "come from here rather than from a guess, or from a guess "
+                "another program made. Hydrogens the file has are compared with "
+                "the SMILES atom by atom: kept if they agree, replaced if not. "
+                "It must describe the same heavy atoms, in the same "
+                "connectivity, as the residue in the file, and its formal charge "
+                "must match the net charge above."
             ),
             evidence=evidence
             + (
                 (
-                    f"The input has {input_hydrogens} hydrogens on this residue, "
-                    "placed by whatever wrote the file; mdprep replaces them with "
-                    "the SMILES's.",
+                    f"The input has {input_hydrogens} hydrogens on this residue. "
+                    "mdprep compares them with the SMILES and keeps them only if "
+                    "they agree; a docking program often writes only the polar "
+                    "ones.",
                 )
                 if input_hydrogens
                 else ("No hydrogens are present on this residue in the input.",)

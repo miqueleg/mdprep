@@ -19,7 +19,6 @@ from mdprep.ligands.hydrogenate import (
     add_ligand_hydrogens,
     count_hydrogens,
     hydrogen_names_for,
-    is_already_protonated,
 )
 from mdprep.structure.models import AtomRecord, ResidueRecord
 from mdprep.structure.pdb import read_pdb
@@ -72,7 +71,7 @@ def residue_of(*atoms: AtomRecord) -> ResidueRecord:
 
 
 # --------------------------------------------------------------------------
-# Never touch a ligand that is already protonated
+# A ligand that arrives with hydrogens: kept if they are the SMILES's
 # --------------------------------------------------------------------------
 
 
@@ -137,32 +136,48 @@ def test_keeping_them_is_reported_rather_than_silent():
     assert "kept its 4 input hydrogen(s)" in result.warnings[0]
 
 
-def test_kept_hydrogens_that_are_not_the_smiles_are_refused():
-    """The SMILES states the protonation; hydrogens saying otherwise are a different molecule."""
+def test_hydrogens_that_are_not_the_smiles_are_replaced_and_reported():
+    """The SMILES states the protonation; hydrogens saying otherwise are a different molecule.
+
+    They used to be kept, which is how a docked substrate with only its
+    polar hydrogens reached antechamber with an odd number of electrons.
+    """
+    result = add_ligand_hydrogens(methane(3), "C", ligand_id="lig")
+
+    assert result.replaced_hydrogens == 3
+    assert result.added_hydrogens == 4
+    assert result.differences == ("C1 has 3 in the input and 4 in the SMILES",)
+    assert [a.name for a in result.residue.atoms if a.element == "H"] == ["H1", "H1A", "H1B", "H1C"]
+    assert "LIGAND_HYDROGENS_REPLACED" in result.warnings[0]
+
+
+def test_keeping_them_on_purpose_makes_a_disagreement_an_error():
     with pytest.raises(LigandHydrogenationError, match="C1 has 3 in the input and 4 in the SMILES"):
-        add_ligand_hydrogens(methane(3), "C", ligand_id="lig")
+        add_ligand_hydrogens(methane(3), "C", ligand_id="lig", keep_input_hydrogens=True)
 
 
-def test_a_kept_hydrogen_bonded_to_nothing_is_refused():
+def test_a_hydrogen_bonded_to_nothing_is_a_disagreement():
     stray = residue_of(atom("C1", "C", 0), atom("H1", "H", 2))
 
+    result = add_ligand_hydrogens(stray, "C", ligand_id="lig")
+
+    assert any("bonded to none of its atoms" in item for item in result.differences)
+    assert count_hydrogens(result.residue) == 4
     with pytest.raises(LigandHydrogenationError, match="bonded to none of its atoms"):
-        add_ligand_hydrogens(stray, "C", ligand_id="lig")
+        add_ligand_hydrogens(stray, "C", ligand_id="lig", keep_input_hydrogens=True)
 
 
-def test_a_single_hydrogen_is_enough_to_count_as_protonated():
-    """Partial protonation is never quietly finished off: that is the guess mdprep refuses to make.
-
-    The ligand counts as protonated, keeps what it has, and fails the
-    comparison with its SMILES.
-    """
+def test_a_partially_hydrogenated_ligand_gets_all_of_the_smiles():
+    """One hydrogen does not make a ligand protonated: the SMILES is still applied."""
     partial = residue_of(
         atom("C1", "C", 1), atom("C2", "C", 2), atom("H1", "H", 3)
     )
 
-    assert is_already_protonated(partial)
-    with pytest.raises(LigandHydrogenationError):
-        add_ligand_hydrogens(partial, "CC", ligand_id="lig")
+    result = add_ligand_hydrogens(partial, "CC", ligand_id="lig")
+
+    assert result.replaced_hydrogens == 1
+    assert count_hydrogens(result.residue) == 6
+    assert [a.name for a in result.residue.atoms][:2] == ["C1", "C2"]
 
 
 def test_hydrogens_are_recognised_by_element_and_by_name():
@@ -196,7 +211,7 @@ def test_hydrogens_are_placed_on_a_real_deposited_ligand():
         for r in structure.residues
         if r.id.chain_id == "A" and r.id.resname == "LYS" and r.id.resid == 301
     )
-    assert not is_already_protonated(lysine)
+    assert count_hydrogens(lysine) == 0
 
     result = add_ligand_hydrogens(
         lysine, "C(CCN)CC(C(=O)O)N", ligand_id="a_lys_301"
@@ -288,17 +303,23 @@ def test_an_invalid_smiles_is_rejected():
         add_ligand_hydrogens(before, "this is not a smiles", ligand_id="lig")
 
 
-def test_a_smiles_implying_no_hydrogens_is_rejected():
-    """Silently doing nothing would leave the ligand unusable downstream."""
+def test_a_smiles_implying_no_hydrogens_places_none():
+    """A hydrogen-free molecule is stated by its SMILES like any other.
+
+    Every ligand with hydrogens now needs a SMILES, so one without any has to
+    be expressible as one too.
+    """
     from dataclasses import replace
 
-    # Spaced as a triple bond, so the geometry agrees with the SMILES and this
-    # reaches the check it is about rather than the bond-order one.
+    # Spaced as a triple bond, so the geometry agrees with the SMILES.
     first, second = atom("C1", "C", 1), atom("C2", "C", 2)
     before = residue_of(first, replace(second, x=first.x + 1.20))
 
-    with pytest.raises(LigandHydrogenationError, match="no hydrogens"):
-        add_ligand_hydrogens(before, "[C-]#[C-]", ligand_id="lig")
+    result = add_ligand_hydrogens(before, "[C-]#[C-]", ligand_id="lig")
+
+    assert result.added_hydrogens == 0
+    assert [a.name for a in result.residue.atoms] == ["C1", "C2"]
+    assert "gives it none" in result.warnings[0]
 
 
 def test_the_error_names_the_ligand():

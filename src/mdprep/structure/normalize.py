@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import re
 from pathlib import Path
 
-from mdprep.config.models import ManifestConfig
+from mdprep.config.models import LigandConfig, ManifestConfig
 from mdprep.structure.classify import (
     is_bulk_ion_residue,
     is_likely_ligand_or_cofactor,
@@ -14,10 +15,14 @@ from mdprep.structure.classify import (
     is_water_residue,
 )
 from mdprep.structure.coordination import metal_bound_waters
-from mdprep.structure.hydrogens import InputHydrogenRemoval, remove_input_hydrogens
+from mdprep.structure.hydrogens import (
+    InputHydrogenRemoval,
+    is_hydrogen,
+    remove_input_hydrogens,
+)
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord
-from mdprep.structure.pdb import read_pdb
+from mdprep.structure.pdb import ATOMIC_NUMBER, read_pdb
 from mdprep.structure.reader import read_structure
 from mdprep.structure.repair import (
     StructureRepairError,
@@ -284,14 +289,30 @@ def normalize_structure_stage(
     # file: the QM/MM refinement, the leap build and the ligand parameters all
     # have to see the same molecule. Placing them here is what keeps them
     # consistent.
-    filtered_atoms, hydrogenations = _hydrogenate_configured_ligands(
-        structure, manifest, keep_residue_ids, filtered_atoms
+    filtered_atoms, hydrogenations, hydrogenation_warnings, rewritten = (
+        _hydrogenate_configured_ligands(structure, manifest, keep_residue_ids, filtered_atoms)
     )
+    # A ligand whose hydrogens were placed or replaced is a new residue as
+    # well as new atoms. Keeping the old record let the two disagree: the
+    # temporary hydrogenation for xTB checks every atom of every residue it is
+    # handed, and found a replaced hydrogen two angstrom from where the stale
+    # residue still had it.
+    kept_residues = [
+        ResidueRecord(
+            id=residue.id,
+            atoms=rewritten[id(residue)],
+            record_names=set(residue.record_names),
+            original_index=residue.original_index,
+        )
+        if id(residue) in rewritten
+        else residue
+        for residue in _filter_residues_by_ids(structure.residues, keep_residue_ids)
+    ]
 
     normalized_structure = PdbStructure(
         path=Path(output_path) if output_path is not None else structure.path,
         atoms=filtered_atoms,
-        residues=_filter_residues_by_ids(structure.residues, keep_residue_ids),
+        residues=kept_residues,
         model_count=structure.model_count,
         used_model=structure.used_model,
         warnings=list(structure.warnings),
@@ -309,8 +330,15 @@ def normalize_structure_stage(
     )
 
     warnings = list(structure.warnings)
+    # What the reader said about the input itself -- alternate locations it
+    # had to label, serials it renumbered -- is said once, by the read of the
+    # input. PDBFixer's copy no longer has the problem to report.
+    warnings.extend(
+        warning for warning in input_summary.structure.warnings if warning not in warnings
+    )
     if repair_result is not None:
         warnings.extend(repair_result.warnings)
+    warnings.extend(hydrogenation_warnings)
 
     return StructureNormalizationResult(
         input_path=input_path,
@@ -416,8 +444,20 @@ def _hydrogenate_configured_ligands(
     manifest: ManifestConfig,
     keep_residue_ids: set[int],
     filtered_atoms: list[AtomRecord],
-) -> tuple[list[AtomRecord], list[dict[str, object]]]:
-    """Place ligand hydrogens declared by a SMILES, in structure order."""
+) -> tuple[list[AtomRecord], list[dict[str, object]], list[str], dict[int, list[AtomRecord]]]:
+    """Give every configured ligand the hydrogens its SMILES states.
+
+    Hydrogens a ligand arrives with are compared with its SMILES and kept or
+    replaced (see add_ligand_hydrogens), so a ligand that has them needs a
+    SMILES as much as one that does not: without it they could only be
+    trusted, and a docking program's polar hydrogens were trusted all the way
+    to antechamber. A user mol2 is the exception, being a statement of the
+    molecule of its own. A ligand whose charges mdprep computes from its
+    SMILES must then have an electron count its multiplicity allows.
+
+    Returns the atoms, the outcomes, the warnings, and the new atoms of each
+    ligand residue whose hydrogens changed, keyed by the old residue's id.
+    """
 
     from mdprep.ligands.hydrogenate import (
         LigandHydrogenationError,
@@ -425,10 +465,9 @@ def _hydrogenate_configured_ligands(
     )
 
     results: list[dict[str, object]] = []
-    additions: dict[int, list[AtomRecord]] = {}
+    warnings: list[str] = []
+    replacements: dict[int, list[AtomRecord]] = {}
     for ligand in manifest.ligands:
-        if ligand.smiles is None:
-            continue
         try:
             residue = resolve_residue_selector(structure, ligand.selector.model_dump())
         except SelectorError:
@@ -436,33 +475,115 @@ def _hydrogenate_configured_ligands(
             continue
         if id(residue) not in keep_residue_ids:
             continue
-        try:
-            outcome = add_ligand_hydrogens(
-                residue,
-                ligand.smiles,
-                ligand_id=ligand.id,
-                net_charge=ligand.net_charge,
-            )
-        except LigandHydrogenationError as exc:
-            raise StructureNormalizationError(str(exc)) from exc
-        results.append({"id": ligand.id, **outcome.to_dict()})
-        if outcome.skipped:
-            continue
-        existing = {id(atom) for atom in residue.atoms}
-        additions[id(residue.atoms[-1])] = [
-            atom for atom in outcome.residue.atoms if id(atom) not in existing
-        ]
+        if ligand.smiles is None:
+            _require_a_smiles(ligand, residue)
+        else:
+            try:
+                outcome = add_ligand_hydrogens(
+                    residue,
+                    ligand.smiles,
+                    ligand_id=ligand.id,
+                    net_charge=ligand.net_charge,
+                    # A user mol2 lists the residue's atoms, so its hydrogens
+                    # can be checked but not exchanged.
+                    keep_input_hydrogens=(
+                        ligand.keep_input_hydrogens
+                        if ligand.keep_input_hydrogens is not None
+                        else (True if ligand.user_mol2 is not None else None)
+                    ),
+                )
+            except LigandHydrogenationError as exc:
+                raise StructureNormalizationError(str(exc)) from exc
+            results.append({"id": ligand.id, **outcome.to_dict()})
+            if outcome.replaced_hydrogens:
+                warnings.extend(outcome.warnings)
+            if not outcome.skipped:
+                replacements[id(residue)] = list(outcome.residue.atoms)
+            if ligand.user_mol2 is None:
+                _check_electron_count(ligand, residue, outcome.residue.atoms)
 
-    if not additions:
-        return filtered_atoms, results
+    if not replacements:
+        return filtered_atoms, results, warnings, replacements
 
-    # Insert each ligand's hydrogens directly after its last existing atom so
-    # that residues stay contiguous in the output.
+    # Each rewritten ligand takes the place of the residue it replaces, so
+    # residues stay contiguous and in order in the output.
+    owner = {
+        id(atom): id(residue)
+        for residue in structure.residues
+        if id(residue) in replacements
+        for atom in residue.atoms
+    }
+    pending = dict(replacements)
     rebuilt: list[AtomRecord] = []
     for atom in filtered_atoms:
-        rebuilt.append(atom)
-        rebuilt.extend(additions.get(id(atom), ()))
-    return rebuilt, results
+        residue_key = owner.get(id(atom))
+        if residue_key is None:
+            rebuilt.append(atom)
+        elif residue_key in pending:
+            rebuilt.extend(pending.pop(residue_key))
+    return rebuilt, results, warnings, replacements
+
+
+def _require_a_smiles(ligand: LigandConfig, residue: ResidueRecord) -> None:
+    """Refuse a ligand whose protonation nothing would state or check."""
+
+    if ligand.user_mol2 is not None:
+        return
+    hydrogens = sum(1 for atom in residue.atoms if is_hydrogen(atom))
+    if hydrogens:
+        raise StructureNormalizationError(
+            f"Ligand {ligand.id} ({residue.id.display()}) arrives with {hydrogens} "
+            "hydrogen(s) and no SMILES to check them against. Whatever wrote the "
+            "file put them there -- a docking program often writes only the polar "
+            "ones -- and mdprep takes a ligand's protonation from its SMILES, "
+            "comparing these with it: kept if they agree, replaced if not. Add "
+            "ligands[].smiles for it (the input builder asks for it)."
+        )
+    declared = ligand.expected_formula
+    if declared is not None and "H" not in re.findall(r"[A-Z][a-z]?", declared):
+        # Declared hydrogen-free, which is a statement of its own.
+        return
+    raise StructureNormalizationError(
+        f"Ligand {ligand.id} ({residue.id.display()}) has no hydrogens in the "
+        "input and no SMILES to place them from. mdprep will not guess a "
+        "ligand's protonation -- a carboxylate and a carboxylic acid are the same "
+        "heavy atoms -- so add ligands[].smiles for it (the input builder asks "
+        "for it), or declare a hydrogen-free molecule with expected_formula."
+    )
+
+
+def _check_electron_count(
+    ligand: LigandConfig, residue: ResidueRecord, atoms: list[AtomRecord]
+) -> None:
+    """The ligand's electrons must be a number its charge and spin allow.
+
+    Electrons are counted from the atoms and the declared charge. A closed
+    shell has an even number of them, a doublet an odd one, and so on; a
+    count of the wrong parity is a molecule that cannot exist, which is what
+    antechamber was handed when a docked substrate kept two of its hydrogens.
+    It said so only as an aside, before its semi-empirical step failed.
+    """
+
+    numbers = [_atomic_number(atom) for atom in atoms]
+    if any(number is None for number in numbers):
+        return
+    electrons = sum(numbers) - ligand.net_charge  # type: ignore[arg-type]
+    unpaired = ligand.multiplicity - 1
+    if electrons >= unpaired and (electrons - unpaired) % 2 == 0:
+        return
+    hydrogens = sum(1 for atom in atoms if is_hydrogen(atom))
+    raise StructureNormalizationError(
+        f"Ligand {ligand.id} ({residue.id.display()}) has {electrons} electrons "
+        f"at net charge {ligand.net_charge:+d}, with {hydrogens} hydrogen(s), "
+        f"which multiplicity {ligand.multiplicity} cannot have. Its hydrogens, "
+        "its net charge or its multiplicity is wrong."
+    )
+
+
+def _atomic_number(atom: AtomRecord) -> int | None:
+    if is_hydrogen(atom):
+        return 1
+    return ATOMIC_NUMBER.get((atom.element or "").strip().upper())
 
 
 def _mcpb_model_residue_keys(

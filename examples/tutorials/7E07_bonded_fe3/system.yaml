@@ -75,6 +75,9 @@ ligands:
       icode: null
     net_charge: 0
     multiplicity: 1
+    # Zwitterionic L-proline: the input's nine hydrogens are compared with
+    # this and kept, since they agree with it atom by atom.
+    smiles: "[O-]C(=O)[C@@H]1CCC[NH2+]1"
     expected_formula: C5H9NO2
     atom_types: gaff2
     charge_method: am1bcc
@@ -93,6 +96,7 @@ ligands:
       icode: null
     net_charge: -2
     multiplicity: 1
+    smiles: "[O-]C(=O)CCC(=O)C(=O)[O-]"
     expected_formula: C5H4O5
     atom_types: gaff2
     charge_method: mcpb_resp_pyscf
