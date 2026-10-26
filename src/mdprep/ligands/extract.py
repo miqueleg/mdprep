@@ -235,18 +235,22 @@ def _validate_ligand_formula(
         error = (
             f"ERROR [LIGAND_CHEMISTRY_UNRESOLVED] Ligand {ligand.id} cannot be sent to "
             "AM1-BCC or QM charge derivation without an explicit, validated protonation "
-            "state. Add ligand hydrogens before running mdprep and set expected_formula; "
-            "mdprep will not guess ligand protonation."
+            "state. Give it a SMILES (ligands[].smiles), from which mdprep places the "
+            "hydrogens, or add them to the input and set expected_formula; mdprep will "
+            "not guess ligand protonation."
         )
         raise LigandExtractionError(f"{warning}\n{error}")
 
     warnings: list[str] = []
     if expected is None:
-        warnings.append(
-            f"WARNING [LIGAND_FORMULA_UNVERIFIED] Ligand {ligand.id} contains explicit "
-            "hydrogens, but expected_formula was not supplied; mdprep cannot prove that "
-            "the ligand is completely protonated."
-        )
+        # A SMILES has been checked already: the structure stage placed the
+        # hydrogens from it, or compared the ones kept against it atom by atom.
+        if ligand.smiles is None:
+            warnings.append(
+                f"WARNING [LIGAND_FORMULA_UNVERIFIED] Ligand {ligand.id} contains explicit "
+                "hydrogens, but neither smiles nor expected_formula was supplied; mdprep "
+                "cannot prove that the ligand is completely protonated."
+            )
         return warnings
 
     if observed == expected:

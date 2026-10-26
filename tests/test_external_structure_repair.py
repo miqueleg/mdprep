@@ -3,7 +3,8 @@ from pathlib import Path
 import pytest
 
 from mdprep.config.models import ManifestConfig
-from mdprep.protonation.histidine_geometry import is_hydrogen_like, parent_heavy_atom
+from mdprep.protonation.histidine_geometry import parent_heavy_atom
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.protonation.temporary_hydrogenation import add_temporary_protein_hydrogens
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.repair import repair_structure
@@ -128,7 +129,7 @@ def _hydrogen_naming_schemes(residue) -> dict[str, set[str]]:
 
     schemes: dict[str, set[str]] = {}
     for atom in residue.atoms:
-        if not is_hydrogen_like(atom):
+        if not is_hydrogen(atom):
             continue
         parent = parent_heavy_atom(atom, residue)
         if parent is None:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 from dataclasses import replace
 from pathlib import Path
 from typing import Iterable, Literal
@@ -65,22 +65,33 @@ def read_pdb(
     # hybrid-36, or wrap around. The first two are decoded by _parse_serial;
     # a genuine wrap leaves duplicates that are renumbered in file order so
     # that serial-keyed bookkeeping downstream stays well defined.
+    #
+    # reduce repeats serials too: every hydrogen it adds is written as 0.
+    # A CONECT record naming a serial only one atom has still names that
+    # atom, so it follows the atom to its new number; one naming a repeated
+    # serial could mean any of them and is dropped, with a warning, rather
+    # than attached to a guess.
     raw_serials = [atom.serial for atom in raw_atoms if atom.serial is not None]
+    renumbered: dict[int, int] | None = None
+    repeated: set[int] = set()
     if len(set(raw_serials)) != len(raw_serials):
-        if any(line.startswith("CONECT") for line in lines):
-            raise PdbParseError(
-                "PDB atom serials are not unique and the file contains CONECT "
-                "records, so the connectivity they encode cannot be resolved. "
-                "Provide a PDB whose serials are unique or written in hybrid-36."
-            )
-        raw_atoms = [
+        counts = Counter(raw_serials)
+        repeated = {serial for serial, count in counts.items() if count > 1}
+        renumbered_atoms = [
             replace(atom, serial=position + 1)
             for position, atom in enumerate(raw_atoms)
         ]
+        renumbered = {
+            atom.serial: new.serial
+            for atom, new in zip(raw_atoms, renumbered_atoms)
+            if atom.serial is not None and atom.serial not in repeated
+        }
+        raw_atoms = renumbered_atoms
         warnings.append(
             f"Input contains {len(raw_serials) - len(set(raw_serials))} duplicate "
-            "atom serials (the five-column PDB serial field wrapped); atoms were "
-            "renumbered sequentially in file order."
+            "atom serials (a wrapped five-column serial field, or a program that "
+            "numbers the atoms it adds 0); atoms were renumbered sequentially in "
+            "file order."
         )
 
     atoms = _apply_altloc_policy(raw_atoms, altloc_policy)
@@ -113,7 +124,16 @@ def read_pdb(
     ter_after_serials = _parse_ter_after_serials(model_lines, serial_by_line_index)
     # CONECT records conventionally follow ENDMDL, so inspect the complete
     # file while filtering endpoints to the selected first model/altloc.
-    conect_bonds = _parse_conect_bonds(lines, present_serials)
+    conect_bonds, ambiguous_bonds = _parse_conect_bonds(
+        lines, present_serials, renumbered=renumbered, repeated=repeated
+    )
+    if ambiguous_bonds:
+        warnings.append(
+            f"{ambiguous_bonds} CONECT bond(s) name an atom serial that more than "
+            "one atom has, so which atom they mean cannot be told; they were "
+            "dropped. Connectivity mdprep needs is taken from residue templates "
+            "and coordinates, not from CONECT."
+        )
     from mdprep.structure.links import (
         parse_pdb_links,
         parse_pdb_modres,
@@ -155,8 +175,19 @@ def _parse_ter_after_serials(
 def _parse_conect_bonds(
     lines: list[str],
     present_serials: set[int],
-) -> set[tuple[int, int]]:
+    *,
+    renumbered: dict[int, int] | None = None,
+    repeated: set[int] = frozenset(),  # type: ignore[assignment]
+) -> tuple[set[tuple[int, int]], int]:
+    """CONECT bonds between atoms present, and how many could not be placed.
+
+    ``renumbered`` maps the file's serials to the ones the reader gave the
+    atoms when the file's were not unique; ``repeated`` are the serials that
+    more than one atom had, which no bond can be followed through.
+    """
+
     bonds: set[tuple[int, int]] = set()
+    ambiguous: set[tuple[int, int]] = set()
     for line in lines:
         if not line.startswith("CONECT"):
             continue
@@ -169,13 +200,18 @@ def _parse_conect_bonds(
         if len(values) < 2:
             continue
         source, *targets = values
-        if source not in present_serials:
-            continue
         for target in targets:
-            if target not in present_serials or target == source:
+            if target == source:
                 continue
-            bonds.add((min(source, target), max(source, target)))
-    return bonds
+            if source in repeated or target in repeated:
+                ambiguous.add((min(source, target), max(source, target)))
+                continue
+            left = renumbered.get(source) if renumbered is not None else source
+            right = renumbered.get(target) if renumbered is not None else target
+            if left not in present_serials or right not in present_serials:
+                continue
+            bonds.add((min(left, right), max(left, right)))  # type: ignore[type-var]
+    return bonds, len(ambiguous)
 
 
 def _first_model_lines(lines: Iterable[str]) -> list[str]:
@@ -511,6 +547,13 @@ def infer_element(
         aligned = atom_field.rstrip()
         if aligned.startswith(" ") and upper[0] in PERIODIC_ELEMENTS:
             return canonical_element(upper[0])
+        # A four-character name fills the field, so where it starts says
+        # nothing about its element, and a leading digit is the old way of
+        # naming hydrogens (1HG2). Both are hydrogens when they start with H:
+        # read as two-letter elements they put mercury, holmium and helium
+        # into ligands (HG21, HO2', HE21).
+        if upper.startswith("H") and (len(aligned) == 4 or aligned[:1].isdigit()):
+            return "H"
         if not aligned.startswith(" ") and len(upper) >= 2 and upper[:2] in PERIODIC_ELEMENTS:
             return canonical_element(upper[:2])
     if len(upper) >= 2 and upper[:2] in PERIODIC_ELEMENTS:

@@ -47,8 +47,9 @@ from mdprep.structure.heterogens import (
     HeterogenGroups,
     classify_heterogens,
 )
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
-from mdprep.structure.models import ResidueId, ResidueRecord
+from mdprep.structure.models import PdbStructure, ResidueId, ResidueRecord
 from mdprep.structure.oligomer import OligomerAnalysis, analyse_oligomer
 from mdprep.structure.pdb import AltlocPolicy
 
@@ -253,6 +254,10 @@ class DecisionPlan:
     # Kept on the plan because the manifest built from it has to name every
     # copy's residues, and the front end holds the plan, not the structure.
     oligomer: OligomerAnalysis | None = None
+    # The structure the decisions are about: as read, without the hydrogens
+    # it arrived with. What a viewer should draw, so that it shows what the
+    # questions ask about.
+    structure: PdbStructure | None = field(default=None, compare=False, repr=False)
 
     def by_id(self, decision_id: str) -> Decision:
         for decision in self.decisions:
@@ -418,10 +423,15 @@ def plan_decisions(
     """Inspect a structure and derive the decisions its manifest needs."""
 
     path = Path(structure_path)
+    # Planned as the manifest this writes builds it: without the hydrogens
+    # the file arrived with. Every residue is then asked about as mdprep will
+    # see it -- a chloride another program protonated is a chloride again,
+    # and every ligand's protonation comes from the SMILES asked for below.
     summary = inspect_pdb_structure(
         path,
         altloc_policy=altloc_policy,
         disulfide_cutoff_angstrom=disulfide_cutoff_angstrom,
+        remove_input_hydrogens=True,
     )
     # A metal ion is a heterogen, but it is parameterised as a metal site, not
     # as a GAFF ligand, so it must not also be offered for antechamber.
@@ -521,6 +531,7 @@ def plan_decisions(
     decisions.extend(_protonation_decisions(summary))
     decisions.extend(_disulfide_decisions(summary))
     additive_ids = {residue.id for residue in groups.additives}
+    removed_hydrogens = dict(summary.input_hydrogens.other_residues)
     for residue in ligands:
         decisions.extend(
             _ligand_decisions(
@@ -529,6 +540,7 @@ def plan_decisions(
                 # An additive is only offered as a ligand once the user has
                 # chosen to keep the additives.
                 additive=residue.id in additive_ids,
+                input_hydrogens=removed_hydrogens.get(residue.id.display(), 0),
             )
         )
     for residue in summary.metal_ions:
@@ -627,6 +639,8 @@ def plan_decisions(
         "covalent_heterogens": [item.residue.id.display() for item in groups.covalent],
         "additives": [residue.id.display() for residue in groups.additives],
         "structure_warnings": list(summary.structure.warnings),
+        # The hydrogens the file arrived with and the plan was made without.
+        "input_hydrogens": summary.input_hydrogens.to_dict(),
         "oligomer": oligomer.to_dict(),
         # The atoms each ligand is written with, so a manifest can only let
         # two residues share one template when tleap would accept it.
@@ -653,6 +667,7 @@ def plan_decisions(
         decisions=tuple(decisions),
         findings=findings,
         oligomer=oligomer,
+        structure=summary.structure,
     )
 
 
@@ -1556,13 +1571,15 @@ def _disulfide_decisions(summary: InspectionSummary) -> list[Decision]:
 
 
 def _ligand_has_hydrogens(residue: ResidueRecord) -> bool:
-    return any(
-        (atom.element or "").strip().upper() == "H" for atom in residue.atoms
-    )
+    return any(is_hydrogen(atom) for atom in residue.atoms)
 
 
 def _ligand_decisions(
-    residue: ResidueRecord, *, coordinates_metal: bool = False, additive: bool = False
+    residue: ResidueRecord,
+    *,
+    coordinates_metal: bool = False,
+    additive: bool = False,
+    input_hydrogens: int = 0,
 ) -> list[Decision]:
     ligand_id = ligand_id_for(residue)
     display = residue.id.display()
@@ -1614,17 +1631,26 @@ def _ligand_decisions(
             default=None,
             requires_user_input=True,
             why=(
-                "This structure resolved no hydrogens on this residue. The "
-                "formal charge does not settle the chemistry -- a carboxylate "
-                "and a carboxylic acid differ by one hydrogen, and two "
-                "tautomers can share a formula and a charge -- so mdprep takes "
-                "the bond orders and the protonation from this SMILES rather "
-                "than guessing them. It must describe the same heavy atoms, in "
-                "the same connectivity, as the residue in the file, and its "
-                "formal charge must match the net charge above."
+                "mdprep places this residue's hydrogens itself. The formal "
+                "charge does not settle the chemistry -- a carboxylate and a "
+                "carboxylic acid differ by one hydrogen, and two tautomers can "
+                "share a formula and a charge -- so mdprep takes the bond "
+                "orders and the protonation from this SMILES rather than "
+                "guessing them, or keeping a guess another program made. It "
+                "must describe the same heavy atoms, in the same connectivity, "
+                "as the residue in the file, and its formal charge must match "
+                "the net charge above."
             ),
             evidence=evidence
-            + ("No hydrogens are present on this residue in the input.",),
+            + (
+                (
+                    f"The input has {input_hydrogens} hydrogens on this residue, "
+                    "placed by whatever wrote the file; mdprep replaces them with "
+                    "the SMILES's.",
+                )
+                if input_hydrogens
+                else ("No hydrogens are present on this residue in the input.",)
+            ),
             targets=targets,
             focus="targets",
             when=(Condition(include_id, ("true",)),),
@@ -1698,15 +1724,6 @@ def _ligand_decisions(
             focus="targets",
         ),
     ]
-    if _ligand_has_hydrogens(residue):
-        # Already protonated, so mdprep leaves it alone and there is
-        # nothing to ask. Adding hydrogens to a residue that has them is
-        # the failure the question exists to prevent.
-        decisions = [
-            decision
-            for decision in decisions
-            if decision.id != f"ligand.{ligand_id}.smiles"
-        ]
     return decisions
 
 

@@ -184,6 +184,12 @@ def _nearby_residues(structure: PdbStructure, selector: ResidueSelector) -> list
     return candidates[:5]
 
 
+def residue_matches_selector(residue: ResidueRecord, selector: ResidueSelector) -> bool:
+    """Whether a residue is one a selector could mean, uniqueness aside."""
+
+    return _matches_residue_selector(residue, selector)
+
+
 def _matches_residue_selector(residue: ResidueRecord, selector: ResidueSelector) -> bool:
     if selector.chain_id is not None and residue.id.chain_id != selector.chain_id:
         return False

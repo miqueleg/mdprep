@@ -7,6 +7,7 @@ from math import cos, dist, radians, sin, sqrt
 from pathlib import Path
 
 from mdprep.structure.classify import is_standard_protein_residue, is_water_residue
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import AtomRecord, ResidueRecord
 
 
@@ -254,22 +255,12 @@ def write_xyz(atoms: list[XyzAtom], path: str | Path, *, comment: str = "mdprep 
     )
 
 
-def is_hydrogen_like(atom: AtomRecord) -> bool:
-    element_field = atom.original_line[76:78].strip() if len(atom.original_line) >= 78 else ""
-    if element_field:
-        return element_field.upper() == "H"
-    stripped = atom.name.strip()
-    while stripped and stripped[0].isdigit():
-        stripped = stripped[1:]
-    return stripped.upper().startswith("H")
-
-
 def has_water_oxygen(residue: ResidueRecord) -> bool:
     return any(_is_oxygen_atom(atom) for atom in residue.atoms)
 
 
 def count_water_hydrogens(residue: ResidueRecord) -> int:
-    return sum(1 for atom in residue.atoms if is_hydrogen_like(atom))
+    return sum(1 for atom in residue.atoms if is_hydrogen(atom))
 
 
 def build_water_hydrogen_coordinates(
@@ -288,7 +279,7 @@ def build_water_hydrogen_coordinates(
         raise HistidineGeometryError(
             f"Water residue {residue.id.display()} has multiple oxygen atoms; cannot add temporary xTB hydrogens."
         )
-    existing_hydrogens = [atom for atom in residue.atoms if is_hydrogen_like(atom)]
+    existing_hydrogens = [atom for atom in residue.atoms if is_hydrogen(atom)]
     if len(existing_hydrogens) >= 2:
         return []
     nearby_heavy = _nearby_nonwater_heavy_atoms(cluster_residues, water=residue)
@@ -354,7 +345,7 @@ def _append_truncated_protein_residue(
         ):
             continue
         atoms.append(_xyz_from_atom(atom))
-        if not is_hydrogen_like(atom):
+        if not is_hydrogen(atom):
             fixed.append(len(atoms))
         if name == "CA":
             anchors.append(len(atoms))
@@ -382,7 +373,7 @@ def _is_removed_backbone_atom_or_hydrogen(atom: AtomRecord, residue: ResidueReco
     name = atom.name.strip()
     if name in BACKBONE_ATOMS:
         return True
-    if not is_hydrogen_like(atom):
+    if not is_hydrogen(atom):
         return False
     return _hydrogen_is_near_any(atom, residue, REMOVED_BACKBONE_HEAVY_ATOMS)
 
@@ -391,7 +382,7 @@ def _append_full_residue(atoms: list[XyzAtom], residue: ResidueRecord) -> list[i
     fixed: list[int] = []
     for atom in residue.atoms:
         atoms.append(_xyz_from_atom(atom))
-        if not is_hydrogen_like(atom):
+        if not is_hydrogen(atom):
             fixed.append(len(atoms))
     return fixed
 
@@ -416,7 +407,7 @@ def _append_water_residue(
         raise HistidineGeometryError(
             f"Water residue {residue.id.display()} has multiple oxygen atoms; cannot add temporary xTB hydrogens."
         )
-    existing_hydrogens = [atom for atom in residue.atoms if is_hydrogen_like(atom)]
+    existing_hydrogens = [atom for atom in residue.atoms if is_hydrogen(atom)]
     fixed_atom_indices.extend(_append_full_residue(atoms, residue))
     if len(existing_hydrogens) >= 2:
         return None
@@ -565,7 +556,7 @@ def _skip_hydrogen_for_cluster_state(
     residue_state: str,
     target_histidine: bool,
 ) -> bool:
-    if not is_hydrogen_like(atom):
+    if not is_hydrogen(atom):
         return False
     if residue.id.resname in {"HIS", "HID", "HIE", "HIP"} and _histidine_hydrogen_is_canonicalized(
         atom,
@@ -583,7 +574,7 @@ def _skip_hydrogen_for_cluster_state(
             (
                 candidate
                 for candidate in residue.atoms
-                if is_hydrogen_like(candidate)
+                if is_hydrogen(candidate)
                 and _hydrogen_is_near_any(candidate, residue, ("NZ",))
             ),
             key=lambda candidate: (candidate.name, candidate.serial or 0),
@@ -600,7 +591,10 @@ def _require_retained_hydrogens(residue: ResidueRecord, fragment_atoms: list[Xyz
         raise HistidineGeometryError(
             f"xTB histidine cluster requires a hydrogenated protein model; "
             f"residue {residue.id.display()} has no retained hydrogens after CA truncation. "
-            "Provide an input structure with hydrogens or add a manual HIS override."
+            "Let mdprep build temporary ones (protonation.histidine.xtb."
+            "add_missing_protein_hydrogens: true), keep a hydrogenated input's "
+            "(structure.remove_input_hydrogens: false, since by default they are "
+            "removed as the structure is read), or add a manual HIS override."
         )
 
 
@@ -729,7 +723,7 @@ def _hydrogen_count_near_any(
     return sum(
         1
         for atom in residue.atoms
-        if is_hydrogen_like(atom) and _hydrogen_is_near_any(atom, residue, atom_names, cutoff_angstrom=cutoff_angstrom)
+        if is_hydrogen(atom) and _hydrogen_is_near_any(atom, residue, atom_names, cutoff_angstrom=cutoff_angstrom)
     )
 
 
@@ -760,7 +754,7 @@ def parent_heavy_atom(
     """
 
     name = hydrogen.name.strip()
-    heavy_atoms = [atom for atom in residue.atoms if not is_hydrogen_like(atom)]
+    heavy_atoms = [atom for atom in residue.atoms if not is_hydrogen(atom)]
 
     if name.upper() in BACKBONE_AMIDE_HYDROGENS:
         return next((atom for atom in heavy_atoms if atom.name.strip() == "N"), None)
@@ -819,7 +813,7 @@ def _nearby_nonwater_heavy_atoms(
         if residue is water:
             continue
         for atom in residue.atoms:
-            if not is_hydrogen_like(atom):
+            if not is_hydrogen(atom):
                 nearby.append(atom)
     return nearby
 

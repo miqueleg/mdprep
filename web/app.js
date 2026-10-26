@@ -120,8 +120,13 @@ def mdprep_plan(text, name):
     # questions ask about the names mdprep chose -- so a renamed ligand or
     # metal highlighted nothing at all, including on "are these the atoms
     # coordinating this metal?", the one question asking the student to
-    # confirm what they can see.
-    payload["structure_pdb"] = render_pdb(read_structure(plan.structure_path))
+    # confirm what they can see. Without the hydrogens the file arrived
+    # with, too: the build places its own. A release from before plans
+    # carried their structure is drawn as read.
+    structure = getattr(plan, "structure", None)
+    payload["structure_pdb"] = render_pdb(
+        structure if structure is not None else read_structure(plan.structure_path)
+    )
     return json.dumps(payload)
 
 def mdprep_rename(text, name, renames_json):
@@ -370,6 +375,16 @@ function renderFindings() {
   ];
   // Heterogens that are not ligands, each group asked about once. Only the
   // groups this structure has: four rows of "none" would bury the rest.
+  // Hydrogens another program placed: removed, and said so, because a
+  // student who added them on purpose should know they are not used.
+  const hydrogens = f.input_hydrogens || {};
+  if (hydrogens.removed) {
+    rows.push([
+      "Hydrogens in the file",
+      `${hydrogens.removed} removed (${hydrogens.protein} protein, ` +
+        `${hydrogens.water} water, ${hydrogens.other} other); mdprep places its own`,
+    ]);
+  }
   for (const [label, values] of [
     ["Modified residues", f.modified_residues],
     ["Glycans", f.glycans],

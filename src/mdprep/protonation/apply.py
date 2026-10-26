@@ -36,6 +36,7 @@ from mdprep.structure.classify import (
     is_titratable_residue,
     is_water_residue,
 )
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord, build_residues
 from mdprep.structure.selectors import SelectorError, resolve_residue_selector
 
@@ -367,19 +368,19 @@ def apply_protonation_stage(
     renamed_atoms = _rename_atoms(structure, final_by_residue)
     hydrogen_atoms_removed = 0
     if manifest.structure.remove_input_hydrogens:
+        # The structure stage removed the input's hydrogens already, so from
+        # there this removes nothing. What it is for is a structure that
+        # comes back from QM/MM refinement with the hydrogens of a build
+        # whose states are about to be decided again. The ligands' are
+        # theirs, from a SMILES or kept on purpose, and stay.
         before = len(renamed_atoms)
         protected_ligand_keys = _configured_ligand_atom_keys(structure, manifest)
         renamed_atoms = [
             atom
             for atom in renamed_atoms
-            if not (is_hydrogen_atom(atom) and _atom_residue_key(atom) not in protected_ligand_keys)
+            if not (is_hydrogen(atom) and _atom_residue_key(atom) not in protected_ligand_keys)
         ]
         hydrogen_atoms_removed = before - len(renamed_atoms)
-        if protected_ligand_keys:
-            warnings.append(
-                "Configured ligand residues were excluded from structure.remove_input_hydrogens so ligand "
-                "parameterization sees the submitted ligand hydrogenation."
-            )
 
     protonated_structure = PdbStructure(
         path=Path(output_protonation_pdb_path),
@@ -505,7 +506,7 @@ def reuse_protonation_assignments_after_refinement(
     _validate_reused_refined_hydrogens(
         reused_structure, ligand_residue_keys=ligand_residue_keys or set()
     )
-    hydrogen_count = sum(is_hydrogen_atom(atom) for atom in reused_structure.atoms)
+    hydrogen_count = sum(is_hydrogen(atom) for atom in reused_structure.atoms)
     if hydrogen_count == 0:
         raise ProtonationApplicationError(
             "post_refinement_protonation: reuse_initial selected a refined "
@@ -611,7 +612,7 @@ def _validate_reused_refined_hydrogens(
                     f"expected {expected} for {state}."
                 )
         elif is_water_residue(residue):
-            water_hydrogens = sum(is_hydrogen_atom(atom) for atom in residue.atoms)
+            water_hydrogens = sum(is_hydrogen(atom) for atom in residue.atoms)
             if water_hydrogens != 2:
                 raise ProtonationApplicationError(
                     f"Refined water {residue.id.display()} contains "
@@ -686,7 +687,7 @@ def _protein_hydrogenation_is_incomplete(structure: PdbStructure) -> bool:
     """Return whether any standard residue has no explicit hydrogen at all."""
 
     return any(
-        not any(is_hydrogen_atom(atom) for atom in residue.atoms)
+        not any(is_hydrogen(atom) for atom in residue.atoms)
         for residue in structure.residues
         if is_standard_protein_residue(residue)
     )
@@ -770,7 +771,7 @@ def _hydrogen_count_near_any(
     return sum(
         1
         for atom in residue.atoms
-        if is_hydrogen_atom(atom) and _hydrogen_is_near_any(atom, residue, atom_names, cutoff_angstrom=cutoff_angstrom)
+        if is_hydrogen(atom) and _hydrogen_is_near_any(atom, residue, atom_names, cutoff_angstrom=cutoff_angstrom)
     )
 
 
@@ -798,16 +799,6 @@ def _protonation_work_dir(output_protonation_pdb_path: str | Path) -> Path:
     output_path = Path(output_protonation_pdb_path)
     output_dir = output_path.parent.parent if output_path.parent.name == "intermediate" else output_path.parent
     return output_dir / "protonation"
-
-
-def is_hydrogen_atom(atom: AtomRecord) -> bool:
-    element_field = atom.original_line[76:78].strip() if len(atom.original_line) >= 78 else ""
-    if element_field:
-        return element_field.upper() == "H"
-    stripped = atom.name.strip()
-    while stripped and stripped[0].isdigit():
-        stripped = stripped[1:]
-    return stripped.upper().startswith("H")
 
 
 def _configured_ligand_atom_keys(

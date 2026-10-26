@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from math import sqrt
 
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord
 
 
@@ -125,8 +126,8 @@ def _anchor_rmsd(
     common_heavy = sorted(
         name
         for name in input_by_name.keys() & topology_by_name.keys()
-        if not _is_hydrogen(input_by_name[name])
-        and not _is_hydrogen(topology_by_name[name])
+        if not is_hydrogen(input_by_name[name])
+        and not is_hydrogen(topology_by_name[name])
     )
     names = common_heavy or sorted(input_by_name.keys() & topology_by_name.keys())
     if not names:
@@ -163,5 +164,3 @@ def _element(atom: AtomRecord) -> str:
     return (atom.element or "").strip().upper()
 
 
-def _is_hydrogen(atom: AtomRecord) -> bool:
-    return _element(atom) == "H"

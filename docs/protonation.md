@@ -83,7 +83,9 @@ minimization. mdprep seeds that placement with
 the seed, so repeated HID/HIE comparisons start from the same environment.
 The later `tleap` pass remains the authoritative system hydrogenation. Set the
 option to `false` to require a fully hydrogenated input and retain strict
-failure on an incomplete xTB environment. If temporary hydrogenation is needed
+failure on an incomplete xTB environment; that input's hydrogens are only kept
+with `structure.remove_input_hydrogens: false`, since by default the structure
+stage removes them as it reads the file. If temporary hydrogenation is needed
 but PDBFixer/OpenMM is unavailable, protonation fails clearly.
 
 A residue that already carries hydrogens OpenMM's own residue templates do not
@@ -94,7 +96,11 @@ through the bonds its templates define, so without this it sees a bare heavy
 atom and builds a second complete set beside the first. The protonation report
 lists every residue left with the hydrogens it arrived with. A residue whose
 protonation state was decided by PropKa or an override is still rebuilt in that
-state, hydrogens and all.
+state, hydrogens and all. A hydrogen it had that the state does not -- the third
+hydrogen on a lysine PropKa made neutral -- is dropped: these hydrogens are
+temporary, so only a heavy atom going missing stops the run. With the default
+`structure.remove_input_hydrogens: true` the input's hydrogens are gone before
+protonation starts, and this only matters when they are kept.
 
 HID and HIE trials run in separate, freshly created work directories. This
 prevents xTB restart, optimized-coordinate, and charge files from one tautomer

@@ -16,6 +16,7 @@ from mdprep.structure.classify import (
     is_water_residue,
 )
 from mdprep.structure.disulfides import DisulfideCandidate, detect_possible_disulfides
+from mdprep.structure.hydrogens import InputHydrogenRemoval, strip_input_hydrogens
 from mdprep.structure.models import PdbStructure, ResidueRecord
 from mdprep.structure.pdb import AltlocPolicy, read_pdb
 from mdprep.structure.reader import read_structure
@@ -35,6 +36,8 @@ class InspectionSummary:
     # Free monatomic ions (Cl-, Na+, ...). A halide bound to a metal is in
     # here too; the metal site claims it later.
     crystal_ions: list[ResidueRecord] = field(default_factory=list)
+    # The hydrogens taken out before inspecting, when it was asked to.
+    input_hydrogens: InputHydrogenRemoval = field(default_factory=InputHydrogenRemoval)
 
     @property
     def chain_ids(self) -> list[str]:
@@ -52,6 +55,7 @@ class InspectionSummary:
             "model_count": self.structure.model_count,
             "used_model": self.structure.used_model,
             "warnings": list(self.structure.warnings),
+            "input_hydrogens": self.input_hydrogens.to_dict(),
             "chains": [{"chain_id": chain_id, "display": chain_id or "<blank>"} for chain_id in self.chain_ids],
             "counts": {
                 "protein_residues": len(self.protein_residues),
@@ -78,8 +82,21 @@ def inspect_pdb_structure(
     *,
     altloc_policy: AltlocPolicy = "highest_occupancy",
     disulfide_cutoff_angstrom: float = 2.2,
+    remove_input_hydrogens: bool = False,
 ) -> InspectionSummary:
+    """What a structure holds, as read -- or as built, without its hydrogens.
+
+    ``remove_input_hydrogens`` inspects the structure the way a manifest
+    with the default ``structure.remove_input_hydrogens: true`` and no
+    ligand settings yet builds it: none of the hydrogens it arrived with. A
+    plan made from the structure as read would ask about residues the build
+    never sees, such as a chloride PyMOL turned into HCl.
+    """
+
     structure = read_structure(path, altloc_policy=altloc_policy)
+    input_hydrogens = InputHydrogenRemoval()
+    if remove_input_hydrogens:
+        structure, input_hydrogens = strip_input_hydrogens(structure)
     residues = structure.residues
     protein_residues = [residue for residue in residues if is_standard_protein_residue(residue)]
     water_residues = [residue for residue in residues if is_water_residue(residue)]
@@ -108,6 +125,7 @@ def inspect_pdb_structure(
         possible_disulfides=possible_disulfides,
         metal_ions=metal_ions,
         crystal_ions=crystal_ions,
+        input_hydrogens=input_hydrogens,
     )
 
 

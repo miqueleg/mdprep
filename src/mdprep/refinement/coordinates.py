@@ -12,6 +12,7 @@ from mdprep.refinement.mapping import (
     is_virtual_site,
     map_residues_by_coordinates,
 )
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import AtomRecord, PdbStructure, build_residues
 
 
@@ -136,7 +137,7 @@ def transfer_optimized_coordinates(
                 occupancy = 1.0
                 bfactor = 0.0
                 original_line = ""
-                if (topology_atom.element or "").strip().upper() == "H":
+                if is_hydrogen(topology_atom):
                     generated_hydrogens += 1
             new_atoms.append(
                 replace(

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from mdprep.structure.pdb import PdbParseError, read_pdb
+from mdprep.structure.pdb import read_pdb
 from mdprep.structure.writer import format_serial_field, write_pdb
 
 
@@ -122,19 +122,47 @@ def test_wrapped_duplicate_serials_are_renumbered_with_a_warning(tmp_path):
     assert any("renumbered" in warning for warning in structure.warnings)
 
 
-def test_duplicate_serials_with_conect_records_fail_clearly(tmp_path):
-    """Renumbering would silently destroy the connectivity CONECT encodes."""
+def test_conect_records_follow_unique_serials_through_renumbering(tmp_path):
+    """reduce numbers every hydrogen it adds 0 and keeps the deposition's CONECT records.
+
+    The records name atoms whose serials are still unique, so they can be
+    followed to the new numbers. Refusing the file stopped every structure
+    reduce had protonated.
+    """
+    pdb = tmp_path / "reduce.pdb"
+    lines = [
+        _atom_line(f"{10:5d} ", "O", "WAT", 1, 0.0),
+        _atom_line(f"{0:5d} ", "H1", "WAT", 1, 1.0),
+        _atom_line(f"{0:5d} ", "H2", "WAT", 1, 2.0),
+        _atom_line(f"{11:5d} ", "O", "WAT", 2, 3.0),
+        "CONECT   10   11",
+        "END",
+    ]
+    pdb.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    structure = read_pdb(pdb)
+
+    assert [atom.serial for atom in structure.atoms] == [1, 2, 3, 4]
+    assert structure.conect_bonds == {(1, 4)}
+    assert not any("CONECT" in warning for warning in structure.warnings)
+
+
+def test_conect_records_naming_a_repeated_serial_are_dropped_with_a_warning(tmp_path):
+    """Which of the two atoms numbered 1 is meant cannot be told; guessing would invent a bond."""
     pdb = tmp_path / "ambiguous.pdb"
     lines = [
         _atom_line(f"{1:5d} ", "O", "WAT", 1, 0.0),
         _atom_line(f"{1:5d} ", "O", "WAT", 2, 1.0),
+        _atom_line(f"{2:5d} ", "O", "WAT", 3, 2.0),
         "CONECT    1    2",
         "END",
     ]
     pdb.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    with pytest.raises(PdbParseError, match="CONECT"):
-        read_pdb(pdb)
+    structure = read_pdb(pdb)
+
+    assert structure.conect_bonds == set()
+    assert any("CONECT bond(s)" in warning for warning in structure.warnings)
 
 
 def test_ter_markers_survive_serial_overflow(tmp_path):

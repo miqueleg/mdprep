@@ -6,6 +6,23 @@ Add the residue to `ligands:`, configure a one-atom ion under `metals:`, list
 it under `structure.remove_residues` with the reason it goes, or set
 `structure.remove_unknown_heterogens: true` if removal is intended.
 
+## The Structure Already Has Hydrogens
+
+A crystal structure refined with riding hydrogens, or a model that went
+through PyMOL, reduce, PDBFixer or a format converter, arrives with hydrogens. mdprep
+removes them as it reads the structure (`structure.remove_input_hydrogens`,
+on by default) and places its own, so there is nothing to strip by hand; the
+structure report says how many went. In mdprep 0.5.0 and earlier they reached
+later stages and stopped the run in several ways: a chloride protonated into HCl refused as
+a ligand with an Amber ion's name, reduce's repeated serial 0 refused next to
+its CONECT records, a lysine's third hydrogen refused by the temporary
+hydrogenation, a cofactor kept as the neutral acid PDBFixer made of it.
+
+A ligand with a SMILES gets the SMILES's hydrogens. To keep the ones in the
+file instead, set `keep_input_hydrogens: true` on it: they must then be the
+SMILES's, heavy atom by heavy atom, or the run stops naming the atoms that
+differ. See [ligands.md](ligands.md#a-ligand-that-arrives-with-hydrogens).
+
 ## Glycans, Bonded Heterogens Or Modified Residues Stop The Build
 
 mdprep builds neither sugars nor other heterogens bonded to the protein, nor a

@@ -34,6 +34,14 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- Atoms: {report['atom_count_before']} -> {report['atom_count_after']}",
         f"- Residues: {report['residue_count_before']} -> {report['residue_count_after']}",
         "",
+        "## Input Hydrogens",
+        "",
+        *_input_hydrogen_lines(report.get("input_hydrogens") or {}),
+        "",
+        "## Ligand Hydrogens From SMILES",
+        "",
+        *_ligand_hydrogen_lines(report.get("ligand_hydrogens") or []),
+        "",
         "## Waters",
         "",
         f"- Kept: {len(report['waters_kept'])}",
@@ -110,3 +118,40 @@ def _residue_lines(items: list[dict[str, Any]]) -> list[str]:
 def _format_residue(item: dict[str, Any]) -> str:
     chain = item["chain_id"] or "<blank>"
     return f"{chain}:{item['resname']}{item['resid']}{item.get('icode') or ''}"
+
+
+def _input_hydrogen_lines(record: dict[str, Any]) -> list[str]:
+    """What happened to the hydrogens the input arrived with."""
+
+    removed = int(record.get("removed", 0))
+    kept = record.get("kept_residues", [])
+    if not removed and not kept:
+        return ["- None in the input"]
+    lines = [
+        f"- Removed: {removed} ({record.get('protein', 0)} protein, "
+        f"{record.get('water', 0)} water, {record.get('other', 0)} other); "
+        "mdprep places its own"
+    ]
+    lines.extend(
+        f"  - {item['residue']}: {item['hydrogens']}" for item in record.get("other_residues", [])
+    )
+    lines.extend(
+        f"- Kept on {item['residue']}: {item['hydrogens']}" for item in kept
+    )
+    return lines
+
+
+def _ligand_hydrogen_lines(outcomes: list[dict[str, Any]]) -> list[str]:
+    if not outcomes:
+        return ["- None"]
+    return [
+        f"- {item['id']} ({item['residue']}): "
+        + (
+            "kept its input hydrogens, which match the SMILES"
+            if item["skipped"]
+            else f"{item['added_hydrogens']} placed from the SMILES"
+        )
+        + f" `{item['smiles']}`"
+        for item in outcomes
+    ]
+

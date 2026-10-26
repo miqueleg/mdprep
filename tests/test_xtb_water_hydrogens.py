@@ -51,6 +51,10 @@ def _with_water_atoms(tmp_path: Path, atom_lines: list[str]) -> Path:
 
 
 def _run_with_fakes(monkeypatch, tmp_path, data: dict):
+    # The protein's hydrogens are the input's, kept: the structure stage
+    # would otherwise remove them and PDBFixer build temporary ones, waters
+    # included, which is not what these tests are about.
+    data["structure"]["remove_input_hydrogens"] = False
     # These exercise the cluster backend, which is no longer the default. The
     # embedded QM/MM backend has its own tests in test_histidine_qmmm.py.
     data.setdefault("protonation", {}).setdefault("histidine", {}).setdefault(

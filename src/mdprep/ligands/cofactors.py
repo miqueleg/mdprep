@@ -23,6 +23,7 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import dataclass
 
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import ResidueRecord
 
 
@@ -207,7 +208,7 @@ def _matching(table: dict[str, KnownCofactor], residue: ResidueRecord) -> KnownC
     heavy = Counter(
         (atom.element or "").strip().upper()
         for atom in residue.atoms
-        if (atom.element or "").strip().upper() not in {"H", "D"}
+        if not is_hydrogen(atom)
     )
     if heavy != Counter(dict(entry.heavy_atoms)):
         return None

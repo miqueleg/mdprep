@@ -18,15 +18,19 @@ def run_with_remove_hydrogens(remove: bool):
 
 
 def test_hydrogens_are_removed_when_configured():
-    _, result = run_with_remove_hydrogens(True)
+    normalized, result = run_with_remove_hydrogens(True)
 
-    assert result.hydrogen_atoms_removed == 2
+    # As the structure is read, so no stage after it sees them.
+    assert normalized.input_hydrogens.removed == 2
+    assert [atom.name for atom in normalized.normalized_structure.atoms] == ["N", "CA", "C"]
+    assert result.hydrogen_atoms_removed == 0
     assert [atom.name for atom in result.structure.atoms] == ["N", "CA", "C"]
 
 
 def test_hydrogens_are_preserved_when_configured_false():
-    _, result = run_with_remove_hydrogens(False)
+    normalized, result = run_with_remove_hydrogens(False)
 
+    assert normalized.input_hydrogens.removed == 0
     assert result.hydrogen_atoms_removed == 0
     assert [atom.name for atom in result.structure.atoms] == ["N", "H", "CA", "1HD2", "C"]
 
@@ -74,6 +78,6 @@ def test_configured_ligand_hydrogens_are_preserved_when_protein_hydrogens_remove
         output_protonation_pdb_path="protonated.pdb",
     )
 
-    assert result.hydrogen_atoms_removed == 1
+    assert normalized.input_hydrogens.removed == 1
+    assert normalized.input_hydrogens.kept_residues == (("B:SUB501", 1),)
     assert [atom.name for atom in result.structure.atoms] == ["N", "CA", "C1", "H1"]
-    assert any("Configured ligand residues were excluded" in warning for warning in result.warnings)

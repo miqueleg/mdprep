@@ -42,6 +42,7 @@ from mdprep.structure.classify import (
     is_water_residue,
 )
 from mdprep.structure.coordination import metal_bound_waters, metal_donor_atoms
+from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import ResidueId, ResidueRecord
 
 
@@ -276,7 +277,7 @@ def _assign_nonprotein_chains(
     for residue in residues:
         if residue.id.chain_id in protein_chains and is_standard_protein_residue(residue):
             for atom in residue.atoms:
-                if not _is_hydrogen(atom):
+                if not is_hydrogen(atom):
                     grid.add(atom, residue.id.chain_id)
 
     members: dict[str, list[ResidueRecord]] = {}
@@ -295,7 +296,7 @@ def _assign_nonprotein_chains(
         nearest: dict[str, float] = {}
         for residue in chain_residues:
             for atom in residue.atoms:
-                if _is_hydrogen(atom):
+                if is_hydrogen(atom):
                     continue
                 for owner, distance in grid.near(atom, NEAR_ANGSTROM):
                     nearest[owner] = min(nearest.get(owner, distance), distance)
@@ -672,13 +673,6 @@ def _atom_xyz(residue: ResidueRecord, name: str) -> Vector | None:
         if atom.name == name:
             return (atom.x, atom.y, atom.z)
     return None
-
-
-def _is_hydrogen(atom) -> bool:
-    element = (atom.element or "").strip().upper()
-    if element:
-        return element in {"H", "D"}
-    return atom.name.strip().startswith("H")
 
 
 class _Grid:

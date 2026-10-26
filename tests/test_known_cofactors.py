@@ -76,8 +76,8 @@ def test_the_planner_proposes_the_smiles_and_the_charge(tmp_path):
     assert plan.by_id(f"ligand.{ligand_id}.net_charge").default is None
 
 
-def test_a_cofactor_that_came_with_hydrogens_has_no_smiles_to_propose(tmp_path):
-    """Nothing is proposed for a question that is not asked."""
+def test_a_cofactor_that_came_with_hydrogens_has_its_smiles_proposed_all_the_same(tmp_path):
+    """The input's hydrogens are replaced by the SMILES's, so it is asked for and proposed."""
 
     lines = (DATA / "sam_7rwg.pdb").read_text().splitlines()
     atom = next(line for line in lines if line.startswith(("ATOM", "HETATM")))
@@ -88,7 +88,8 @@ def test_a_cofactor_that_came_with_hydrogens_has_no_smiles_to_propose(tmp_path):
     plan = plan_decisions(path)
     proposals = proposed_answers(plan, {})
 
-    assert not any(key.endswith(".smiles") for key in proposals)
+    (ligand_id,) = plan.findings["known_organic_cofactors"]
+    assert proposals[f"ligand.{ligand_id}.smiles"] == KNOWN_ORGANIC_COFACTORS["SAM"].smiles
 
 
 @pytest.mark.parametrize("name", sorted(FIXTURES))
