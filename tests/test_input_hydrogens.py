@@ -399,6 +399,33 @@ def test_a_returned_hydrogen_does_not_end_up_beyond_its_chain_boundary(tmp_path)
     assert returned.ter_after_serials == {returned.atoms[-1].serial}
 
 
+def test_what_the_reader_said_about_the_input_reaches_the_report_after_repair(
+    tmp_path, monkeypatch
+):
+    """PDBFixer's copy no longer has the unlabelled conformers to report."""
+    from types import SimpleNamespace
+
+    lines = [
+        _line(1, "N", "ALA", 1, 0.0, "N"),
+        _line(2, "CA", "ALA", 1, 1.0, "C"),
+        _line(3, "CB", "ALA", 1, 2.0, "C").replace("  1.00  0.00", "  0.50  0.00"),
+        _line(4, "CB", "ALA", 1, 2.5, "C").replace("  1.00  0.00", "  0.50  0.00"),
+    ]
+    path = _write(tmp_path / "converter.pdb", lines)
+    repaired = read_pdb(_write(tmp_path / "repaired.pdb", lines[:3]))
+    monkeypatch.setattr(
+        "mdprep.structure.normalize.repair_structure",
+        lambda manifest, output_path: SimpleNamespace(structure=repaired, warnings=()),
+    )
+
+    result = normalize_structure_stage(
+        _manifest(path, repair={"backend": "pdbfixer", "add_missing_heavy_atoms": True}),
+        output_path=tmp_path / "normalized.pdb",
+    )
+
+    assert any("A:ALA1 CB" in warning for warning in result.warnings)
+
+
 def test_atoms_pdbfixer_merges_are_reported_not_lost():
     from mdprep.structure.repair import StructureRepairError, _restore_existing_atom_metadata
 

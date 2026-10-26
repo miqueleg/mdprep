@@ -330,6 +330,12 @@ def normalize_structure_stage(
     )
 
     warnings = list(structure.warnings)
+    # What the reader said about the input itself -- alternate locations it
+    # had to label, serials it renumbered -- is said once, by the read of the
+    # input. PDBFixer's copy no longer has the problem to report.
+    warnings.extend(
+        warning for warning in input_summary.structure.warnings if warning not in warnings
+    )
     if repair_result is not None:
         warnings.extend(repair_result.warnings)
     warnings.extend(hydrogenation_warnings)
