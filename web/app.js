@@ -16,7 +16,7 @@ const WHEEL_INDEX_URL = "vendor/wheel.json";
 // still 0.2.0, which predates the stage-2 NaN and large-PDB fixes, so the
 // generated cell installs from the repository instead. Switch this to
 // pinned to a release so every student installs the same code.
-const MDPREP_INSTALL = '"mdprep==0.5.0"';
+const MDPREP_INSTALL = '"mdprep==0.5.1"';
 // The official notebook: it takes the bundle this page writes, prepares and
 // equilibrates the system, and shows every step of it.
 const COLAB_NOTEBOOK_URL =

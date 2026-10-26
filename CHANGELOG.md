@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The web builder and the official Colab notebook install mdprep 0.5.1, so a
+  structure that arrives with hydrogens and a docked ligand with only its
+  polar ones reach the students as they now prepare.
+
 ## 0.5.1 - 2026-10-26
 
 ### Added
