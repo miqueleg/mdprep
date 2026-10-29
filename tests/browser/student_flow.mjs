@@ -78,6 +78,10 @@ try {
     // A yes/no or a choice is a set of radios: which one the page selected
     // before the student touched it is that question's default or proposal.
     const selected = await page.evaluate(() => {
+      // A checklist is a set of boxes: the ones the page ticked before the
+      // student touched it are its default.
+      const boxes = [...document.querySelectorAll('input[name="answer-multi"]')];
+      if (boxes.length) return boxes.filter((box) => box.checked).map((box) => box.value).join(",");
       const checked = document.querySelector('input[name="answer"]:checked');
       return checked ? checked.value : null;
     });
@@ -90,6 +94,19 @@ try {
     });
     if (answer !== undefined) {
       const ok = await page.evaluate((value) => {
+        // A checklist answer names the boxes to tick; yes and no tick all or none.
+        const boxes = [...document.querySelectorAll('input[name="answer-multi"]')];
+        if (boxes.length) {
+          const token = value.trim().toLowerCase();
+          const wanted = ["true", "yes", "all"].includes(token)
+            ? boxes.map((box) => box.value)
+            : ["false", "no", "none", ""].includes(token)
+              ? []
+              : value.split(",").map((item) => item.trim());
+          if (!wanted.every((item) => boxes.some((box) => box.value === item))) return false;
+          boxes.forEach((box) => { box.checked = wanted.includes(box.value); });
+          return true;
+        }
         const input = document.getElementById("answer-input");
         if (input) { input.value = value; return true; }
         const radios = [...document.querySelectorAll('input[name="answer"]')];

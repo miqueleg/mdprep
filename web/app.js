@@ -497,6 +497,20 @@ function focusOn(decision) {
           : `Highlighted: all ${decision.target_resnames.join("/")} residues`,
       );
     }
+    // A checklist of bonds: what is unticked is drawn as not bonded.
+    const boxes = [...document.querySelectorAll('input[name="answer-multi"]')];
+    if (decision.kind === "multichoice" && boxes.length) {
+      const ticked = new Set(boxes.filter((box) => box.checked).map((box) => box.value));
+      const unticked = decision.targets.slice(1).filter(
+        (target) => !ticked.has(residueDisplay(target)),
+      );
+      unticked.forEach((target) => {
+        viewer.setStyle(targetSelector(target), {
+          stick: { radius: 0.15, color: "lightgray" },
+        });
+      });
+      if (unticked.length) caption.push(`Not bonded (grey): ${targetList(unticked)}.`);
+    }
   } else if (decision.focus === "chains") {
     // Which chains to keep, and which copies match: the whole assembly, each
     // chain its own colour, with the residues the question is about picked
@@ -535,7 +549,7 @@ function focusOn(decision) {
 function isApplicable(decision, answers) {
   const met = (condition) => {
     const value = answers[condition.decision_id];
-    return value !== undefined && condition.values.includes(String(value));
+    return value !== undefined && condition.values.includes(answerToken(value));
   };
   const anyOf = decision.when_any || [];
   return decision.when.every(met) && (anyOf.length === 0 || anyOf.some(met));
@@ -551,10 +565,37 @@ function applicableDecisions() {
     if (!isApplicable(decision, answers)) continue;
     result.push(decision);
     const given = state.answers[decision.id];
+    const value = given !== undefined && given !== "" ? given : decision.default;
     answers[decision.id] =
-      given !== undefined && given !== "" ? given : decision.default;
+      decision.kind === "multichoice" ? selectionOf(decision, value) : value;
   }
   return result;
+}
+
+// A checklist's answer is the values ticked, and as a condition it reads
+// "true" once anything is ticked -- as the Python side reads it.
+function answerToken(value) {
+  if (Array.isArray(value)) return value.length ? "true" : "false";
+  return String(value);
+}
+
+// The values a checklist answer ticks: a list as the page records it, or the
+// comma-separated default the plan carries.
+function selectionOf(decision, value) {
+  if (Array.isArray(value)) return value;
+  if (value === null || value === undefined) return [];
+  const token = String(value).trim();
+  if (["true", "yes", "all"].includes(token.toLowerCase())) {
+    return decision.choices.map((choice) => choice.value);
+  }
+  if (["false", "no", "none", ""].includes(token.toLowerCase())) return [];
+  return token.split(",").map((item) => item.trim()).filter(Boolean);
+}
+
+// The name a checklist's box carries for the residue a target is in, which is
+// how Python's ResidueId.display() writes it.
+function residueDisplay(target) {
+  return `${target.chain || "<blank>"}:${target.resname}${target.resid}${target.icode || ""}`;
 }
 
 function currentDecision() {
@@ -586,9 +627,11 @@ function renderCurrentQuestion() {
   // cofactor whose chemistry its name fixes.
   const note = proposal
     ? proposal.why
-    : decision.requires_user_input
-      ? "This cannot be guessed from the structure, so there is no default."
-      : "";
+    : decision.kind === "multichoice"
+      ? "Ticked because each is within bonding distance. Untick any that is only close."
+      : decision.requires_user_input
+        ? "This cannot be guessed from the structure, so there is no default."
+        : "";
   el("blocking-note").textContent = note;
   el("blocking-note").classList.toggle("visible", note !== "");
 
@@ -646,6 +689,22 @@ function renderAnswerInput(decision) {
     });
     return;
   }
+  if (decision.kind === "multichoice") {
+    const ticked = new Set(selectionOf(decision, value));
+    decision.choices.forEach((choice) => {
+      const wrapper = document.createElement("label");
+      wrapper.className = "choice";
+      wrapper.innerHTML =
+        `<input type="checkbox" name="answer-multi" value="${escapeHtml(choice.value)}"` +
+        `${ticked.has(choice.value) ? " checked" : ""}>` +
+        `<span><strong>${escapeHtml(choice.label)}</strong>` +
+        `<em>${escapeHtml(choice.detail)}</em></span>`;
+      // The viewer follows the ticks, so what is left out is seen to be.
+      wrapper.querySelector("input").addEventListener("change", () => focusOn(decision));
+      area.appendChild(wrapper);
+    });
+    return;
+  }
   if (decision.kind === "boolean") {
     [
       ["true", "Yes"],
@@ -681,6 +740,8 @@ function renderAnswerInput(decision) {
 }
 
 function readAnswer() {
+  const boxes = [...document.querySelectorAll('input[name="answer-multi"]')];
+  if (boxes.length) return boxes.filter((box) => box.checked).map((box) => box.value);
   const checked = document.querySelector('input[name="answer"]:checked');
   if (checked) return checked.value;
   const input = el("answer-input");

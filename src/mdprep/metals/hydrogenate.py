@@ -206,6 +206,21 @@ def _preservation_identity(
     return (atom.chain_id, resname, atom.resid, atom.icode, atom.name)
 
 
+def _in_tleap_output_order(residues: list[ResidueRecord]) -> list[ResidueRecord]:
+    """The order tleap writes residues in: every water after everything else.
+
+    tleap reads a structure in file order, which is the order its ``bond``
+    commands count residues in, MCPB.py's included. It writes the topology and
+    the PDB it saves with the waters moved to the end, keeping the order within
+    each group. A ligand after the crystal waters, such as a docked substrate
+    added at the end of the file, therefore comes back before them.
+    """
+
+    return [residue for residue in residues if residue.id.resname not in WATER_RESIDUES] + [
+        residue for residue in residues if residue.id.resname in WATER_RESIDUES
+    ]
+
+
 def _restore_residue_identities(
     observed: PdbStructure,
     *,
@@ -219,7 +234,9 @@ def _restore_residue_identities(
         )
     atoms: list[AtomRecord] = []
     serial = 0
-    for expected, actual in zip(reference.residues, observed.residues, strict=True):
+    for expected, actual in zip(
+        _in_tleap_output_order(reference.residues), observed.residues, strict=True
+    ):
         if actual.id.resname != expected.id.resname:
             raise MetalHydrogenationError(
                 f"Pre-MCPB tleap unexpectedly renamed {expected.id.display()} to "
