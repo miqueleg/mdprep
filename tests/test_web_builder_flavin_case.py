@@ -108,7 +108,7 @@ def test_a_selenomethionine_is_one_question_proposed_yes(selenomethionine):
     assert selenomethionine["unanswered"] == []
     steps = _steps(selenomethionine)
 
-    assert steps["structure.replace_modified_residues"]["selected"] == "true"
+    assert steps["residue.MSE.treatment"]["selected"] == "replace"
     assert not [key for key in steps if key.startswith("ligand.")]
 
 

@@ -740,10 +740,13 @@ def _build_qmmesp_provisional_system(
         manifest=manifest,
         ligand_result=ligand_result,
     )
+    from mdprep.residues.workflow import residue_leap_inputs
+
     sources = forcefield_sources(
         protein_forcefield=manifest.protein.forcefield,
         water_model=manifest.protein.water_model,
         ligands=manifest.ligands,
+        residues=residue_leap_inputs(manifest, output),
     )
     ligand_files = validate_ligand_parameter_files(
         manifest=manifest,

@@ -7,7 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from mdprep.structure.classify import STANDARD_AMINO_ACIDS
+from mdprep.residues.templates import AMBER_RESIDUE_TEMPLATES
+from mdprep.structure.classify import LEAP_RESERVED_RESIDUE_NAMES, STANDARD_AMINO_ACIDS
 
 
 class StrictModel(BaseModel):
@@ -66,6 +67,103 @@ class ModifiedResidueReplacement(StrictModel):
                 "no force field template can build it in the chain"
             )
         return parent
+
+
+class NoncanonicalResidueConfig(StrictModel):
+    """Residues of a protein chain that are not one of the twenty, kept as they are.
+
+    tleap builds every residue of a name from one template, so a block is one
+    residue name, listing each residue of it the build keeps -- named, as
+    everything else a manifest acts on is. Nothing is kept by inference: a
+    modified residue of a chain that no block, replacement or removal names
+    stops the build.
+
+    ``amber_library`` builds them from a template AmberTools ships for the
+    protein force field (``mdprep.residues.templates``); its name is the
+    protonation. ``am1bcc`` parameterises them from ``smiles``: GAFF2 types on
+    the side chain, the protein force field's on the backbone, AM1-BCC charges
+    with the backbone's fixed to the force field's. The SMILES is the
+    residue's protonation, and ``net_charge`` must agree with it. Either way
+    the residue is bonded into its chain, so it must have a residue on each
+    side.
+    """
+
+    resname: str = Field(pattern=r"^[A-Z0-9]{1,3}$")
+    residues: list[ResidueSelector] = Field(min_length=1)
+    parameters: Literal["amber_library", "am1bcc"]
+    # amber_library: the template, which may rename the residue -- a
+    # phosphoserine deposited as SEP and wanted monoanionic is built as S1P.
+    template: str | None = None
+    # am1bcc: the residue between an acetyl and a methylamide, or the free
+    # amino acid, with the protonation intended.
+    smiles: str | None = None
+    net_charge: int | None = None
+    # The standard amino acid it is a modified form of. ff19SB corrects each
+    # residue's backbone with a CMAP chosen by residue name, and a residue
+    # parameterised here takes its parent's.
+    parent: str | None = None
+    atom_types: Literal["gaff2"] = "gaff2"
+
+    @field_validator("parent")
+    @classmethod
+    def validate_parent(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parent = value.strip().upper()
+        if parent not in STANDARD_AMINO_ACIDS:
+            raise ValueError(f"parent {value!r} is not one of the twenty standard amino acids")
+        return parent
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "NoncanonicalResidueConfig":
+        label = f"noncanonical_residues {self.resname}"
+        for selector in self.residues:
+            if selector.resname != self.resname:
+                raise ValueError(
+                    f"{label} lists {selector.chain}:{selector.resname}{selector.resid}; "
+                    f"every residue of a block is a {self.resname}"
+                )
+        keys = [(item.chain, item.resid, item.icode) for item in self.residues]
+        if len(set(keys)) != len(keys):
+            raise ValueError(f"{label} lists a residue more than once")
+        if self.resname in LEAP_RESERVED_RESIDUE_NAMES:
+            raise ValueError(
+                f"{label}: {self.resname} is a residue the force fields already define, "
+                "not a noncanonical one"
+            )
+        if self.parameters == "amber_library":
+            if self.template is None:
+                raise ValueError(f"{label}: parameters: amber_library requires template")
+            template = AMBER_RESIDUE_TEMPLATES.get(self.template)
+            if template is None:
+                raise ValueError(
+                    f"{label}: template {self.template!r} is not one mdprep knows; known: "
+                    + ", ".join(sorted(AMBER_RESIDUE_TEMPLATES))
+                )
+            if self.resname not in template.deposited_as | {template.name}:
+                raise ValueError(
+                    f"{label}: template {template.name} ({template.description}) builds "
+                    f"{', '.join(sorted(template.deposited_as))}, not {self.resname}"
+                )
+            given = [
+                name
+                for name in ("smiles", "net_charge", "parent")
+                if getattr(self, name) is not None
+            ]
+            if given:
+                raise ValueError(
+                    f"{label}: {', '.join(given)} belong to parameters: am1bcc; a "
+                    "template brings its own chemistry and charge"
+                )
+            return self
+        if self.template is not None:
+            raise ValueError(f"{label}: template belongs to parameters: amber_library")
+        if not self.smiles or self.net_charge is None:
+            raise ValueError(
+                f"{label}: parameters: am1bcc requires smiles and net_charge; the "
+                "SMILES is the residue's protonation, which nothing can guess"
+            )
+        return self
 
 
 class ProjectConfig(StrictModel):
@@ -1163,12 +1261,105 @@ class ManifestConfig(StrictModel):
     disulfides: DisulfideConfig
     ligands: list[LigandConfig] = Field(default_factory=list)
     metals: list[MetalSiteConfig] = Field(default_factory=list)
+    noncanonical_residues: list[NoncanonicalResidueConfig] = Field(default_factory=list)
     refinement: RefinementConfig = Field(default_factory=RefinementConfig)
     solvation: SolvationConfig
     validation: ValidationConfig
     molecular_dynamics: MolecularDynamicsConfig = Field(
         default_factory=MolecularDynamicsConfig
     )
+
+    @model_validator(mode="after")
+    def validate_noncanonical_residues(self) -> "ManifestConfig":
+        """A kept residue is built once, from one template, and nothing else claims it."""
+
+        blocks = self.noncanonical_residues
+        if not blocks:
+            return self
+        names = [block.resname for block in blocks]
+        repeated = sorted({name for name in names if names.count(name) > 1})
+        if repeated:
+            raise ValueError(
+                f"noncanonical_residues has more than one block for {', '.join(repeated)}; "
+                "tleap builds every residue of a name from one template, so list them "
+                "all in one block"
+            )
+        built_names = {
+            block.template if block.template is not None else block.resname
+            for block in blocks
+        }
+        clashes = sorted(built_names & {ligand.selector.resname for ligand in self.ligands})
+        if clashes:
+            raise ValueError(
+                f"{', '.join(clashes)} names both a ligand and a noncanonical residue; "
+                "tleap would build both from one template"
+            )
+        kept = {
+            (item.chain, item.resname, item.resid, item.icode): block.resname
+            for block in blocks
+            for item in block.residues
+        }
+
+        def key(selector: ResidueSelector) -> tuple[str, str, int, str | None]:
+            return (selector.chain, selector.resname, selector.resid, selector.icode)
+
+        claims: list[str] = []
+        for item in self.structure.remove_residues:
+            if key(item.selector) in kept:
+                claims.append("structure.remove_residues")
+        for item in self.structure.repair.replace_modified_residues:
+            if key(item.selector) in kept:
+                claims.append("structure.repair.replace_modified_residues")
+        for override in self.protonation.overrides:
+            if key(override.selector) in kept:
+                claims.append("protonation.overrides")
+        for ligand in self.ligands:
+            selector = ligand.selector
+            if (selector.chain, selector.resname, selector.resid, selector.icode) in kept:
+                claims.append(f"ligand {ligand.id!r}")
+        for site in self.metals:
+            selectors = [ion.selector for ion in site.ions] + [
+                ion.selector for ion in site.coordinating_ions
+            ]
+            for selector in selectors:
+                if key(selector) in kept:
+                    claims.append(f"metal site {site.id!r}")
+        if claims:
+            raise ValueError(
+                "noncanonical_residues keeps residues that "
+                + ", ".join(sorted(set(claims)))
+                + " also acts on; a kept residue is built as it is, with the "
+                "protonation its block states"
+            )
+        bonded = [site.id for site in self.metals if site.model == "bonded_mcpb"]
+        if bonded:
+            raise ValueError(
+                f"Bonded metal site {bonded[0]!r} and noncanonical_residues in one "
+                "build are not supported: MCPB.py builds its own tleap system, which "
+                "does not load the residues' templates. Model the site nonbonded, or "
+                "replace the residues by their parents"
+            )
+        if self.refinement.enabled:
+            raise ValueError(
+                "QM/MM refinement with noncanonical_residues is not supported yet; "
+                "disable refinement, or replace the residues by their parents"
+            )
+        if self.protein.forcefield == "ff19SB":
+            orphans = [
+                block.resname
+                for block in blocks
+                if block.parameters == "am1bcc" and block.parent is None
+            ]
+            if orphans:
+                many = len(orphans) > 1
+                raise ValueError(
+                    f"noncanonical_residues {', '.join(orphans)} need{'' if many else 's'} "
+                    "a parent with ff19SB: it corrects every residue's backbone with a "
+                    "CMAP chosen by residue name, and a parameterised residue takes its "
+                    "parent's. State the standard amino acid "
+                    f"{'each is' if many else 'it is'} a modified form of, or use ff14SB"
+                )
+        return self
 
     @model_validator(mode="after")
     def validate_unique_workflow_ids(self) -> "ManifestConfig":

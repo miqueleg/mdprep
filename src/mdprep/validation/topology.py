@@ -6,7 +6,10 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Sequence
 
+from mdprep.analysis.prmtop import PrmtopError
 from mdprep.config.models import ManifestConfig
+from mdprep.residues.topology import kept_residue_checks
+from mdprep.residues.workflow import final_resname
 from mdprep.structure.classify import is_water_residue, likely_ligands_or_cofactors
 from mdprep.structure.pdb import PdbParseError, read_pdb
 from mdprep.validation.openmm_check import run_openmm_energy_check
@@ -148,6 +151,16 @@ def validate_final_outputs(
                 "fail_on_noninteger_ligand_charge is false."
             )
 
+    # A kept noncanonical residue is a residue of its chain: there under its
+    # name, with its charge, and bonded on both sides.
+    residue_checks: list[dict[str, object]] = []
+    if manifest.noncanonical_residues and paths["prmtop"].is_file():
+        try:
+            residue_checks, residue_problems = kept_residue_checks(paths["prmtop"], manifest)
+        except PrmtopError as exc:
+            residue_problems = [f"the final topology could not be read ({exc})"]
+        errors.extend(f"Kept noncanonical residues: {problem}." for problem in residue_problems)
+
     # parmchk2 marks a parameter it had to guess rather than look up with
     # "ATTN, need revision". Nothing read the frcmod files it writes, so a
     # ligand built on invented force-field terms was indistinguishable from
@@ -188,6 +201,7 @@ def validate_final_outputs(
         "final_atom_count": len(final_structure.atoms) if final_structure is not None else None,
         "final_residue_count": len(final_structure.residues) if final_structure is not None else None,
         "ligand_presence_checks": ligand_checks,
+        "noncanonical_residue_checks": residue_checks,
         "water_presence": {"water_count": water_count, "solvation_enabled": manifest.solvation.enabled},
         "parmed": parmed,
         "openmm": openmm,
@@ -230,6 +244,7 @@ def _allowed_final_heterogen_resnames(
     metal_result: "MetalStageResult | None" = None,
 ) -> set[str]:
     allowed = {ligand.selector.resname for ligand in manifest.ligands}
+    allowed.update(final_resname(block) for block in manifest.noncanonical_residues)
     allowed.update(
         ion.selector.resname
         for site in manifest.metals
@@ -287,6 +302,15 @@ def _render_markdown(report: dict[str, Any]) -> str:
             lines.append(f"- `{check['ligand_id']}` present={check['present']} atom_names_ok={check['atom_names_ok']}")
     else:
         lines.append("- None")
+    residue_checks = report.get("noncanonical_residue_checks", [])
+    if residue_checks:
+        lines.extend(["", "## Noncanonical residues", ""])
+        for check in residue_checks:
+            lines.append(
+                f"- `{check['built_as']}` count={check['count']}/{check['expected_count']} "
+                f"charges={check['charges']} expected={check['expected_charge']:+d} "
+                f"peptide_bonded={check['peptide_bonded']}"
+            )
     lines.extend(["", "## Warnings", ""])
     warnings = report.get("warnings", [])
     if warnings:

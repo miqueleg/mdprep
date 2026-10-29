@@ -2,11 +2,18 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import re
 from pathlib import Path
 
 from mdprep.config.models import LigandConfig, ManifestConfig
+from mdprep.residues.structure import (
+    KeptResidueError,
+    describe_unconfigured,
+    prepare_noncanonical_residues,
+    resolve_noncanonical_residues,
+    unconfigured_modified_residues,
+)
 from mdprep.structure.classify import (
     is_bulk_ion_residue,
     is_likely_ligand_or_cofactor,
@@ -72,6 +79,9 @@ class StructureNormalizationResult:
     # Each ligand with a SMILES: the hydrogens placed from it, or the input
     # hydrogens it kept and how they compared with it.
     ligand_hydrogens: list[dict[str, object]] = field(default_factory=list)
+    # Each residue noncanonical_residues keeps: its name in the build, and
+    # the hydrogens it was given or left to tleap.
+    noncanonical_residues_kept: list[dict[str, object]] = field(default_factory=list)
 
     def to_report_dict(self) -> dict[str, object]:
         normalized_summary = inspect_pdb_structure_from_structure(self.normalized_structure)
@@ -105,6 +115,7 @@ class StructureNormalizationResult:
             "unknown_heterogens_causing_failure": self.unknown_heterogens_causing_failure,
             "input_hydrogens": self.input_hydrogens.to_dict(),
             "ligand_hydrogens": self.ligand_hydrogens,
+            "noncanonical_residues_kept": self.noncanonical_residues_kept,
             "histidines": _residue_dicts(self.input_summary.histidines),
             "titratable_residues": _residue_dicts(self.input_summary.titratable_residues),
             "possible_disulfides": [
@@ -160,6 +171,10 @@ def normalize_structure_stage(
     # is mistaken below for an unknown heterogen, a ligand or a donor.
     removed = _resolve_removed_residues(structure, manifest)
     configured_ligands = _resolve_configured_ligands(structure, manifest)
+    try:
+        configured_residues = resolve_noncanonical_residues(structure, manifest)
+    except KeptResidueError as exc:
+        raise StructureNormalizationError(str(exc)) from exc
     configured_metals = _resolve_configured_metals(structure, manifest)
     _validate_disulfide_selectors(structure, manifest)
     configured_ligand_keys = {id(residue) for _, residue in configured_ligands}
@@ -206,11 +221,22 @@ def normalize_structure_stage(
         and id(residue) not in removed
         and (not kept_chains or residue.id.chain_id in kept_chains)
     ]
+    # A modified residue of a chain is not a heterogen to remove: it has a
+    # peptide bond on each side. One the manifest does not keep, replace or
+    # remove stops the build, whatever remove_unknown_heterogens says.
+    unsettled = unconfigured_modified_residues(
+        structure,
+        settled=set(configured_residues) | set(removed),
+        kept_chains=kept_chains,
+    )
+    if unsettled:
+        raise StructureNormalizationError(describe_unconfigured(unsettled))
     unknown_heterogens = [
         residue
         for residue in likely_heterogens
         if id(residue) not in configured_ligand_keys
         and id(residue) not in configured_metal_residue_keys
+        and id(residue) not in configured_residues
     ]
 
     unknown_heterogen_dicts = _residue_dicts(unknown_heterogens)
@@ -248,7 +274,7 @@ def normalize_structure_stage(
         if id(residue) in removed:
             residues_removed.append({**_residue_dict(residue), "reason": removed[id(residue)]})
             continue
-        if is_standard_protein_residue(residue):
+        if is_standard_protein_residue(residue) or id(residue) in configured_residues:
             keep_residue_ids.add(id(residue))
         elif id(residue) in configured_metal_residue_keys or id(residue) in metal_bound_water_keys:
             # Before the water and ion branches, on purpose. A water bound to
@@ -292,6 +318,19 @@ def normalize_structure_stage(
     filtered_atoms, hydrogenations, hydrogenation_warnings, rewritten = (
         _hydrogenate_configured_ligands(structure, manifest, keep_residue_ids, filtered_atoms)
     )
+    # A kept noncanonical residue is built as a residue of its chain, under
+    # its template's name or with its SMILES's hydrogens.
+    try:
+        residue_atoms, kept_noncanonical, residue_warnings = prepare_noncanonical_residues(
+            [residue for residue in structure.residues if id(residue) in keep_residue_ids],
+            configured_residues,
+        )
+    except KeptResidueError as exc:
+        raise StructureNormalizationError(str(exc)) from exc
+    if residue_atoms:
+        filtered_atoms = _splice(structure, filtered_atoms, residue_atoms)
+        rewritten = {**rewritten, **residue_atoms}
+    hydrogenation_warnings = hydrogenation_warnings + residue_warnings
     # A ligand whose hydrogens were placed or replaced is a new residue as
     # well as new atoms. Keeping the old record let the two disagree: the
     # temporary hydrogenation for xTB checks every atom of every residue it is
@@ -299,9 +338,9 @@ def normalize_structure_stage(
     # residue still had it.
     kept_residues = [
         ResidueRecord(
-            id=residue.id,
+            id=replace(residue.id, resname=rewritten[id(residue)][0].resname),
             atoms=rewritten[id(residue)],
-            record_names=set(residue.record_names),
+            record_names={atom.record_name for atom in rewritten[id(residue)]},
             original_index=residue.original_index,
         )
         if id(residue) in rewritten
@@ -376,6 +415,7 @@ def normalize_structure_stage(
         repair_result=repair_result,
         input_hydrogens=input_hydrogens,
         ligand_hydrogens=hydrogenations,
+        noncanonical_residues_kept=[item.to_dict() for item in kept_noncanonical],
     )
 
 
@@ -504,9 +544,20 @@ def _hydrogenate_configured_ligands(
 
     if not replacements:
         return filtered_atoms, results, warnings, replacements
+    return _splice(structure, filtered_atoms, replacements), results, warnings, replacements
 
-    # Each rewritten ligand takes the place of the residue it replaces, so
-    # residues stay contiguous and in order in the output.
+
+def _splice(
+    structure: PdbStructure,
+    filtered_atoms: list[AtomRecord],
+    replacements: dict[int, list[AtomRecord]],
+) -> list[AtomRecord]:
+    """``filtered_atoms`` with each replaced residue's atoms swapped for its new ones.
+
+    Each rewritten residue takes the place of the residue it replaces, so
+    residues stay contiguous and in order in the output.
+    """
+
     owner = {
         id(atom): id(residue)
         for residue in structure.residues
@@ -521,7 +572,7 @@ def _hydrogenate_configured_ligands(
             rebuilt.append(atom)
         elif residue_key in pending:
             rebuilt.extend(pending.pop(residue_key))
-    return rebuilt, results, warnings, replacements
+    return rebuilt
 
 
 def _require_a_smiles(ligand: LigandConfig, residue: ResidueRecord) -> None:

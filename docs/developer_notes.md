@@ -17,11 +17,20 @@ The workflow is stage-based:
 Each stage writes machine-readable reports and should fail before silently
 changing unsupported chemistry.
 
-## Future Noncanonical Residues
+## Noncanonical Residues
 
-Add noncanonical residue support at the structure classification and `tleap`
-template-loading boundary. Do not treat noncanonical polymer residues as simple
-independent ligands.
+Kept modified residues live under `mdprep.residues`. They are polymer
+residues, never independent ligands: normalisation writes them as ATOM records
+and gives them their template's name or their SMILES's hydrogens
+(`residues/structure.py`), the residue stage makes their libraries right
+after normalisation (`residues/workflow.py`), and every tleap build loads them
+through `forcefield_sources(..., residues=residue_leap_inputs(...))`. A new
+tleap build must pass them too. The frcmod of a parameterised residue keeps
+only terms involving a GAFF2 type (`residues/frcmod.py`); never load a
+parmchk2 frcmod of protein atom types as it comes, since it overrides the
+protein force field for every residue. The planner's per-name questions and
+the template table (`residues/templates.py`) must stay importable under
+Pyodide: no RDKit at module level.
 
 ## Metal Centers
 

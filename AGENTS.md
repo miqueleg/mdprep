@@ -27,6 +27,9 @@ preparation.
   charge must be preserved or failures must be explicit.
 - Do not add molecule-conversion fallback paths.
 - Final topology generation must go through `tleap`.
+- Every `tleap` build loads the kept noncanonical residues' templates; a
+  residue's frcmod holds only terms involving a GAFF2 type, never the protein
+  force field's own.
 - All `tleap` scripts and logs must be preserved.
 - Do not silently ignore `tleap` warnings or errors; report them and fail when
   configured to do so.
@@ -61,7 +64,10 @@ where practical, and documentation.
 
 Explicitly unsupported for v0.2:
 
-- noncanonical amino acids inside peptide chains
+- noncanonical residues at a chain terminus, parameterised ones whose
+  backbone nitrogen has no hydrogen, and kept ones in the same build as a
+  bonded MCPB site or a QM/MM refinement (residues inside a chain are
+  supported; see `docs/noncanonical_residues.md`)
 - covalent ligands
 - ORCA backend
 - Multiwfn dependency

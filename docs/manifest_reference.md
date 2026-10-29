@@ -44,7 +44,8 @@ relative executable path when needed.
   removed is listed in `reports/structure_report.md`.
 - `altloc_policy`: `highest_occupancy`, `first`, or `fail`.
 - `remove_unknown_heterogens`: remove unconfigured heterogens instead of
-  failing.
+  failing. Never a modified residue of a chain: one that nothing keeps,
+  replaces or removes stops the build (see `noncanonical_residues`).
 - `remove_residues`: residues left out on purpose, each with its reason:
 
   ```yaml
@@ -322,6 +323,42 @@ For `model: bonded_mcpb`, the `mcpb` block contains:
 
 See [Metal centers](metals.md) for staging, protonation behavior, QMMESP
 interactions, OpenMM 12-6-4 behavior, and current limits.
+
+## noncanonical_residues
+
+Modified residues of a protein chain kept as they are, bonded into the chain
+by tleap. One block per residue name, since tleap builds every residue of a
+name from one template:
+
+```yaml
+noncanonical_residues:
+- resname: SEP
+  residues:
+  - {chain: B, resname: SEP, resid: 57}
+  parameters: amber_library
+  template: SEP
+```
+
+- `resname`: the residue name, as the input has it.
+- `residues`: every residue of that name the build keeps, each named. Each
+  must sit inside its chain, bonded on both sides.
+- `parameters`: `amber_library`, a template AmberTools ships for the protein
+  force field, or `am1bcc`, parameterised by mdprep from `smiles`.
+- `template` (`amber_library`): `SEP`, `S1P`, `TPO`, `T1P`, `PTR`, `ALY`,
+  `MSE`, `AZF` (for `4II`), `CYF` (for `4CF`) or `HYP`. The name is the
+  protonation (`SEP` dianionic, `S1P` monoanionic); a residue built under a
+  name other than its own is renamed, and the rename reported.
+- `smiles` (`am1bcc`): the residue between an acetyl and a methylamide,
+  `CC(=O)N...C(=O)NC`, or the free amino acid, with the protonation intended.
+- `net_charge` (`am1bcc`): the residue's formal charge, which the SMILES's
+  must match.
+- `parent` (`am1bcc`): the standard amino acid it is a modified form of,
+  required with ff19SB, whose backbone CMAP it takes.
+- `atom_types`: `gaff2`, for the side chain of a parameterised residue.
+
+A kept residue may not also be removed, replaced, overridden in protonation,
+configured as a ligand or a metal ion. Not supported together with a bonded
+MCPB site or QM/MM refinement. See [noncanonical_residues.md](noncanonical_residues.md).
 
 ## refinement
 

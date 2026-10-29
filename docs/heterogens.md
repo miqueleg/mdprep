@@ -40,29 +40,43 @@ rewrote or a prediction:
 
 ## Modified residues
 
-A modified amino acid inside a chain cannot be built: no force field template
-bonds it in. The question is whether to replace each with its standard parent
-(`MSE` with `MET`, `CSO` with `CYS`, `SEP` with `SER`, `PCA` with `GLN`),
-which keeps the backbone and the atoms the two share and builds the rest
-through PDBFixer:
+A modified amino acid inside a chain is built either as its standard parent
+or as it is. Each residue name is one question, offering what applies to it:
 
-```yaml
-structure:
-  repair:
-    backend: pdbfixer
-    replace_modified_residues:
-      - selector: {chain: A, resname: MSE, resid: 14}
-        parent: MET
-```
+- **replace it** by its parent (`MSE` with `MET`, `CSO` with `CYS`, `SEP` with
+  `SER`, `PCA` with `GLN`), which keeps the backbone and the atoms the two
+  share and builds the rest through PDBFixer:
 
-For selenomethionine the answer is proposed, yes: the selenium is how the
-methionine was labelled, not chemistry of the protein. For anything else
-nothing is proposed, because the modification may be what the structure is
-about: a phosphoserine replaced by serine has lost its phosphate. Answering no
-stops the build. The parent comes from the file's `MODRES` records when it has
-them, otherwise from a short table in `mdprep.structure.heterogens`; a
-modified residue with no known parent is refused when the structure is loaded
-(noncanonical amino acids inside a chain are not supported).
+  ```yaml
+  structure:
+    repair:
+      backend: pdbfixer
+      replace_modified_residues:
+        - selector: {chain: A, resname: MSE, resid: 14}
+          parent: MET
+  ```
+
+- **keep it with AmberTools' template**, where AmberTools ships one fitted to
+  the protein force field (phosphoserine, phosphothreonine, phosphotyrosine,
+  acetyl-lysine, selenomethionine, hydroxyproline...);
+- **keep it, parameterised from its SMILES**, as a ligand would be, and bonded
+  into the chain.
+
+Keeping one is [noncanonical_residues.md](noncanonical_residues.md). For
+selenomethionine replacing it is proposed: the selenium is how the methionine
+was labelled, not chemistry of the protein. For anything else nothing is
+proposed, because the modification may be what the structure is about: a
+phosphoserine replaced by serine has lost its phosphate. The parent comes
+from the file's `MODRES` records when it has them, otherwise from a short
+table in `mdprep.structure.heterogens`. A residue with no known parent can only
+be kept; one that can be neither -- no known parent, and at the end of its
+chain, where a kept residue cannot be -- is refused when the structure is
+loaded.
+
+A modified residue the manifest neither keeps, replaces nor removes (with
+`structure.remove_residues`) stops the build as the structure is read,
+whatever `remove_unknown_heterogens` says. It used to be removed with the
+unknown heterogens, which cut its chain in two.
 
 A replacement needs nothing else repaired: what the parent has and the
 modified residue lacked is built whether or not `add_missing_heavy_atoms` is

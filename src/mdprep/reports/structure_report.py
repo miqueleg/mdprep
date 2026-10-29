@@ -82,6 +82,22 @@ def _render_markdown(report: dict[str, Any]) -> str:
         ]
         or ["- None"]
     )
+    lines.extend(["", "## Modified Residues Kept In Their Chains", ""])
+    kept = report.get("noncanonical_residues_kept", [])
+    lines.extend(
+        [
+            f"- {item['chain'] or '<blank>'}:{item['resname']}{item['resid']}"
+            f"{item.get('icode') or ''}: "
+            + (
+                f"AmberTools template {item['template']}"
+                + (f", renamed {item['final_resname']}" if item["renamed"] else "")
+                if item["parameters"] == "amber_library"
+                else f"parameterised from its SMILES, {item['hydrogens_placed']} hydrogens placed"
+            )
+            for item in kept
+        ]
+        or ["- None"]
+    )
     lines.extend(["", "## Histidines", ""])
     lines.extend(_residue_lines(report["histidines"]))
     lines.extend(["", "## Titratable Residues", ""])

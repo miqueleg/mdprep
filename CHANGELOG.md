@@ -2,8 +2,44 @@
 
 ## Unreleased
 
+### Added
+
+- `noncanonical_residues`: modified residues kept in their chain rather than
+  replaced by their parent -- a phosphoserine with its phosphate, an
+  acetyl-lysine, a p-azido-phenylalanine -- and bonded into it by tleap. One
+  block per residue name, every residue named. `parameters: amber_library`
+  builds them from a template AmberTools ships for the protein force field
+  (SEP, S1P, TPO, T1P, PTR from phosaa14SB/phosaa19SB; ALY, MSE, AZF, CYF from
+  ff14SB_modAA/ff19SB_modAA; HYP from the force field itself), the template's
+  name being the protonation. `parameters: am1bcc` parameterises them from
+  their SMILES, capped or as the free amino acid: the residue is cut out
+  between an acetyl and a methylamide built from its neighbours' atoms, given
+  the SMILES's hydrogens, AM1-BCC charges with the backbone's fixed to the
+  force field's for a residue of its sign, the protein's atom types on the
+  backbone and CB and GAFF2's beyond, parmchk2's estimates for the junction
+  only, ff19SB's CMAP of its parent, and a library whose head and tail bond
+  it into the chain. Every topology is read back: each kept residue is there,
+  with its charge, and peptide-bonded on both sides. A residue report records
+  how each was built. See [docs/noncanonical_residues.md](docs/noncanonical_residues.md)
+  and `examples/22_spoiiaa_phosphoserine.yaml` (SpoIIAA, PDB 1H4X).
+- The planner, and so the web builder, asks one question per modified residue
+  name: replace it, keep it with AmberTools' template, or keep it
+  parameterised from its SMILES, offering what applies. Kept, the template's
+  protonation, or the SMILES and charge, follow; for the common modifications
+  they are proposed, with the reason for the protonation.
+- The xTB histidine embedding takes a kept residue's charges, its template's
+  or those mdprep fitted, instead of leaving it out.
+
 ### Changed
 
+- `structure.replace_modified_residues`, a yes/no question for all modified
+  residues together, is replaced by `residue.<NAME>.treatment`. Keeping a
+  modified residue no longer stops the build, and one with no known parent
+  inside its chain is no longer refused: it can be kept.
+- A modified residue of a chain that the manifest neither keeps, replaces nor
+  removes stops the build as the structure is read, even with
+  `remove_unknown_heterogens: true`. It used to be removed with the unknown
+  heterogens, which cut its chain in two.
 - The web builder and the official Colab notebook install mdprep 0.5.1, so a
   structure that arrives with hydrogens and a docked ligand with only its
   polar ones reach the students as they now prepare.

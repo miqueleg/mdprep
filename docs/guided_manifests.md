@@ -52,7 +52,10 @@ that. These have no suggested value, and a front end cannot skip them:
   that was not explicitly configured, so the question names every residue at
   stake.
 - **Removing a heterogen bonded to the protein**, a covalent intermediate for
-  instance, and **replacing a modified residue** other than a selenomethionine.
+  instance, and **what to do with a modified residue** other than a
+  selenomethionine: replace it, or keep it -- and kept, its template's
+  protonation or its SMILES and charge, proposed for the common
+  modifications.
 - **Production length**, when MD is enabled. There is no sensible default.
 
 Free monatomic metals are offered as metal sites, never as GAFF ligands. Bulk
@@ -63,8 +66,11 @@ counterions are treated as solvent and are not asked about at all.
 Before the ligands, the planner sorts out the heterogens that are not ones,
 and asks about each group once, with every member listed:
 
-- **Modified residues** in a chain -- replace each with its standard parent?
-  Proposed yes for selenomethionine; asked without a proposal otherwise.
+- **Modified residues** in a chain, one question per residue name -- replace
+  them by their standard parent, keep them with AmberTools' template, or keep
+  them parameterised from their SMILES
+  ([noncanonical_residues.md](noncanonical_residues.md))? Replacing is
+  proposed for selenomethionine; nothing is proposed otherwise.
 - **Glycans** bonded to the protein -- remove them? Proposed yes.
 - **Other heterogens bonded to the protein** -- remove them? No proposal.
 - **Crystallisation additives** -- remove them? Proposed yes. Answer no to be

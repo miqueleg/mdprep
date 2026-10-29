@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import TYPE_CHECKING, Sequence
 
 from mdprep.config.models import LigandConfig
+
+if TYPE_CHECKING:
+    from mdprep.residues.workflow import ResidueLeapInputs
 
 
 class ForceFieldError(ValueError):
@@ -33,16 +38,31 @@ LIGAND_LEAPRC = {
 
 
 @dataclass(frozen=True)
+class ResidueLibraryFiles:
+    """A noncanonical residue's tleap library and the parameters it needs."""
+
+    resname: str
+    library_path: Path
+    frcmod_path: Path
+
+
+@dataclass(frozen=True)
 class ForceFieldSources:
     protein: str
     water: str
     ligand: list[str]
     water_box: str
     warnings: list[str]
+    # AmberTools' templates for kept noncanonical residues, sourced right
+    # after the protein force field they were fitted to.
+    residues: list[str] = field(default_factory=list)
+    # Libraries mdprep made for kept noncanonical residues, loaded after
+    # every source.
+    residue_files: list[ResidueLibraryFiles] = field(default_factory=list)
 
     @property
     def all_sources(self) -> list[str]:
-        return [self.protein, self.water, *self.ligand]
+        return [self.protein, *self.residues, self.water, *self.ligand]
 
 
 def protein_leaprc(name: str) -> str:
@@ -78,8 +98,17 @@ def forcefield_sources(
     protein_forcefield: str,
     water_model: str,
     ligands: list[LigandConfig],
+    residues: "ResidueLeapInputs | None" = None,
 ) -> ForceFieldSources:
-    ligand_families = sorted({ligand.atom_types for ligand in ligands})
+    """What tleap sources for this system.
+
+    ``residues`` are the kept noncanonical residues' inputs
+    (``mdprep.residues.workflow.residue_leap_inputs``): a parameterised one's
+    GAFF2 side chain needs GAFF2 sourced as a ligand's does.
+    """
+
+    residue_families: Sequence[str] = residues.atom_types if residues is not None else ()
+    ligand_families = sorted({ligand.atom_types for ligand in ligands} | set(residue_families))
     ligand_sources = [ligand_leaprc(family) for family in ligand_families]
     warnings: list[str] = []
     if len(ligand_families) > 1:
@@ -90,4 +119,6 @@ def forcefield_sources(
         ligand=ligand_sources,
         water_box=water_box(water_model),
         warnings=warnings,
+        residues=list(residues.sources) if residues is not None else [],
+        residue_files=list(residues.files) if residues is not None else [],
     )

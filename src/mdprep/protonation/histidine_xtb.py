@@ -27,6 +27,7 @@ from mdprep.protonation.histidine_qmmm import (
 )
 from mdprep.protonation.xtb_parser import XtbEnergyComparison, compare_hid_hie_energies, parse_xtb_energy_file
 from mdprep.protonation.xtb_runner import XtbExecutionError, run_xtb
+from mdprep.residues.embedding import kept_residue_charges
 from mdprep.structure.classify import (
     bulk_ion_charge,
     is_bulk_ion_residue,
@@ -303,6 +304,10 @@ def _select_tautomer_by_embedded_qmmm(
         config=config,
         cache_dir=hist_dir.parent / "embedding_cofactor_charges",
     )
+    # A kept noncanonical residue has no protein template either; its own
+    # charges are its template's, or those mdprep fitted for it.
+    kept_charges, _ = kept_residue_charges(structure, manifest)
+    cofactor_charges.update(kept_charges)
     models: dict[str, QmmmTautomerModel] = {}
     energies: dict[str, float] = {}
     run_dirs: dict[str, Path] = {}

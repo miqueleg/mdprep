@@ -37,10 +37,16 @@ against its charge and multiplicity before antechamber runs.
 
 ## Glycans, Bonded Heterogens Or Modified Residues Stop The Build
 
-mdprep builds neither sugars nor other heterogens bonded to the protein, nor a
-modified amino acid inside a chain. Answering no to removing the first two, or
-to replacing the third by its standard parent, stops the build at that
-question. See [heterogens.md](heterogens.md).
+mdprep builds neither sugars nor other heterogens bonded to the protein.
+Answering no to removing them stops the build at that question. See
+[heterogens.md](heterogens.md).
+
+A modified amino acid inside a chain has to be accounted for: replaced by its
+parent, kept under `noncanonical_residues`, or removed with
+`structure.remove_residues`. One that nothing accounts for stops the build as
+the structure is read, even with `remove_unknown_heterogens: true`, which
+would have cut its chain in two. A kept one must be bonded into its chain on
+both sides; see [noncanonical_residues.md](noncanonical_residues.md).
 
 ## Missing External Tool
 

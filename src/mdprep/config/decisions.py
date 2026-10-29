@@ -27,6 +27,16 @@ from mdprep.ligands.cofactors import (
     known_metal_free_cofactor,
     known_organic_cofactor,
 )
+from mdprep.residues.capping import ResidueCappingError, chain_context
+from mdprep.residues.templates import (
+    KNOWN_RESIDUE_CHEMISTRY,
+    AmberResidueTemplate,
+    KnownResidueChemistry,
+    known_residue_chemistry,
+    missing_template_atoms,
+    proposed_template,
+    templates_for,
+)
 from mdprep.structure.classify import (
     COORDINATING_METAL_ELEMENTS,
     LEAP_RESERVED_RESIDUE_NAMES,
@@ -45,7 +55,9 @@ from mdprep.structure.heterogens import (
     CRYSTALLISATION_ADDITIVES,
     LABELLING_MODIFICATIONS,
     HeterogenGroups,
+    ModifiedResidue,
     classify_heterogens,
+    side_chain_closes_onto_backbone,
 )
 from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
@@ -469,12 +481,14 @@ def plan_decisions(
     # What mdprep cannot parameterise is refused before anything is asked,
     # with the reason, rather than failing in antechamber or tleap later --
     # or worse, building.
+    modified = modified_residue_options(groups, summary.structure.residues)
     unsupported = unsupported_ligands(ligands, summary.structure.residues)
     unsupported += unsupported_heterogens(
         groups,
         summary,
         donor_residue_ids,
         getattr(summary.structure, "assigned_resnames", frozenset()),
+        modified=modified,
     )
     if unsupported:
         raise DecisionError(" ".join(unsupported))
@@ -525,7 +539,7 @@ def plan_decisions(
     decisions: list[Decision] = []
     decisions.extend(_project_decisions(path))
     decisions.extend(_chain_decision(summary))
-    decisions.extend(_structure_decisions(summary, groups))
+    decisions.extend(_structure_decisions(summary, groups, modified))
     decisions.extend(_repair_decisions(summary, groups))
     decisions.extend(_protein_decisions())
     decisions.extend(_protonation_decisions(summary))
@@ -623,6 +637,8 @@ def plan_decisions(
             )
         ],
         "modified_residues": [item.describe() for item in groups.modified_residues],
+        # What each name can become, for the manifest and the proposals.
+        "noncanonical_residues": {name.resname: name.to_finding() for name in modified},
         # What replacing them means, residue by residue, for the manifest.
         "modified_residue_replacements": [
             {
@@ -732,24 +748,35 @@ def unsupported_heterogens(
     summary: InspectionSummary,
     donor_residue_ids: set[ResidueId],
     assigned_resnames: frozenset[str] = frozenset(),
+    *,
+    modified: Sequence["ModifiedResidueName"] | None = None,
 ) -> list[str]:
     """Why each non-ligand heterogen cannot be prepared, if it cannot.
 
-    A modified residue with no standard parent cannot be replaced, and
-    cannot be built as it is. A bonded cofactor that held a metal cannot be
+    A modified residue that can neither be replaced -- it has no standard
+    parent mdprep knows -- nor kept -- it ends a chain, or its backbone is not
+    one mdprep can parameterise, and AmberTools has no template for it --
+    cannot be built. A bonded cofactor that held a metal cannot be
     removed without the metal site it carries, nor built bonded. A bonded
     heterogen on a metal cannot be removed without changing the site. And a
     crosslink between two protein residues is a bond tleap never makes.
     """
 
     problems: list[str] = []
-    for item in groups.modified_residues:
-        if item.parent is None:
+    if modified is None:
+        modified = modified_residue_options(groups, summary.structure.residues)
+    for name in modified:
+        if not name.treatments:
+            reason = name.keep_problem or (
+                "its backbone nitrogen carries no hydrogen, so mdprep cannot "
+                "parameterise it from a SMILES, and AmberTools has no template for it."
+            )
             problems.append(
-                f"{item.residue.id.display()} is a residue of a protein chain "
-                "that is not one of the twenty standard amino acids, and mdprep "
-                "knows no standard one it is a modified form of: noncanonical "
-                "amino acids inside a chain are not supported."
+                f"{', '.join(name.displays)} "
+                f"{'are residues' if len(name.items) > 1 else 'is a residue'} of a "
+                "protein chain that is not one of the twenty standard amino acids. "
+                "mdprep knows no standard one it is a modified form of, and cannot "
+                f"keep it as it is: {reason}"
             )
     bonded = {item.residue.id: item for item in groups.glycans + groups.covalent}
     for metal in summary.metal_ions:
@@ -1040,6 +1067,321 @@ def _listed(lines: Sequence[str], limit: int = 12) -> tuple[str, ...]:
     return shown
 
 
+@dataclass(frozen=True)
+class ModifiedResidueName:
+    """Every modified residue of one name in the chains, and what they can become.
+
+    tleap builds every residue of a name from one template, so a name is one
+    question: whatever replaces the residues, or whatever they are kept as,
+    holds for all of them.
+    """
+
+    resname: str
+    items: tuple[ModifiedResidue, ...]
+    parent: str | None
+    parent_source: str | None
+    # AmberTools templates that fit every one of them, atom for atom.
+    templates: tuple[AmberResidueTemplate, ...]
+    # Why they cannot be kept in the chain, if they cannot.
+    keep_problem: str | None
+    # Whether mdprep can parameterise them: kept, and an amide N-H backbone.
+    parameterisable: bool
+    chemistry: KnownResidueChemistry | None
+
+    @property
+    def displays(self) -> list[str]:
+        return [item.residue.id.display() for item in self.items]
+
+    @property
+    def treatments(self) -> tuple[str, ...]:
+        found: list[str] = []
+        if self.parent is not None:
+            found.append("replace")
+        if self.keep_problem is None and self.templates:
+            found.append("amber_library")
+        if self.parameterisable:
+            found.append("am1bcc")
+        return tuple(found)
+
+    def to_finding(self) -> dict[str, Any]:
+        return {
+            "parent": self.parent,
+            "templates": [template.name for template in self.templates],
+            "treatments": list(self.treatments),
+            "known_chemistry": self.chemistry is not None,
+            "keep_problem": self.keep_problem,
+            "residues": [
+                {
+                    "chain": item.residue.id.chain_id,
+                    "resname": item.residue.id.resname,
+                    "resid": item.residue.id.resid,
+                    "icode": item.residue.id.icode,
+                }
+                for item in self.items
+            ],
+        }
+
+
+def modified_residue_options(
+    groups: HeterogenGroups, residues: Sequence[ResidueRecord]
+) -> list[ModifiedResidueName]:
+    """The modified residues by name, in order, with what each name can become."""
+
+    by_name: dict[str, list[ModifiedResidue]] = {}
+    for item in groups.modified_residues:
+        by_name.setdefault(item.residue.id.resname.strip().upper(), []).append(item)
+    names: list[ModifiedResidueName] = []
+    for resname, items in by_name.items():
+        parent = next((item.parent for item in items if item.parent is not None), None)
+        source = next((item.parent_source for item in items if item.parent is not None), None)
+        keep_problem: str | None = None
+        for item in items:
+            try:
+                chain_context(residues, item.residue)
+            except ResidueCappingError as exc:
+                keep_problem = str(exc)
+                break
+        heavy = [
+            [atom for atom in item.residue.atoms if not is_hydrogen(atom)] for item in items
+        ]
+        templates = tuple(
+            template
+            for template in templates_for(resname)
+            if all(
+                missing_template_atoms(template, (atom.name for atom in atoms)) == ([], [])
+                for atoms in heavy
+            )
+        )
+        # A side chain bonded to its own backbone -- a proline's ring, a
+        # pyroglutamate's lactam, an N-methyl -- leaves the backbone N
+        # without the hydrogen whose charge mdprep fixes.
+        closed = any(
+            side_chain_closes_onto_backbone(
+                ((atom.name.strip(), (atom.x, atom.y, atom.z)) for atom in atoms), "ALA"
+            )
+            for atoms in heavy
+        )
+        names.append(
+            ModifiedResidueName(
+                resname=resname,
+                items=tuple(items),
+                parent=parent,
+                parent_source=source,
+                templates=templates,
+                keep_problem=keep_problem,
+                parameterisable=keep_problem is None and not closed,
+                chemistry=known_residue_chemistry(
+                    resname, (atom.element or atom.name[:1] for atom in heavy[0])
+                ),
+            )
+        )
+    return names
+
+
+def _modified_residue_decisions(
+    names: Sequence[ModifiedResidueName], *, several_chains: bool
+) -> list[Decision]:
+    """One question per modified residue name: replace it, or keep it, and how.
+
+    Kept, a name needs its template or its chemistry: a phosphoserine's
+    phosphate is dianionic as SEP and monoanionic as S1P, and a SMILES is a
+    protonation. Neither is asked to be guessed: each is a question, which
+    a proposal fills in for the modifications whose chemistry mdprep knows.
+    """
+
+    decisions: list[Decision] = []
+    for name in names:
+        treatments = name.treatments
+        if not treatments:
+            continue
+        stem = f"residue.{name.resname}"
+        listed = ", ".join(name.displays[:6]) + (
+            f" and {len(name.displays) - 6} more" if len(name.displays) > 6 else ""
+        )
+        subject = f"{name.resname} ({listed})"
+        targets = tuple(_target_for(item.residue) for item in name.items)
+        chains = sorted({item.residue.id.chain_id for item in name.items})
+        # Asked only when a chain holding one is kept.
+        gate = (Condition("structure.chains", ("all", *chains)),) if several_chains else ()
+        labelling = name.resname in LABELLING_MODIFICATIONS
+        rebuilt = [item.residue.id.display() for item in name.items if item.side_chain_rebuilt]
+        library_names = sorted(
+            {
+                f"{template.library_name('ff14SB')}/{template.library_name('ff19SB')}"
+                if template.library != "protein"
+                else "the protein force field itself"
+                for template in name.templates
+            }
+        )
+        choices: list[Choice] = []
+        if "replace" in treatments:
+            choices.append(
+                Choice(
+                    "replace",
+                    f"Replace by {name.parent}",
+                    "Keeps the backbone and the atoms the two share; PDBFixer builds "
+                    "the rest. The modification is gone from the simulation.",
+                )
+            )
+        if "amber_library" in treatments:
+            choices.append(
+                Choice(
+                    "amber_library",
+                    "Keep it, with AmberTools' template",
+                    "Parameters published for this residue and fitted to the protein "
+                    f"force field ({', '.join(library_names)}).",
+                )
+            )
+        if "am1bcc" in treatments:
+            choices.append(
+                Choice(
+                    "am1bcc",
+                    "Keep it, parameterised from its SMILES",
+                    "GAFF2 side chain on the protein force field's backbone, AM1-BCC "
+                    "charges with the backbone's fixed to the force field's. You give "
+                    "its SMILES and charge next.",
+                )
+            )
+        why = (
+            "A modified amino acid inside a chain is built either as its standard "
+            "parent or as it is. Replacing it keeps the backbone and the atoms the "
+            "two share -- the methionine a selenomethionine stands for, but also a "
+            "serine where a phosphoserine was, whose phosphate is then gone. Kept, "
+            "it is bonded into the chain by tleap from a template: AmberTools' own "
+            "where one exists, which is the better choice, or one mdprep "
+            "parameterises from the SMILES you give, as it would a ligand's. Every "
+            "residue of this name is built the same way: tleap holds one template "
+            "per residue name. "
+        )
+        if rebuilt:
+            why += (
+                f"{', '.join(rebuilt)}: its side chain is bonded to its own "
+                "backbone, as a pyroglutamate's lactam is, and its parent's is not. "
+                "Replacing it builds the side chain again beyond CB, in PDBFixer's "
+                "template rotamer, which can sit close to its neighbours until the "
+                "system is minimised; and it frees the nitrogen: a glutamine at the "
+                "N-terminus is a charged amine where the pyroglutamate was a neutral "
+                "lactam. "
+            )
+        if name.keep_problem is not None:
+            why += f"It cannot be kept as it is: {name.keep_problem} "
+        elif not name.parameterisable:
+            why += (
+                "Its backbone nitrogen carries no hydrogen, so mdprep cannot "
+                "parameterise it from a SMILES. "
+            )
+        why += (
+            "Proposed: replace. These are selenomethionines, the label a methionine "
+            "is given to solve the phases, not chemistry of the protein."
+            if labelling and "replace" in treatments
+            else "Nothing is proposed: whether the modification matters to what you "
+            "are simulating is yours to say."
+        )
+        treatment_id = f"{stem}.treatment"
+        decisions.append(
+            Decision(
+                id=treatment_id,
+                section="residues",
+                question=f"What should be done with {subject}, modified residues in the protein chains?"
+                if len(name.items) > 1
+                else f"What should be done with {subject}, a modified residue in the protein chain?",
+                kind="choice",
+                default="replace" if labelling and "replace" in treatments else None,
+                requires_user_input=not (labelling and "replace" in treatments),
+                why=why,
+                choices=tuple(choices),
+                evidence=_listed(
+                    [
+                        f"{item.describe()}, from {item.parent_source}"
+                        if item.parent is not None
+                        else item.describe()
+                        for item in name.items
+                    ]
+                ),
+                targets=targets,
+                focus="targets",
+                when=gate,
+            )
+        )
+        keeping_library = gate + (Condition(treatment_id, ("amber_library",)),)
+        if "amber_library" in treatments and len(name.templates) > 1:
+            decisions.append(
+                Decision(
+                    id=f"{stem}.template",
+                    section="residues",
+                    question=f"Which AmberTools template should build {subject}?",
+                    kind="choice",
+                    default=None,
+                    requires_user_input=True,
+                    why=(
+                        "A template is a protonation state: AmberTools fitted one for "
+                        "each, and the residue is built under its name. PropKa does "
+                        "not titrate a modified residue, so the state is stated here."
+                    ),
+                    choices=tuple(
+                        Choice(
+                            template.name,
+                            f"{template.name}: {template.description}",
+                            f"Net charge {template.net_charge:+d}.",
+                        )
+                        for template in name.templates
+                    ),
+                    evidence=_listed(name.displays),
+                    targets=targets,
+                    focus="targets",
+                    when=keeping_library,
+                )
+            )
+        if "am1bcc" in treatments:
+            parameterising = gate + (Condition(treatment_id, ("am1bcc",)),)
+            decisions.append(
+                Decision(
+                    id=f"{stem}.net_charge",
+                    section="residues",
+                    question=f"Formal net charge of {subject} as a residue of the chain",
+                    kind="integer",
+                    default=None,
+                    requires_user_input=True,
+                    why=(
+                        "The residue's own charge, its backbone neutral as in the "
+                        "chain: a phosphoserine with its phosphate dianionic is -2. "
+                        "It cannot be read from the structure, and a wrong value "
+                        "builds a plausible topology with the wrong electrostatics."
+                    ),
+                    evidence=_listed(name.displays),
+                    targets=targets,
+                    focus="targets",
+                    when=parameterising,
+                )
+            )
+            decisions.append(
+                Decision(
+                    id=f"{stem}.smiles",
+                    section="residues",
+                    question=f"SMILES of {subject}, with the protonation you intend",
+                    kind="text",
+                    default=None,
+                    requires_user_input=True,
+                    why=(
+                        "The residue between an acetyl and a methylamide, "
+                        "CC(=O)N...C(=O)NC, the way it is parameterised -- or the free "
+                        "amino acid, whose termini mdprep replaces by the chain's. "
+                        "Its protonation is the residue's: PropKa does not titrate a "
+                        "modified residue, and mdprep places the hydrogens the SMILES "
+                        "gives. Bond orders and protonation are taken from it, "
+                        "stereochemistry from the structure. It must have every heavy "
+                        "atom the residue has, and its formal charge must be the net "
+                        "charge above."
+                    ),
+                    evidence=_listed(name.displays),
+                    targets=targets,
+                    focus="targets",
+                    when=parameterising,
+                )
+            )
+    return decisions
+
+
 def _heterogen_group_decisions(groups: HeterogenGroups) -> list[Decision]:
     """What to do with each group of heterogens that are not ligands.
 
@@ -1049,68 +1391,6 @@ def _heterogen_group_decisions(groups: HeterogenGroups) -> list[Decision]:
     """
 
     decisions: list[Decision] = []
-    if groups.modified_residues:
-        labelling = all(
-            item.residue.id.resname.strip().upper() in LABELLING_MODIFICATIONS
-            for item in groups.modified_residues
-        )
-        rebuilt = [
-            item.residue.id.display()
-            for item in groups.modified_residues
-            if item.side_chain_rebuilt
-        ]
-        decisions.append(
-            Decision(
-                id="structure.replace_modified_residues",
-                section="structure",
-                question=(
-                    "Replace the modified residues in the protein chains by their "
-                    "standard amino acids?"
-                ),
-                kind="boolean",
-                # A selenomethionine is how a methionine was labelled to solve
-                # the phases; anything else may be the chemistry of the
-                # protein, and losing it is the user's call.
-                default="true" if labelling else None,
-                requires_user_input=not labelling,
-                why=(
-                    "No force field template bonds a modified amino acid into a "
-                    "chain, so mdprep cannot build one as it is. Replacing it by "
-                    "its standard parent keeps the backbone and the atoms the two "
-                    "share and builds the rest -- the methionine a "
-                    "selenomethionine stands for, but also a serine where a "
-                    "phosphoserine was, whose phosphate is then gone from the "
-                    "simulation. Answering no stops the build. "
-                    + (
-                        f"{', '.join(rebuilt)}: its side chain is bonded to its own "
-                        "backbone, as a pyroglutamate's lactam is, and its parent's "
-                        "is not. Replacing it builds the side chain again beyond CB, "
-                        "in PDBFixer's template rotamer, which can sit close to its "
-                        "neighbours until the system is minimised; and it frees the "
-                        "nitrogen: a glutamine at the N-terminus is a charged amine "
-                        "where the pyroglutamate was a neutral lactam. "
-                        if rebuilt
-                        else ""
-                    )
-                    + (
-                        "Proposed yes: these are selenomethionines, the label a "
-                        "methionine is given to solve the phases, not chemistry of "
-                        "the protein."
-                        if labelling
-                        else "Nothing is proposed: whether the modification matters "
-                        "to what you are simulating is yours to say."
-                    )
-                ),
-                evidence=_listed(
-                    [
-                        f"{item.describe()}, from {item.parent_source}"
-                        for item in groups.modified_residues
-                    ]
-                ),
-                targets=tuple(_target_for(item.residue) for item in groups.modified_residues),
-                focus="targets",
-            )
-        )
     if groups.glycans:
         decisions.append(
             Decision(
@@ -1206,7 +1486,9 @@ def _heterogen_group_decisions(groups: HeterogenGroups) -> list[Decision]:
 
 
 def _structure_decisions(
-    summary: InspectionSummary, groups: HeterogenGroups | None = None
+    summary: InspectionSummary,
+    groups: HeterogenGroups | None = None,
+    modified: Sequence["ModifiedResidueName"] = (),
 ) -> list[Decision]:
     groups = groups if groups is not None else HeterogenGroups()
     decisions: list[Decision] = []
@@ -1284,6 +1566,9 @@ def _structure_decisions(
                 focus="targets",
             )
         )
+    decisions.extend(
+        _modified_residue_decisions(modified, several_chains=len(protein_chain_ids(summary)) > 1)
+    )
     decisions.extend(_heterogen_group_decisions(groups))
     # A heterogen asked about in a group above is not an unknown one.
     unknown = [
@@ -2531,6 +2816,7 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
         )
 
     _require_buildable_heterogens(resolved)
+    _require_buildable_residues(plan, resolved)
     bonded_sites = [
         decision.id.split(".")[1]
         for decision in plan.decisions
@@ -2576,6 +2862,7 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
     keep_chains = _kept_chains(plan, resolved.get("structure.chains", "all"))
     removed = _in_chains(_removed_residues(plan, resolved), keep_chains)
     replacements = _in_chains(_modified_residue_replacements(plan, resolved), keep_chains)
+    residue_blocks = _noncanonical_residue_blocks(plan, resolved, keep_chains)
     repair: dict[str, Any] = {}
     if resolved.get("structure.repair.add_missing_heavy_atoms") or replacements:
         repair = {
@@ -2620,6 +2907,7 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
         },
         "ligands": ligand_blocks,
         "metals": metal_blocks,
+        **({"noncanonical_residues": residue_blocks} if residue_blocks else {}),
         "refinement": {},
         "solvation": _solvation_block(resolved),
         "validation": {
@@ -2639,11 +2927,6 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
 # What stops the build when a group of heterogens is kept: none of them can
 # be built as it is.
 KEEPING_STOPS_THE_BUILD = {
-    "structure.replace_modified_residues": (
-        "mdprep cannot build a modified amino acid inside a chain. Answer yes to "
-        "replace each by its standard parent, or prepare this structure with a "
-        "tool that has templates for them."
-    ),
     "structure.remove_glycans": (
         "mdprep does not build glycans bonded to a protein. Answer yes to "
         "prepare the protein without them, or prepare the glycoprotein with "
@@ -2661,6 +2944,52 @@ def _require_buildable_heterogens(resolved: Mapping[str, Any]) -> None:
     for decision_id, message in KEEPING_STOPS_THE_BUILD.items():
         if resolved.get(decision_id) is False:
             raise DecisionError(message, decision_id=decision_id)
+
+
+def _kept_residue_names(plan: DecisionPlan, resolved: Mapping[str, Any]) -> list[str]:
+    return [
+        resname
+        for resname in plan.findings.get("noncanonical_residues", {})
+        if resolved.get(f"residue.{resname}.treatment") in {"amber_library", "am1bcc"}
+    ]
+
+
+def _require_buildable_residues(plan: DecisionPlan, resolved: Mapping[str, Any]) -> None:
+    """Kept residues mdprep cannot build with the rest of the answers."""
+
+    kept = _kept_residue_names(plan, resolved)
+    if not kept:
+        return
+    bonded = [
+        decision.id.split(".")[1]
+        for decision in plan.decisions
+        if decision.section == "metals"
+        and decision.id.endswith(".model")
+        and resolved.get(decision.id) == "bonded_mcpb"
+    ]
+    if bonded:
+        raise DecisionError(
+            f"Keeping {kept[0]} and modelling {bonded[0]} bonded cannot be built "
+            "together yet: MCPB.py builds its own tleap system, which does not load "
+            "the residue's template. Replace the residue by its parent, or model the "
+            "metal nonbonded.",
+            decision_id=f"residue.{kept[0]}.treatment",
+        )
+    if resolved.get("protein.forcefield") == "ff19SB":
+        orphans = [
+            resname
+            for resname in kept
+            if resolved.get(f"residue.{resname}.treatment") == "am1bcc"
+            and plan.findings["noncanonical_residues"][resname]["parent"] is None
+        ]
+        if orphans:
+            raise DecisionError(
+                f"ff19SB corrects every residue's backbone with a CMAP chosen by its "
+                f"name, and a residue mdprep parameterises takes its parent's; "
+                f"{', '.join(orphans)} has no standard parent mdprep knows. Choose "
+                "ff14SB, or state the parent in the manifest's noncanonical_residues.",
+                decision_id="protein.forcefield",
+            )
 
 
 # Why each grouped removal removes what it does, for the structure report.
@@ -2711,8 +3040,11 @@ def _removed_residues(
 def _modified_residue_replacements(
     plan: DecisionPlan, resolved: Mapping[str, Any]
 ) -> list[dict[str, Any]]:
-    if resolved.get("structure.replace_modified_residues") is not True:
-        return []
+    replaced = {
+        resname
+        for resname in plan.findings.get("noncanonical_residues", {})
+        if resolved.get(f"residue.{resname}.treatment") == "replace"
+    }
     return [
         {
             "selector": {
@@ -2724,7 +3056,44 @@ def _modified_residue_replacements(
             "parent": item["parent"],
         }
         for item in plan.findings.get("modified_residue_replacements", [])
+        if item["resname"].strip().upper() in replaced
     ]
+
+
+def _noncanonical_residue_blocks(
+    plan: DecisionPlan, resolved: Mapping[str, Any], keep_chains: Sequence[str]
+) -> list[dict[str, Any]]:
+    """One noncanonical_residues block per residue name the answers keep."""
+
+    blocks: list[dict[str, Any]] = []
+    for resname, finding in plan.findings.get("noncanonical_residues", {}).items():
+        treatment = resolved.get(f"residue.{resname}.treatment")
+        if treatment not in {"amber_library", "am1bcc"}:
+            continue
+        residues = [
+            dict(selector)
+            for selector in finding["residues"]
+            if not keep_chains or selector["chain"] in keep_chains
+        ]
+        if not residues:
+            continue
+        block: dict[str, Any] = {
+            "resname": resname,
+            "residues": residues,
+            "parameters": treatment,
+        }
+        if treatment == "amber_library":
+            templates = finding["templates"]
+            block["template"] = (
+                resolved[f"residue.{resname}.template"] if len(templates) > 1 else templates[0]
+            )
+        else:
+            block["smiles"] = resolved[f"residue.{resname}.smiles"]
+            block["net_charge"] = resolved[f"residue.{resname}.net_charge"]
+            if finding["parent"] is not None:
+                block["parent"] = finding["parent"]
+        blocks.append(block)
+    return blocks
 
 
 def _in_chains(items: list[dict[str, Any]], keep_chains: Sequence[str]) -> list[dict[str, Any]]:
@@ -2798,6 +3167,7 @@ def answer_conflicts(plan: DecisionPlan, answers: Mapping[str, Any]) -> Decision
     ]
     try:
         _require_buildable_heterogens(shared)
+        _require_buildable_residues(plan, shared)
         _require_one_bonded_fit(plan, shared, bonded)
         _require_a_fit_for_fitted_cofactors(plan, shared)
     except DecisionError as exc:
@@ -3594,6 +3964,21 @@ def _proposals(
                 + f" = {value:+d}. Change it if that is not this site.",
             )
     asked = {decision.id for decision in plan.decisions}
+    for resname, finding in plan.findings.get("noncanonical_residues", {}).items():
+        chemistry = KNOWN_RESIDUE_CHEMISTRY.get(resname) if finding.get("known_chemistry") else None
+        if chemistry is not None:
+            for field_name, value in (
+                ("smiles", chemistry.smiles),
+                ("net_charge", str(chemistry.net_charge)),
+            ):
+                decision_id = f"residue.{resname}.{field_name}"
+                if decision_id in asked:
+                    proposals[decision_id] = (value, chemistry.explanation)
+        template_id = f"residue.{resname}.template"
+        if template_id in asked and chemistry is not None:
+            proposal = proposed_template(resname, finding["templates"])
+            if proposal is not None:
+                proposals[template_id] = proposal
     for table, finding in (
         (KNOWN_METAL_FREE_COFACTORS, "known_cofactors"),
         (KNOWN_ORGANIC_COFACTORS, "known_organic_cofactors"),
