@@ -320,6 +320,17 @@ def add_ligand_hydrogens(
 
     from rdkit import Chem
 
+    # Sanitised first: AddHs places a hydrogen from its atom's hybridisation,
+    # and RDKit 2026.03 leaves that unset on a molecule built like this one,
+    # so a methyl's third hydrogen went to the origin -- (0, 0, 0), wherever
+    # the ligand was -- and sqm failed to converge on it.
+    try:
+        Chem.SanitizeMol(molecule)
+    except Exception as exc:
+        raise LigandHydrogenationError(
+            f"Ligand {ligand_id}: the molecule the SMILES describes on these "
+            f"coordinates is not chemically valid ({exc})."
+        ) from exc
     molecule = Chem.AddHs(molecule, addCoords=True)
     try:
         Chem.SanitizeMol(molecule)
@@ -338,6 +349,7 @@ def add_ligand_hydrogens(
         original_index=residue.original_index,
     )
     new_atoms, added = _collect_new_hydrogens(molecule, heavy_atoms, bare)
+    _verify_hydrogens_bonded(new_atoms, heavy_atoms, ligand_id=ligand_id)
     updated = ResidueRecord(
         id=residue.id,
         atoms=heavy_atoms + new_atoms,
@@ -575,6 +587,47 @@ def _collect_new_hydrogens(
                 )
             )
     return created, len(created)
+
+
+# A hydrogen's bond is about 1 A to any atom a ligand has; this admits them
+# all and nothing a misplaced one would be.
+_PLACED_HYDROGEN_BOND_ANGSTROM = (0.85, 1.25)
+
+
+def _verify_hydrogens_bonded(
+    hydrogens: Sequence[AtomRecord],
+    heavy_atoms: Sequence[AtomRecord],
+    *,
+    ligand_id: str,
+) -> None:
+    """Every placed hydrogen must sit at a bond's length from an atom of its own.
+
+    RDKit reports nothing when it cannot place one: the hydrogen is simply
+    at the origin. The run then failed in sqm, or worse, did not.
+    """
+
+    lowest, highest = _PLACED_HYDROGEN_BOND_ANGSTROM
+    for hydrogen in hydrogens:
+        nearest, heavy = min(
+            (
+                (
+                    (hydrogen.x - atom.x) ** 2
+                    + (hydrogen.y - atom.y) ** 2
+                    + (hydrogen.z - atom.z) ** 2
+                )
+                ** 0.5,
+                atom,
+            )
+            for atom in heavy_atoms
+        )
+        if not lowest <= nearest <= highest:
+            raise LigandHydrogenationError(
+                f"Ligand {ligand_id}: RDKit placed hydrogen {hydrogen.name} at "
+                f"({hydrogen.x:.3f}, {hydrogen.y:.3f}, {hydrogen.z:.3f}), "
+                f"{nearest:.2f} A from the nearest atom, {heavy.name}, where a "
+                "bond is about 1 A. It did not manage to place it; mdprep will "
+                "not build a ligand with a hydrogen that is not bonded."
+            )
 
 
 def _verify_heavy_atoms_unchanged(

@@ -61,7 +61,15 @@ bond.
 
 Use `model: bonded_mcpb` for an explicitly reviewed MCPB.py bonded site. The
 site may contain multiple interacting metal ions, protein residues, retained
-waters, and configured ligands/cofactors:
+waters, and configured ligands/cofactors.
+
+MCPB.py bonds every donor atom (N, O, S and the halides) within
+`mcpb.cutoff_angstrom` of the metal by distance alone, whatever `mcpb.bonds`
+says, so mdprep refuses a site where an atom within the cutoff is not a
+declared bond. To leave a nearby atom unbonded -- a substrate docked against
+the metal -- lower the cutoff below it: a declared bond beyond the cutoff is
+handed to MCPB.py explicitly (`add_bonded_pairs`) and is kept. The builders
+do this when a residue is unticked among a metal's bonds.
 
 MCPB.py requires `AMBERHOME` even when the executable is installed in a Conda
 environment. mdprep resolves the AmberTools root from the configured MCPB.py

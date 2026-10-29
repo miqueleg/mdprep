@@ -2,11 +2,40 @@
 
 ## Unreleased
 
+### Added
+
+- A metal's bonds are a checklist in the web builder and `mdprep init
+  --interactive`: every residue with a donor atom within 2.6 A is a box, all
+  ticked, with its atoms and their distances. Unticking one -- a substrate
+  docked too close to an iron that has no water of its own -- leaves it
+  unbonded and fits the site without it: its bonds are left out of
+  `mcpb.bonds`, MCPB.py's `cutoff_angstrom` drops just below its nearest
+  atom, the bonds kept beyond that are handed to MCPB.py by name, and the
+  proposed model charge no longer counts it. A ligand unticked while its
+  charges still come from the site's fit is stopped at the checklist with
+  what to change. It replaces the single yes/no on the whole shell; an
+  answer given to that still reads as all ticked or none.
+
 ### Changed
 
 - The web builder and the official Colab notebook install mdprep 0.5.1, so a
   structure that arrives with hydrogens and a docked ligand with only its
   polar ones reach the students as they now prepare.
+
+### Fixed
+
+- RDKit 2026.03, which the Colab runtime installs, left some of the
+  hydrogens it places from a SMILES at the origin when the molecule had not
+  been sanitised first: one or two on a saturated ligand (ethanol, methanol,
+  isopropanol, propane, an alkylamine), none on one with a double bond or a
+  ring. sqm then failed to converge, or a build could have carried them. The molecule is
+  now sanitised before they are placed, and every placed hydrogen must sit
+  at a bond's length from an atom of its own or the run stops.
+- A ligand written after the crystal waters -- a docked substrate appended to
+  the end of the file -- stopped the pre-MCPB tleap step as an unexpected
+  rename. tleap writes every water after everything else, and its output is
+  matched back by position, so it is now matched in that order. Its input
+  keeps the file's order, which MCPB.py's bond commands count residues in.
 
 ## 0.5.1 - 2026-10-26
 

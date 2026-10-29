@@ -499,3 +499,87 @@ def test_a_chlorin_is_still_read_bond_by_bond():
 
     assert porphine.HasSubstructMatch(core)
     assert not chlorin.HasSubstructMatch(core)
+
+
+def test_every_placed_hydrogen_is_at_a_bond_length_from_its_atom():
+    """RDKit 2026.03 put a methyl's third hydrogen at the origin unless sanitised first."""
+    from math import dist
+
+    structure = read_pdb("tests/data/metal_sites/syrb2_site_docked_substrate.pdb")
+    ethanol = next(r for r in structure.residues if r.id.resname == "SUB")
+
+    result = add_ligand_hydrogens(ethanol, "CCO", ligand_id="sub", net_charge=0)
+
+    heavy = [a for a in result.residue.atoms if a.element != "H"]
+    hydrogens = [a for a in result.residue.atoms if a.element == "H"]
+    assert len(hydrogens) == 6
+    for hydrogen in hydrogens:
+        nearest = min(dist((hydrogen.x, hydrogen.y, hydrogen.z), (a.x, a.y, a.z)) for a in heavy)
+        assert 0.9 < nearest < 1.2, hydrogen.name
+
+
+def embedded_without_hydrogens(smiles: str) -> ResidueRecord:
+    """``smiles`` embedded by RDKit, its hydrogens removed, 20 A from the origin."""
+    from dataclasses import replace
+
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    molecule = Chem.AddHs(Chem.MolFromSmiles(smiles))
+    AllChem.EmbedMolecule(molecule, randomSeed=7)
+    molecule = Chem.RemoveHs(molecule)
+    position = molecule.GetConformer().GetAtomPosition
+    return residue_of(
+        *(
+            replace(
+                atom(f"{item.GetSymbol()}{item.GetIdx() + 1}", item.GetSymbol(), item.GetIdx()),
+                x=position(item.GetIdx()).x + 20.0,
+                y=position(item.GetIdx()).y + 20.0,
+                z=position(item.GetIdx()).z + 20.0,
+            )
+            for item in molecule.GetAtoms()
+        )
+    )
+
+
+@pytest.mark.parametrize(
+    ("smiles", "hydrogens"),
+    [("CO", 4), ("CC(C)O", 8), ("CCC", 8), ("NCCCC", 11), ("Cc1ccccc1", 8)],
+)
+def test_no_hydrogen_is_left_at_the_origin(smiles, hydrogens):
+    """Under RDKit 2026.03, unsanitised, each saturated one lost a hydrogen or
+    two to the origin; toluene, with its ring, did not. (Under earlier RDKit
+    releases every one passes either way.)"""
+    from math import dist
+
+    bare = embedded_without_hydrogens(smiles)
+
+    result = add_ligand_hydrogens(bare, smiles, ligand_id="lig", net_charge=0)
+
+    heavy = [a for a in result.residue.atoms if a.element != "H"]
+    placed = [a for a in result.residue.atoms if a.element == "H"]
+    assert len(placed) == hydrogens
+    for hydrogen in placed:
+        nearest = min(dist((hydrogen.x, hydrogen.y, hydrogen.z), (a.x, a.y, a.z)) for a in heavy)
+        assert 0.9 < nearest < 1.2, hydrogen.name
+
+
+def test_a_hydrogen_rdkit_could_not_place_stops_the_run(monkeypatch):
+    """It is reported at the origin, with nothing said; the run must not carry it."""
+    from rdkit import Chem
+    from rdkit.Geometry import Point3D
+
+    real_add_hs = Chem.AddHs
+
+    def add_hs_losing_one(molecule, *args, **kwargs):
+        result = real_add_hs(molecule, *args, **kwargs)
+        last = result.GetNumAtoms() - 1
+        result.GetConformer().SetAtomPosition(last, Point3D(0.0, 0.0, 0.0))
+        return result
+
+    monkeypatch.setattr(Chem, "AddHs", add_hs_losing_one)
+    structure = read_pdb("tests/data/metal_sites/syrb2_site_docked_substrate.pdb")
+    ethanol = next(r for r in structure.residues if r.id.resname == "SUB")
+
+    with pytest.raises(LigandHydrogenationError, match="did not manage to place it"):
+        add_ligand_hydrogens(ethanol, "CCO", ligand_id="sub", net_charge=0)
