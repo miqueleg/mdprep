@@ -18,6 +18,7 @@ a guess without noticing.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import math
 from pathlib import Path
 from typing import Any, Literal, Mapping, Sequence
 
@@ -54,7 +55,10 @@ from mdprep.structure.oligomer import OligomerAnalysis, analyse_oligomer
 from mdprep.structure.pdb import AltlocPolicy
 
 
-DecisionKind = Literal["choice", "integer", "number", "text", "boolean"]
+# A "multichoice" is a checklist: its answer is the values ticked, in the
+# order of its choices, and its default the ones ticked to begin with. As a
+# condition it counts as "true" when anything is ticked.
+DecisionKind = Literal["choice", "integer", "number", "text", "boolean", "multichoice"]
 
 # What a 3D viewer should show while a question is on screen.
 #   none      -- the question has no structural aspect (a project name, a step count)
@@ -312,6 +316,9 @@ class DecisionPlan:
 
 def _as_answer_token(value: Any) -> str:
     if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (list, tuple)):
+        # A checklist: whether anything is ticked.
         return "true" if value else "false"
     return str(value)
 
@@ -602,6 +609,23 @@ def plan_decisions(
             if not _ligand_has_hydrogens(residue)
         ],
         "metal_ions": [residue.id.display() for residue in summary.metal_ions],
+        # Each metal's candidate donors and how far each is, so a manifest
+        # built from the plan alone can keep MCPB.py's bonding cutoff below
+        # a donor the user left unticked.
+        "metal_donors": {
+            metal_site_id_for(metal): [
+                {
+                    "residue": donor.id.display(),
+                    "atom": atom.name,
+                    "element": (atom.element or "").strip(),
+                    "distance": round(distance, 3),
+                }
+                for donor, atom, distance in metal_donor_atoms(
+                    summary.structure.residues, metal
+                )
+            ]
+            for metal in summary.metal_ions
+        },
         "crystal_ions": [residue.id.display() for residue in summary.crystal_ions],
         "coordinating_waters": [
             residue.id.display() for residue in coordinating_water_residues(summary)
@@ -1680,10 +1704,13 @@ def _ligand_decisions(
             kind="choice",
             why=(
                 (
-                    "This residue coordinates a metal, so it is part of the metal "
-                    "site's quantum model. Taking its charges from that same fit "
-                    "keeps the site electrostatically consistent; fitting them "
-                    "separately does not."
+                    "This residue has an atom within bonding distance of a metal, "
+                    "so it is proposed as part of the metal site's quantum model, "
+                    "and taking its charges from that same fit keeps the site "
+                    "electrostatically consistent; fitting them separately does "
+                    "not. If it is only near the metal -- a substrate docked "
+                    "against it -- choose AM1-BCC here, and leave it unticked "
+                    "among the metal's bonds."
                 )
                 if coordinates_metal
                 else (
@@ -2063,21 +2090,43 @@ def _metal_decisions(
         # Nothing to bond to, so the bonded model cannot be built here.
         return decisions
 
+    # One box per residue, nearest first: a bidentate carboxylate or a
+    # porphyrin is bonded through all its atoms in range or through none.
+    donor_choices: list[Choice] = []
+    for donor_residue in donor_residues:
+        atoms = [
+            f"{atom.name} at {distance:.2f} A"
+            for other, atom, distance in donors
+            if other.id == donor_residue.id
+        ]
+        donor_choices.append(
+            Choice(
+                donor_residue.id.display(),
+                donor_residue.id.display(),
+                ", ".join(atoms),
+            )
+        )
     decisions.append(
         Decision(
             id=confirm_id,
             section="metals",
-            question=(
-                f"Are these the atoms coordinating {display}?"
-            ),
-            kind="boolean",
-            default=None,
+            question=f"Which of these are bonded to {display}?",
+            kind="multichoice",
+            choices=tuple(donor_choices),
+            # Every one in range is ticked to begin with, and the answer is
+            # still the user's: nothing is bonded that was not shown here.
+            default=",".join(choice.value for choice in donor_choices),
             requires_user_input=True,
             why=(
-                "mdprep proposes this shell from interatomic distances alone. "
-                "Every bond it contains becomes a bonded parameter, so it has "
-                "to be confirmed by someone who knows the chemistry. Answer no "
-                "to write the site out by hand instead."
+                "Each one ticked becomes a bond to the metal, with bonded "
+                "parameters from the MCPB fit and its atoms in the metal "
+                "site's quantum model. They are ticked because each has an "
+                f"atom within {COORDINATION_CUTOFF_ANGSTROM:.1f} A of the metal, "
+                "and distance alone does not make a bond: untick one that is "
+                "only close -- a substrate docked against the metal, say, in "
+                "a site with no water on it. It then stays where it is, "
+                "unbonded, and the site is fitted without it. Untick them all "
+                "to write the site's bonds by hand instead."
             ),
             evidence=donor_evidence,
             # targets[0] is the metal; the rest are the donor ATOMS, named,
@@ -2454,6 +2503,8 @@ def coerce_answer(decision: Decision, raw: Any) -> Any:
             raise DecisionError(f"{decision.id}: expected a number, got {raw!r}") from exc
         _check_bounds(decision, value)
         return value
+    if decision.kind == "multichoice":
+        return _coerce_selection(decision, raw)
     token = str(raw).strip()
     if decision.kind == "choice":
         allowed = {choice.value for choice in decision.choices}
@@ -2464,6 +2515,36 @@ def coerce_answer(decision: Decision, raw: Any) -> Any:
     if not token:
         raise DecisionError(f"{decision.id}: a value is required")
     return token
+
+
+def _coerce_selection(decision: Decision, raw: Any) -> tuple[str, ...]:
+    """The values a checklist answer ticks, in the order of its choices.
+
+    Accepted as a list, as a comma-separated string, or as yes and no for
+    every box and none -- which is also how an answer given when the
+    question was still a yes/no reads.
+    """
+
+    allowed = [choice.value for choice in decision.choices]
+    if isinstance(raw, bool):
+        return tuple(allowed) if raw else ()
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        items = [str(item).strip() for item in raw]
+    else:
+        token = str(raw).strip()
+        if token.lower() in {"true", "yes", "y", "all"}:
+            return tuple(allowed)
+        if token.lower() in {"false", "no", "n", "none", ""}:
+            return ()
+        items = [item.strip() for item in token.split(",")]
+    items = [item for item in items if item]
+    unknown = [item for item in items if item not in allowed]
+    if unknown:
+        raise DecisionError(
+            f"{decision.id}: {', '.join(repr(item) for item in unknown)} is not one "
+            f"of {allowed}"
+        )
+    return tuple(value for value in allowed if value in items)
 
 
 def _check_bounds(decision: Decision, value: int | float) -> None:
@@ -2557,8 +2638,7 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
             for decision in plan.decisions
             if decision.id.endswith(".confirm_donors")
             and decision.id.split(".")[1] in bonded_sites
-            and resolved.get(decision.id)
-            for target in decision.targets[1:]
+            for target in selected_donor_targets(plan, resolved, decision.id.split(".")[1])
             if target.resname in {"HOH", "WAT", "H2O", "DOD"}
         ]
         if waters_on_metal:
@@ -2754,8 +2834,37 @@ def share_answers(plan: DecisionPlan, resolved: Mapping[str, Any]) -> dict[str, 
             continue
         if not all(condition.is_met(shared) for condition in decision.when):
             continue
-        shared[decision.id] = shared[decision.copy_of]
+        value = shared[decision.copy_of]
+        if decision.kind == "multichoice":
+            value = _selection_for_copy(plan, decision, value)
+        shared[decision.id] = value
     return shared
+
+
+def _selection_for_copy(
+    plan: DecisionPlan, decision: Decision, reference_answer: Any
+) -> tuple[str, ...]:
+    """A copy's checklist, ticked where the reference copy's is.
+
+    The boxes name residues, and a copy's are its own: B's histidine is
+    ticked when A's counterpart is. A residue with no counterpart in the
+    reference copy keeps its box ticked, as it was proposed.
+    """
+
+    reference = plan.by_id(decision.copy_of)  # type: ignore[arg-type]
+    ticked = set(coerce_answer(reference, reference_answer))
+    offered = {choice.value for choice in reference.choices}
+    counterparts = plan.oligomer.counterparts if plan.oligomer is not None else {}
+    residue_of = {
+        _residue_id_of(target).display(): _residue_id_of(target)
+        for target in decision.targets[1:]
+    }
+    selection = []
+    for choice in decision.choices:
+        source = counterparts.get(residue_of.get(choice.value))  # type: ignore[arg-type]
+        if source is None or source.display() not in offered or source.display() in ticked:
+            selection.append(choice.value)
+    return tuple(selection)
 
 
 def answer_conflicts(plan: DecisionPlan, answers: Mapping[str, Any]) -> DecisionError | None:
@@ -3029,18 +3138,21 @@ def _require_a_fit_for_fitted_cofactors(
         (target.chain, target.resid, target.icode)
         for decision in shells
         if resolved.get(f"metal.{decision.id.split('.')[1]}.model") == "bonded_mcpb"
-        and resolved.get(decision.id) is not False
-        for target in decision.targets[1:]
+        for target in selected_donor_targets(plan, resolved, decision.id.split(".")[1])
     }
     for decision in shells:
         site = decision.id.split(".")[1]
         model = resolved.get(f"metal.{site}.model")
-        confirmed = resolved.get(decision.id)
-        if model is None or (model == "bonded_mcpb" and confirmed is not False):
+        if model is None:
             continue
         donors = {
             (target.chain, target.resid, target.icode) for target in decision.targets[1:]
         } - fitted
+        if not donors:
+            continue
+        written_by_hand = model == "bonded_mcpb" and not selected_donor_targets(
+            plan, resolved, site
+        )
         for ligand in plan.decisions:
             if ligand.section != "ligands" or not ligand.id.endswith(".charge_method"):
                 continue
@@ -3051,15 +3163,22 @@ def _require_a_fit_for_fitted_cofactors(
                 continue
             metal = _residue_id_of(decision.subject).display()
             cofactor = _residue_id_of(subject).display()
-            why = (
-                "is modelled nonbonded, so there is no fit"
-                if model != "bonded_mcpb"
-                else "has its coordination shell written by hand, so mdprep fits nothing"
-            )
+            if model != "bonded_mcpb":
+                why = "is modelled nonbonded, so there is no fit"
+                remedy = ", or model the site bonded"
+            elif written_by_hand:
+                why = "has its coordination shell written by hand, so mdprep fits nothing"
+                remedy = ", or tick its bonds"
+            else:
+                why = f"is fitted without {cofactor}: you left it unticked among the site's bonds"
+                remedy = (
+                    " -- a ligand that is only near the metal needs charges of its "
+                    f"own -- or tick {cofactor}"
+                )
             raise DecisionError(
                 f"{cofactor}'s charges were to come from the MCPB fit of the site at "
                 f"{metal}, which {why}. Go back and give {cofactor} another charge "
-                "method, such as AM1-BCC, or model the site bonded.",
+                f"method, such as AM1-BCC{remedy}.",
                 decision_id=f"metal.{site}.model"
                 if model != "bonded_mcpb"
                 else decision.id,
@@ -3234,6 +3353,7 @@ def _metal_blocks(
         if not resolved.get(f"metal.{site_id}.confirm_donors"):
             continue
         confirm = plan.by_id(f"metal.{site_id}.confirm_donors")
+        bonded_donors = selected_donor_targets(plan, resolved, site_id)
         # The region's spin is the site's: one site is fitted, and the
         # cofactors in it are closed shell.
         multiplicity = resolved["refinement.total_qm_multiplicity"]
@@ -3250,7 +3370,7 @@ def _metal_blocks(
                 "element": _monatomic_ion_element(donor),
                 "charge": _monatomic_ion_charge(donor),
             }
-            for donor in confirm.targets[1:]
+            for donor in bonded_donors
             if _is_monatomic_ion_target(donor)
         ]
         site_block: dict[str, Any] = {
@@ -3266,13 +3386,13 @@ def _metal_blocks(
                 "mcpb": {
                     "workflow": "pyscf",
                     "provisional_nonbonded_parameter_set": "12_6",
-                    "cutoff_angstrom": COORDINATION_CUTOFF_ANGSTROM,
+                    "cutoff_angstrom": mcpb_cutoff_for(plan, resolved, site_id),
                     "bonds": [
                         {
                             "ion": confirm.subject.to_atom_selector(),
                             "coordinator": donor.to_atom_selector(),
                         }
-                        for donor in confirm.targets[1:]
+                        for donor in bonded_donors
                     ],
                     "additional_residues": [],
                     "force_constant_method": "seminario",
@@ -3289,13 +3409,78 @@ def _metal_blocks(
                         porphyrin=any(
                             _id_stem_of(_residue_id_of(donor))
                             in plan.findings.get("known_cofactors", {})
-                            for donor in confirm.targets[1:]
+                            for donor in bonded_donors
                         ),
                     ),
                 },
             }
         )
     return blocks
+
+
+def selected_donor_targets(
+    plan: DecisionPlan, answers: Mapping[str, Any], site_id: str
+) -> list["ResidueTarget"]:
+    """The donor atoms of a metal's shell whose residues are ticked.
+
+    Before the checklist is answered every box counts as ticked, as the
+    question shows them: a proposal made earlier is made about the shell as
+    it stands, not about one nobody has asked for yet.
+    """
+
+    confirm = plan.by_id(f"metal.{site_id}.confirm_donors")
+    raw = answers.get(confirm.id)
+    ticked = set(coerce_answer(confirm, confirm.default if raw is None else raw))
+    return [
+        target for target in confirm.targets[1:] if _residue_id_of(target).display() in ticked
+    ]
+
+
+# The donor elements MCPB.py bonds to a metal by distance alone -- within its
+# cut_off -- whatever the bond list says. mdprep.metals.coordination checks a
+# manifest against the same set; it is spelled again here because the
+# planning path has to stay importable in a browser.
+MCPB_DISTANCE_DONOR_ELEMENTS = frozenset({"N", "O", "S", "F", "CL", "BR", "I"})
+# How far below the nearest unticked donor the cutoff goes.
+UNBONDED_DONOR_MARGIN_ANGSTROM = 0.05
+# Nearer than this, an unticked atom is not merely close: it is a clash.
+CLOSEST_UNBONDED_DONOR_ANGSTROM = 1.5
+
+
+def mcpb_cutoff_for(
+    plan: DecisionPlan, resolved: Mapping[str, Any], site_id: str
+) -> float:
+    """MCPB.py's bonding cutoff for a site, below any donor left unticked.
+
+    MCPB.py bonds every donor atom within its cutoff, so a substrate docked
+    2.3 A from an iron would be bonded to it whatever the manifest's bond
+    list says -- and mdprep refuses a site where that would happen. The
+    cutoff is the usual one unless something in range was left out; then it
+    drops just below the nearest atom left out, and the bonds that are kept
+    and now lie beyond it are handed to MCPB.py by name.
+    """
+
+    ticked = {
+        _residue_id_of(target).display()
+        for target in selected_donor_targets(plan, resolved, site_id)
+    }
+    left_out = [
+        item
+        for item in plan.findings.get("metal_donors", {}).get(site_id, [])
+        if item["residue"] not in ticked
+        and str(item["element"]).upper() in MCPB_DISTANCE_DONOR_ELEMENTS
+    ]
+    if not left_out:
+        return COORDINATION_CUTOFF_ANGSTROM
+    nearest = min(left_out, key=lambda item: item["distance"])
+    if nearest["distance"] < CLOSEST_UNBONDED_DONOR_ANGSTROM:
+        raise DecisionError(
+            f"{nearest['residue']} {nearest['atom']} is {nearest['distance']:.2f} A "
+            "from the metal, which is a clash rather than a contact: it cannot be "
+            "left unbonded there. Move it in the input, or tick it.",
+            decision_id=f"metal.{site_id}.confirm_donors",
+        )
+    return math.floor((nearest["distance"] - UNBONDED_DONOR_MARGIN_ANGSTROM) * 100) / 100
 
 
 # Halides are the coordinating ions that actually turn up in a metal site.
@@ -3525,7 +3710,8 @@ def proposed_model_charge(
 
     complete = True
     seen: set[tuple[str, int, str | None]] = set()
-    for donor in confirm.targets[1:]:
+    # The ticked ones: what is not bonded is not in the model.
+    for donor in selected_donor_targets(plan, answers, site_id):
         key = (donor.chain, donor.resid, donor.icode)
         # A bidentate cofactor appears once per donating atom and must be
         # counted once, and a porphyrin once for its four nitrogens.

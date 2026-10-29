@@ -60,6 +60,16 @@ def format_question(decision: Decision) -> str:
             lines.append(f"    {marker} {choice.value}: {choice.label} -- {choice.detail}")
     elif decision.kind == "boolean":
         lines.append("    answer: yes or no")
+    elif decision.kind == "multichoice":
+        ticked = set((decision.default or "").split(","))
+        for choice in decision.choices:
+            marker = "[x]" if choice.value in ticked else "[ ]"
+            lines.append(f"    {marker} {choice.value}: {choice.detail}")
+        lines.append(
+            "    press Enter to keep the ticked ones, or list the ones to tick, "
+            "separated by commas ('none' for none)"
+        )
+        return "\n".join(lines)
     if decision.requires_user_input:
         lines.append("    This cannot be guessed from the structure; there is no default.")
     elif decision.default is not None:
@@ -117,8 +127,12 @@ def collect_answers(
         for _ in range(max_attempts):
             raw = prompt(decision).strip()
             if not raw:
+                # A checklist is shown with its boxes ticked, so Enter is an
+                # answer: the ticks the user has just looked at.
                 if decision.default is None or (
-                    decision.requires_user_input and proposal is None
+                    decision.requires_user_input
+                    and proposal is None
+                    and decision.kind != "multichoice"
                 ):
                     # Refusing to default here is the point of the whole design.
                     last_error = "a value is required and has no default"

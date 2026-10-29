@@ -82,8 +82,15 @@ distances: atoms of a donor element (N, O, S, P, Se, halide) within 2.6 A of
 the metal. Carbon and hydrogen are excluded, which is what keeps the carbons
 sitting behind a coordinating carboxylate oxygen out of the shell.
 
-The proposal is **not** a decision. You are shown every candidate bond with its
-measured distance and must confirm the set before anything is written; decline,
+The proposal is **not** a decision. Each residue in range is a box to tick,
+with its atoms and their distances, and all are ticked to begin with:
+**untick one that is only close to the metal** -- a substrate docked against
+an iron with no water of its own sits within bonding distance and would
+otherwise be bonded to it. An unticked residue stays where it is, unbonded,
+and the site is fitted without it. MCPB.py bonds every donor atom within its
+cutoff whatever the bond list says, so the site's `mcpb.cutoff_angstrom` drops
+just below the nearest atom left out (2.6 A otherwise), and the bonds that are
+kept and now lie beyond it are handed to MCPB.py by name. Untick everything
 and the site is reported for manual work rather than invented. The oxidation
 state, the spin multiplicity and the capped-model charge have no defaults
 either, because none of them can be read off a structure.
@@ -99,7 +106,10 @@ Zn(II) 1, and for a heme, the ligands across the heme plane.
 A ligand that coordinates the metal takes its charges from that site's MCPB fit
 rather than an independent AM1-BCC calculation, since fitting a bonded donor
 separately leaves the site electrostatically inconsistent. A ligand that does
-not coordinate keeps AM1-BCC.
+not coordinate keeps AM1-BCC. Its question comes before the metal's, so a
+ligand you are going to untick there -- a docked substrate -- needs AM1-BCC
+chosen here; leave it on the fit and untick it, and the builder stops at the
+checklist and says so.
 
 A titratable side chain on the metal -- an aspartate, a cysteine -- is asked
 its protonation right after the shell is confirmed, before the model charge. The model charge is then proposed from the states as given:
@@ -151,12 +161,19 @@ mdprep plan input.pdb --json
 ```
 
 Each decision carries a stable `id`, the `question`, its `kind`
-(`choice`, `integer`, `number`, `text`, `boolean`), the allowed `choices`, the
-`default` (`null` when there is none), `requires_user_input`, the `evidence`
-from the structure, and a `when` list naming the earlier answers that make it
-relevant. A decision is asked when every condition in `when` holds and, if its
-`when_any` list is not empty, at least one condition there does too; an answer
-counts only while its own question is still asked.
+(`choice`, `integer`, `number`, `text`, `boolean`, `multichoice`), the allowed
+`choices`, the `default` (`null` when there is none), `requires_user_input`,
+the `evidence` from the structure, and a `when` list naming the earlier answers
+that make it relevant. A decision is asked when every condition in `when` holds
+and, if its `when_any` list is not empty, at least one condition there does
+too; an answer counts only while its own question is still asked.
+
+A `multichoice` is a checklist -- a metal's bonds are one. Its answer is the
+list of the `choices` values ticked, and its `default` the ones ticked to
+begin with, comma-separated; `true` and `false` tick all or none. As a
+condition it counts as `true` while anything is ticked. In a structure with
+copies, a copy's checklist is given the boxes of its own residues that
+correspond to the ones ticked in the first copy.
 
 In a structure with several copies of one protein, a copy's questions carry
 `copy_of`: the id of the same question about the counterpart residue in the

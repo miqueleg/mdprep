@@ -22,9 +22,16 @@ import pytest
 from mdprep.metals.hydrogenate import (
     MetalHydrogenationError,
     _preservation_identity,
+    _restore_residue_identities,
     _validate_preserved_input_coordinates,
 )
-from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord
+from mdprep.structure.models import (
+    AtomRecord,
+    PdbStructure,
+    ResidueId,
+    ResidueRecord,
+    build_residues,
+)
 
 
 def _atom(name: str, resname: str, x: float = 0.0) -> AtomRecord:
@@ -86,3 +93,67 @@ def test_water_canonicalisation_is_the_one_rename_left():
     assert _preservation_identity(_atom("O", "LIG")) != _preservation_identity(
         _atom("O", "LG1")
     )
+
+
+def _system(residues: list[tuple[str | None, str, int, list[str], int]]) -> PdbStructure:
+    # (chain, name, number, atom names, site): atoms are placed by site, so a
+    # residue numbered one way going in and another coming out sits in one place.
+    atoms = [
+        AtomRecord(
+            serial=1, name=name, altloc=None, resname=resname, chain_id=chain, resid=resid,
+            icode=None, x=float(site), y=float(index), z=0.0, occupancy=1.0, bfactor=0.0,
+            element=name[0], record_name="HETATM", original_line="",
+        )
+        for chain, resname, resid, names, site in residues
+        for index, name in enumerate(names)
+    ]
+    return PdbStructure(
+        path=Path("x.pdb"), atoms=atoms, residues=build_residues(atoms), model_count=1
+    )
+
+
+def test_a_ligand_after_the_waters_is_matched_where_tleap_writes_it(tmp_path):
+    """tleap writes every water after everything else, and keeps no chain IDs
+    or residue numbers, so its output is matched back by position. A docked
+    substrate added after the crystal waters comes back before them, and was
+    refused as tleap renaming the first water:
+
+        Pre-MCPB tleap unexpectedly renamed A:WAT904 to SUB
+    """
+
+    reference = _system(
+        [
+            ("A", "ALA", 5, ["N", "CA"], 5),
+            ("A", "WAT", 904, ["O"], 904),
+            ("A", "SUB", 950, ["C1", "O1"], 950),
+            ("A", "WAT", 905, ["O"], 905),
+        ]
+    )
+    # What tleap saved: renumbered from 1, no chain, hydrogens added.
+    observed = _system(
+        [
+            (None, "ALA", 1, ["N", "CA", "H"], 5),
+            (None, "SUB", 2, ["C1", "O1", "HO1"], 950),
+            (None, "WAT", 3, ["O", "H1", "H2"], 904),
+            (None, "WAT", 4, ["O", "H1", "H2"], 905),
+        ]
+    )
+
+    restored = _restore_residue_identities(
+        observed, reference=reference, output_path=tmp_path / "restored.pdb"
+    )
+
+    assert [residue.id.display() for residue in restored.residues] == [
+        "A:ALA5", "A:SUB950", "A:WAT904", "A:WAT905",
+    ]
+    assert _validate_preserved_input_coordinates(reference, restored) == 0.0
+
+
+def test_a_residue_tleap_really_renamed_is_still_refused(tmp_path):
+    reference = _system([("A", "ALA", 5, ["N"], 5), ("A", "LIG", 950, ["C1"], 950)])
+    observed = _system([(None, "ALA", 1, ["N"], 5), (None, "LG1", 2, ["C1"], 950)])
+
+    with pytest.raises(MetalHydrogenationError, match="unexpectedly renamed A:LIG950 to LG1"):
+        _restore_residue_identities(
+            observed, reference=reference, output_path=tmp_path / "restored.pdb"
+        )
