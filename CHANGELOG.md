@@ -8,6 +8,21 @@
   the notebook's install section no longer prints pip's red ERROR about the
   Python tools AmberTools ships.
 
+### Fixed
+
+- The web builder's 3D view holds up when the browser's graphics give way.
+  At a workshop one laptop drew a large protein's ligands but not its
+  cartoon, until several tries later. 3Dmol 2.5 draws through one WebGL
+  context it keeps for the page, and its handler for a lost context listened
+  on the wrong canvas, so a context the browser reset left the view broken.
+  The page now listens on the real context and rebuilds the view on a new
+  one. It asks WebGL after every draw whether it ran out of memory, and if so
+  draws the protein as lines, a fortieth of a cartoon's geometry, and says
+  so. When a structure is loaded again, it deletes the last view's buffers
+  at once rather than leaving them to garbage collection (80 MB for an
+  octamer). After three rebuilds it stops and says what to do, and a
+  **Redraw the 3D view** button rebuilds it by hand.
+
 ## 0.5.3 - 2026-10-30
 
 ### Changed
