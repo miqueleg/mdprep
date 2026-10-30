@@ -107,6 +107,19 @@ C and O are the acetyl's methyl, carbonyl carbon and oxygen, the next
 residue's N and CA the methylamide's. Every bond to the residue keeps the
 length and angle the structure gives it.
 
+**Its bonds** are read from its coordinates, and the SMILES is matched onto
+them, which a strained conformation can defeat. Two atoms bonded to a third
+that sit too far apart for a bond -- more than 0.15 A past their covalent
+radii -- yet close enough to be read as one are an angle squeezed shut, read
+as a three-membered ring the residue does not have. 1H4X's chain A
+phosphoserine, in the alternate location the file lists first, has P and CB
+both on OG and 2.04 A apart, at 97 degrees. Such a residue is refused from
+its SMILES, with the atoms, their distance and their alternate location
+named; AmberTools' template, which bonds a residue's atoms by name, builds
+it, and so does keeping only the copies that are sound -- or, in the input,
+the alternate location that is. Every copy is checked, not only the one the
+template is made from: each is given its hydrogens from the SMILES.
+
 **Hydrogens** are placed as the structure is normalised, between those caps,
 and named as the PDB names an amino acid's (H, HA, HB2, HB3, HG21...); the
 structure report counts them. Protonation keeps them, as it keeps a ligand's.
@@ -346,8 +359,9 @@ stays whole for the same outcome.
 ## What is checked
 
 - As the structure is read: each residue a block names exists, in a kept
-  chain, bonded on both sides; a template has the residue's heavy atoms; the
-  SMILES matches the residue and its charge.
+  chain, bonded on both sides; a template has the residue's heavy atoms; a
+  residue kept from its SMILES has no conformation too strained to read its
+  bonds from; the SMILES matches the residue and its charge.
 - In the dry topology and the final one, read back without ParmEd: every kept
   residue is there, under its name and as many times as the manifest lists
   it, carries the charge it was built with, and is bonded by peptide bonds to
@@ -369,8 +383,17 @@ written with HF/6-31G*. For the common modifications -- phosphorylated
 serine, threonine and tyrosine, methylated and acetylated lysines, oxidised
 cysteines, carboxylysine, gamma-carboxyglutamate -- the template, SMILES and
 charge are proposed, with the reason for the protonation chosen, and can be
-changed. Choosing QMMESP adds PySCF to what the Colab setup installs. A
-kept residue on a metal is one of the metal's donors like any other; on a
+changed. Choosing QMMESP adds PySCF to what the Colab setup installs.
+
+What one copy rules out -- keeping it, when it ends its chain; its SMILES,
+when its conformation is strained -- is offered while another choice of
+chains allows it, the question saying which, and refused at the question as
+soon as the chains kept include that copy. 1H4X, both chains kept as the web
+builder keeps them unless told otherwise, is refused its SMILES there, with
+chain B on its own and the template as the ways out; nothing is left to fail
+in Colab.
+
+A kept residue on a metal is one of the metal's donors like any other; on a
 bonded site, the model charge the planner proposes counts it at its net
 charge or its template's, and replaced, at its parent's.
 
@@ -378,6 +401,9 @@ charge or its template's, and replaced, at its parent's.
 
 - A residue at a chain terminus or next to a gap: it has no neighbour to be
   bonded to, and mdprep makes no terminal templates.
+- From its SMILES, a residue whose conformation is too strained to read its
+  bonds from (see [From its SMILES](#from-its-smiles)): its template, or a
+  sound alternate location, builds it.
 - From its SMILES, a residue whose backbone nitrogen carries no hydrogen --
   a proline analogue, an N-methyl amino acid: the backbone charges fixed are
   those of an amide N-H. Hydroxyproline is built from the protein force

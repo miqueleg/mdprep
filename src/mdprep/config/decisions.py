@@ -31,6 +31,7 @@ from mdprep.ligands.cofactors import (
 from mdprep.residues.capping import (
     ResidueCappingError,
     chain_context,
+    strained_geometry,
     unparameterisable_reason,
 )
 from mdprep.residues.templates import (
@@ -808,14 +809,17 @@ def unsupported_heterogens(
         modified = modified_residue_options(groups, summary.structure.residues)
     for name in modified:
         if not name.treatments:
-            reason = (
-                name.keep_problem
-                or name.unparameterisable
-                or (
+            parts = [reason for _, reason in name.keep_problems]
+            if name.unparameterisable is not None:
+                parts.append(name.unparameterisable)
+            elif name.backbone_closed:
+                parts.append(
                     "its backbone nitrogen carries no hydrogen, so mdprep cannot "
                     "parameterise it from a SMILES, and AmberTools has no template for it."
                 )
-            )
+            else:
+                parts.extend(reason for _, reason in name.strained)
+            reason = " ".join(parts)
             problems.append(
                 f"{', '.join(name.displays)} "
                 f"{'are residues' if len(name.items) > 1 else 'is a residue'} of a "
@@ -1118,7 +1122,10 @@ class ModifiedResidueName:
 
     tleap builds every residue of a name from one template, so a name is one
     question: whatever replaces the residues, or whatever they are kept as,
-    holds for all of them.
+    holds for all of them -- all of them in the chains being built. A residue
+    that cannot be kept, or not from a SMILES, rules that out only while its
+    chain is built: what is offered is what some choice of chains allows, and
+    the answers refuse the rest once the chains are known.
     """
 
     resname: str
@@ -1127,12 +1134,14 @@ class ModifiedResidueName:
     parent_source: str | None
     # AmberTools templates that fit every one of them, atom for atom.
     templates: tuple[AmberResidueTemplate, ...]
-    # Why they cannot be kept in the chain, if they cannot.
-    keep_problem: str | None
+    # Each that cannot be kept in its chain, by display, and why.
+    keep_problems: tuple[tuple[str, str], ...]
     # Why they cannot be parameterised from a SMILES, if an element is why.
     unparameterisable: str | None
-    # Whether mdprep can parameterise them: kept, and an amide N-H backbone.
-    parameterisable: bool
+    # A side chain bonded to its own backbone N, which then has no hydrogen.
+    backbone_closed: bool
+    # Each whose bonds its coordinates do not settle, by display, and why.
+    strained: tuple[tuple[str, str], ...]
     chemistry: KnownResidueChemistry | None
 
     @property
@@ -1140,13 +1149,46 @@ class ModifiedResidueName:
         return [item.residue.id.display() for item in self.items]
 
     @property
+    def chains(self) -> list[str]:
+        return list(dict.fromkeys(item.residue.id.chain_id for item in self.items))
+
+    def blocked(self, treatment: str) -> dict[str, str]:
+        """Each residue that cannot take ``treatment``, by display, and why."""
+
+        if treatment == "replace":
+            return {}
+        problems = dict(self.keep_problems)
+        if treatment in SMILES_TREATMENTS:
+            for display, reason in self.strained:
+                problems.setdefault(display, reason)
+        return problems
+
+    def chains_for(self, treatment: str) -> list[str]:
+        """The chains, each built on its own, whose residues can all take ``treatment``."""
+
+        blocked = self.blocked(treatment)
+        return [
+            chain
+            for chain in self.chains
+            if not any(
+                item.residue.id.display() in blocked
+                for item in self.items
+                if item.residue.id.chain_id == chain
+            )
+        ]
+
+    @property
     def treatments(self) -> tuple[str, ...]:
         found: list[str] = []
         if self.parent is not None:
             found.append("replace")
-        if self.keep_problem is None and self.templates:
+        if self.templates and self.chains_for("amber_library"):
             found.append("amber_library")
-        if self.parameterisable:
+        if (
+            self.unparameterisable is None
+            and not self.backbone_closed
+            and self.chains_for(SMILES_TREATMENTS[0])
+        ):
             found.extend(SMILES_TREATMENTS)
         return tuple(found)
 
@@ -1156,7 +1198,13 @@ class ModifiedResidueName:
             "templates": [template.name for template in self.templates],
             "treatments": list(self.treatments),
             "known_chemistry": self.chemistry is not None,
-            "keep_problem": self.keep_problem,
+            # What a residue rules out while its chain is built, by treatment
+            # offered: _require_buildable_residues refuses it then.
+            "blocked": {
+                treatment: blocked
+                for treatment in self.treatments
+                if (blocked := self.blocked(treatment))
+            },
             "unparameterisable": self.unparameterisable,
             "residues": [
                 {
@@ -1182,13 +1230,22 @@ def modified_residue_options(
     for resname, items in by_name.items():
         parent = next((item.parent for item in items if item.parent is not None), None)
         source = next((item.parent_source for item in items if item.parent is not None), None)
-        keep_problem: str | None = None
+        keep_problems: list[tuple[str, str]] = []
+        strained: list[tuple[str, str]] = []
         for item in items:
+            display = item.residue.id.display()
             try:
-                chain_context(residues, item.residue)
+                context = chain_context(residues, item.residue)
             except ResidueCappingError as exc:
-                keep_problem = str(exc)
-                break
+                keep_problems.append((display, str(exc)))
+                continue
+            # Every copy kept from a SMILES is matched onto its coordinates
+            # for its hydrogens, not only the one its template is made from.
+            reason = strained_geometry(context)
+            if reason is not None:
+                strained.append(
+                    (display, f"{display} cannot be parameterised from its SMILES: {reason}")
+                )
         heavy = [
             [atom for atom in item.residue.atoms if not is_hydrogen(atom)] for item in items
         ]
@@ -1219,9 +1276,10 @@ def modified_residue_options(
                 parent=parent,
                 parent_source=source,
                 templates=templates,
-                keep_problem=keep_problem,
+                keep_problems=tuple(keep_problems),
                 unparameterisable=foreign,
-                parameterisable=keep_problem is None and not closed and foreign is None,
+                backbone_closed=closed,
+                strained=tuple(strained),
                 chemistry=known_residue_chemistry(
                     resname, (atom.element or atom.name[:1] for atom in heavy[0])
                 ),
@@ -1326,15 +1384,37 @@ def _modified_residue_decisions(
                 "N-terminus is a charged amine where the pyroglutamate was a neutral "
                 "lactam. "
             )
-        if name.keep_problem is not None:
-            why += f"It cannot be kept as it is: {name.keep_problem} "
-        elif name.unparameterisable is not None:
+        if name.keep_problems:
+            why += (
+                "It cannot be kept as it is: "
+                + " ".join(reason for _, reason in name.keep_problems)
+                + " "
+            )
+            # Keeping rules out only the residues above, whatever builds them.
+            alone = name.chains_for("amber_library")
+            if alone and set(treatments) & set(KEEP_TREATMENTS):
+                why += f"Kept, it is built with {_chain_phrase(alone)} prepared on its own. "
+        if name.unparameterisable is not None:
             why += f"It cannot be parameterised from a SMILES: {name.unparameterisable} "
-        elif not name.parameterisable:
+        elif name.backbone_closed:
             why += (
                 "Its backbone nitrogen carries no hydrogen, so mdprep cannot "
                 "parameterise it from a SMILES. "
             )
+        elif name.strained:
+            why += " ".join(reason for _, reason in name.strained) + " "
+            alone = name.chains_for(SMILES_TREATMENTS[0])
+            ways = []
+            if alone:
+                ways.append(
+                    f"parameterised from its SMILES, it is built with {_chain_phrase(alone)} "
+                    "prepared on its own"
+                )
+            if "amber_library" in treatments:
+                ways.append("AmberTools' template bonds its atoms by name, whatever their coordinates")
+            if ways:
+                text = "; ".join(ways)
+                why += f"{text[:1].upper()}{text[1:]}. "
         why += (
             "Proposed: replace. These are selenomethionines, the label a methionine "
             "is given to solve the phases, not chemistry of the protein."
@@ -3091,12 +3171,94 @@ def _kept_residue_names(plan: DecisionPlan, resolved: Mapping[str, Any]) -> list
     ]
 
 
+def _chain_phrase(chains: Sequence[str]) -> str:
+    """The chain to prepare on its own: "chain A", or "chain A, B or C" for any one."""
+
+    if len(chains) == 1:
+        return f"chain {chains[0]}"
+    return f"chain {', '.join(chains[:-1])} or {chains[-1]}"
+
+
+def _selector_display(selector: Mapping[str, Any]) -> str:
+    return ResidueId(
+        selector["chain"], selector["resname"], selector["resid"], selector.get("icode")
+    ).display()
+
+
+def _require_treatment_fits_chains(
+    plan: DecisionPlan, resolved: Mapping[str, Any], resname: str
+) -> None:
+    """Refuse what a residue of a chain being built rules out.
+
+    The question offers what some choice of chains allows: keeping a residue
+    one copy of which ends its chain, or parameterising from its SMILES one
+    with a copy whose coordinates do not settle its bonds. Once the chains
+    are known, a copy in one of them that cannot take the answer refuses it.
+    """
+
+    finding = plan.findings["noncanonical_residues"][resname]
+    treatment = resolved.get(f"residue.{resname}.treatment")
+    blocked = finding.get("blocked", {}).get(treatment, {})
+    if not blocked:
+        return
+    kept_chains = _kept_chains(plan, resolved.get("structure.chains") or "all")
+    residues = finding.get("residues", [])
+    reasons = [
+        blocked[display]
+        for selector in residues
+        if (not kept_chains or selector["chain"] in kept_chains)
+        and (display := _selector_display(selector)) in blocked
+    ]
+    if not reasons:
+        return
+    chains = list(dict.fromkeys(selector["chain"] for selector in residues))
+    alone = [
+        chain
+        for chain in chains
+        if not any(
+            _selector_display(selector) in blocked
+            for selector in residues
+            if selector["chain"] == chain
+        )
+    ]
+    built = [
+        _selector_display(selector)
+        for selector in residues
+        if not kept_chains or selector["chain"] in kept_chains
+    ]
+    options = []
+    library_blocked = finding.get("blocked", {}).get("amber_library", {})
+    if (
+        treatment in SMILES_TREATMENTS
+        and "amber_library" in finding.get("treatments", [])
+        and not any(display in library_blocked for display in built)
+    ):
+        options.append(f"keep {resname} with AmberTools' template, which bonds its atoms by name")
+    if alone:
+        options.append(f"prepare {_chain_phrase(alone)} on its own")
+    if finding.get("parent"):
+        options.append(f"replace {resname} by {finding['parent']}")
+    advice = ""
+    if options:
+        if len(options) < 3:
+            listed = ", or ".join(options)
+        else:
+            listed = f"{'; '.join(options[:-1])}; or {options[-1]}"
+        advice = f" {listed[:1].upper()}{listed[1:]}."
+    raise DecisionError(
+        " ".join(reasons) + advice,
+        decision_id=f"residue.{resname}.treatment",
+    )
+
+
 def _require_buildable_residues(plan: DecisionPlan, resolved: Mapping[str, Any]) -> None:
     """Kept residues mdprep cannot build with the rest of the answers."""
 
     kept = _kept_residue_names(plan, resolved)
     if not kept:
         return
+    for resname in kept:
+        _require_treatment_fits_chains(plan, resolved, resname)
     bonded = [
         decision.id.split(".")[1]
         for decision in plan.decisions

@@ -134,6 +134,17 @@
   rename. tleap writes every water after everything else, and its output is
   matched back by position, so it is now matched in that order. Its input
   keeps the file's order, which MCPB.py's bond commands count residues in.
+- A noncanonical residue kept from its SMILES whose conformation is strained
+  stopped the build in RDKit, which read its bonds from its coordinates, with
+  the SMILES blamed. 1H4X's chain A phosphoserine, in the alternate location
+  the file lists first, has P and CB both on OG and 2.04 A apart: read as a
+  three-membered ring. Such a residue is now named, with its atoms and their
+  alternate location, at the planner's question, which refuses the SMILES
+  routes while its chain is built -- AmberTools' template, which bonds by
+  name, still builds it -- and a hand-written manifest stops with the same
+  reason before RDKit runs. Likewise a copy that cannot be kept, at the end
+  of its chain, rules out keeping only while its chain is built: the
+  question offers keeping when the other chains allow it, and names them.
 
 ## 0.5.1 - 2026-10-26
 
