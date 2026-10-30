@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mdprep"
-version = "0.5.2"
+version = "0.5.3"
 description = "Reproducible Amber preparation for proteins, ligands, metal centers, and OpenMM MD."
 readme = "README.md"
 requires-python = ">=3.11"
