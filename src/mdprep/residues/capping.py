@@ -21,14 +21,32 @@ imports, and Pyodide has no RDKit.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import dist
+from math import acos, degrees, dist, floor
 from typing import Sequence
 
 from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import AtomRecord, ResidueRecord
+from mdprep.structure.pdb_fields import COVALENT_RADII
 
 # A peptide C-N bond is 1.33 A; the PDB writer starts a new chain past 2 A.
 PEPTIDE_BOND_MAX_ANGSTROM = 2.0
+
+# RDKit reads the capped residue's bonds from its coordinates, as it reads any
+# PDB block it has no template for: two atoms closer than their covalent radii
+# plus 0.45 A, the sum rounded down to a tenth of an angstrom, are bonded.
+BOND_READING_TOLERANCE_ANGSTROM = 0.45
+
+# A bond, even a strained one in a deposited structure, lies within about a
+# tenth of an angstrom of the sum of its atoms' covalent radii: in the 52
+# structures of this repository's examples and tests the longest is a ribose
+# C-O 0.13 A past it. Two atoms both bonded to a third, further apart than
+# this yet close enough to be read as bonded, would close a three-membered
+# ring with a bond longer than any: they are an angle squeezed shut, not a
+# ring. 1H4X's A:SEP57, in the alternate location its file lists first, has
+# P and CB both on OG and 2.04 A apart, 0.21 A past the sum of their radii.
+# A long contact that closes no such ring may be a stretched bond the SMILES
+# does have; RDKit then reads it right.
+STRAINED_CONTACT_ANGSTROM = 0.15
 
 BACKBONE_ATOMS = ("N", "CA", "C", "O")
 
@@ -166,6 +184,102 @@ def chain_context(residues: Sequence[ResidueRecord], residue: ResidueRecord) -> 
     return ChainContext(residue=residue, previous=previous, following=following)
 
 
+def strained_geometry(context: ChainContext) -> str | None:
+    """Why the residue's bonds cannot be read from its coordinates, if they cannot.
+
+    mdprep matches a SMILES onto a residue by the bonds RDKit reads from the
+    capped residue's coordinates: the residue's heavy atoms and the atoms its
+    caps are built from. Two of them bonded to a third, too far apart for a
+    bond yet close enough to be read as one, are an angle squeezed shut: RDKit
+    would read a three-membered ring the residue does not have, and the
+    SMILES cannot be matched onto it.
+    """
+
+    labelled = [
+        (f"{context.previous.id.display()} {source}", atom)
+        for _, _, source in ACE_ATOMS
+        if (atom := _named(context.previous, source)) is not None
+    ]
+    labelled += [
+        (atom.name.strip(), atom) for atom in context.residue.atoms if not is_hydrogen(atom)
+    ]
+    labelled += [
+        (f"{context.following.id.display()} {source}", atom)
+        for _, _, source in NME_ATOMS
+        if (atom := _named(context.following, source)) is not None
+    ]
+    read: dict[int, set[int]] = {index: set() for index in range(len(labelled))}
+    long: list[tuple[int, int, float, float]] = []
+    for first in range(len(labelled)):
+        for second in range(first + 1, len(labelled)):
+            radii = _covalent_radius(labelled[first][1]) + _covalent_radius(labelled[second][1])
+            # A thousandth absorbs the float error in the sum, as 1.87 * 10.
+            read_as_bond = floor((radii + BOND_READING_TOLERANCE_ANGSTROM) * 10 + 1e-3) / 10
+            distance = _distance(labelled[first][1], labelled[second][1])
+            if distance > read_as_bond:
+                continue
+            read[first].add(second)
+            read[second].add(first)
+            if distance > radii + STRAINED_CONTACT_ANGSTROM:
+                long.append((first, second, distance, radii + STRAINED_CONTACT_ANGSTROM))
+    contacts: list[str] = []
+    alternates: dict[str, AtomRecord] = {}
+    for first, second, distance, longest in long:
+        apex = next(iter(sorted(read[first] & read[second])), None)
+        if apex is None:
+            continue
+        (first_label, first_atom), (second_label, second_atom) = labelled[first], labelled[second]
+        apex_label, apex_atom = labelled[apex]
+        contacts.append(
+            f"{first_label} and {second_label}, both bonded to {apex_label}, are "
+            f"{distance:.2f} A apart (an angle of "
+            f"{_angle(first_atom, apex_atom, second_atom):.0f} degrees at {apex_label}), "
+            f"where a bond between them would be at most {longest:.2f} A"
+        )
+        for label, atom in (
+            (first_label, first_atom),
+            (apex_label, apex_atom),
+            (second_label, second_atom),
+        ):
+            if (atom.altloc or "").strip():
+                alternates[label] = atom
+    if not contacts:
+        return None
+    many = len(contacts) > 1
+    reason = (
+        "its conformation in the structure is strained: "
+        + "; ".join(contacts)
+        + (
+            ". Those are too far apart for bonds and too close for atoms that are "
+            "not: read from the coordinates, as mdprep reads a residue it matches a "
+            "SMILES onto, they are three-membered rings the residue does not have."
+            if many
+            else ". That is too far apart for a bond and too close for two atoms that "
+            "are not: read from the coordinates, as mdprep reads a residue it matches "
+            "a SMILES onto, it is a three-membered ring the residue does not have."
+        )
+    )
+    if alternates:
+        locations: dict[str, list[str]] = {}
+        for label, atom in alternates.items():
+            where = f"alternate location {(atom.altloc or '').strip()}" + (
+                f", at occupancy {atom.occupancy:.2f}" if atom.occupancy is not None else ""
+            )
+            locations.setdefault(where, []).append(label)
+        listed = "; ".join(
+            f"{labels[0]} is in {where}"
+            if len(labels) == 1
+            else f"{', '.join(labels[:-1])} and {labels[-1]} are in {where}"
+            for where, labels in locations.items()
+        )
+        reason += (
+            f" {listed}: mdprep keeps one alternate location of each atom "
+            "(structure.altloc_policy), and if another is sound, keeping only it in "
+            "the input builds from it."
+        )
+    return reason
+
+
 def capped_template(smiles: str, residue_heavy_atoms: int, *, label: str) -> tuple[object, str]:
     """The capped molecule ``smiles`` describes, and which form it was given in.
 
@@ -250,8 +364,10 @@ def capped_residue(
     """The capped residue with the bond orders and hydrogens ``smiles`` states.
 
     Heavy atoms keep their names and coordinates; the hydrogens are placed by
-    RDKit and named after the atom they are on. The SMILES's formal charge
-    must be ``net_charge``, and the residue's backbone must be an amide
+    RDKit and named after the atom they are on. The residue's conformation
+    must not be too strained to read its bonds from (``strained_geometry``),
+    the SMILES's formal charge must be ``net_charge``, and the residue's
+    backbone must be an amide
     nitrogen with one hydrogen and a carbonyl carbon with none: a backbone
     nitrogen that carries no hydrogen (a proline, an N-methyl amino acid)
     takes backbone charges no table in mdprep holds.
@@ -263,6 +379,14 @@ def capped_residue(
     foreign = unparameterisable_reason(heavy)
     if foreign is not None:
         raise ResidueCappingError(f"{label}: {foreign}")
+    # Before RDKit reads a bond there and the SMILES is blamed for it.
+    strained = strained_geometry(context)
+    if strained is not None:
+        raise ResidueCappingError(
+            f"{label} cannot be parameterised from its SMILES: {strained} Keep it with "
+            "AmberTools' template, where there is one, which bonds its atoms by name, "
+            "or leave its chain out of the build."
+        )
     try:
         from rdkit import Chem
         from rdkit.Chem import AllChem
@@ -308,7 +432,8 @@ def capped_residue(
         raise ResidueCappingError(
             f"{label}: the SMILES {smiles!r} could not be matched onto the residue "
             f"between its caps ({exc}). Check that it has the residue's atoms, "
-            "connected as they are in the structure."
+            "connected as they are in the structure, and that the structure puts no "
+            "two atoms it does not bond at a bond's length from each other."
         ) from exc
     # The bonds to the caps are amides by construction, not something the
     # SMILES claims; a deposited peptide bond can be short (1H4X has one at
@@ -500,3 +625,16 @@ def _distance(first: AtomRecord | None, second: AtomRecord | None) -> float:
     if first is None or second is None:
         return float("inf")
     return dist((first.x, first.y, first.z), (second.x, second.y, second.z))
+
+
+def _covalent_radius(atom: AtomRecord) -> float:
+    return COVALENT_RADII.get(_element(atom).upper(), 0.76)
+
+
+def _angle(first: AtomRecord, apex: AtomRecord, second: AtomRecord) -> float:
+    """The angle first-apex-second, in degrees."""
+
+    u = (first.x - apex.x, first.y - apex.y, first.z - apex.z)
+    v = (second.x - apex.x, second.y - apex.y, second.z - apex.z)
+    cosine = sum(a * b for a, b in zip(u, v)) / (dist(u, (0, 0, 0)) * dist(v, (0, 0, 0)))
+    return degrees(acos(max(-1.0, min(1.0, cosine))))

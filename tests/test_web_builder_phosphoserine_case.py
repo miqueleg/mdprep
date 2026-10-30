@@ -7,6 +7,10 @@ kept with AmberTools' template, the dianion's template is; kept with QMMESP
 charges, the QM level is written for the student and the setup cell installs
 PySCF. Every way, the manifest the page writes is one mdprep accepts.
 
+The whole deposition too, both chains, as the page keeps them by default:
+chain A's SEP57 is too strained to be parameterised from its SMILES, and the
+page says so at the question rather than leave it to the Colab run.
+
 Slow, like the other reference cases: a real deposition through Pyodide.
 """
 
@@ -17,7 +21,7 @@ import yaml
 
 from mdprep.config.models import ManifestConfig
 from mdprep.residues.templates import KNOWN_RESIDUE_CHEMISTRY
-from tests.test_noncanonical_residues import PHOSPHOSERINE
+from tests.test_noncanonical_residues import PHOSPHOSERINE, SPOIIAA
 from tests.test_web_builder_flavin_case import _drive, _steps
 
 pytestmark = [pytest.mark.external, pytest.mark.slow]
@@ -119,3 +123,22 @@ def test_qmmesp_charges_are_one_choice_away(fitted, tmp_path):
     )
     # What the fit runs is what the Colab cell installs.
     assert "pyscf" in fitted["setup"] and "rdkit" in fitted["setup"]
+
+
+@pytest.fixture(scope="module")
+def both_chains(tmp_path_factory):
+    return _drive(tmp_path_factory, SPOIIAA, {"residue.SEP.treatment": "am1bcc"})
+
+
+def test_a_strained_copy_is_refused_at_the_question_not_in_colab(both_chains):
+    assert both_chains["errors"] == []
+    steps = _steps(both_chains)
+    # The chains the page keeps unless told otherwise: both.
+    assert steps["structure.chains"]["selected"] == "all"
+    (stuck,) = both_chains["unanswered"]
+    assert stuck.startswith(
+        "stuck on residue.SEP.treatment: A:SEP57 cannot be parameterised from its SMILES"
+    )
+    assert "CB and P, both bonded to OG, are 2.04 A apart" in stuck
+    assert "prepare chain B on its own" in stuck
+    assert not both_chains["manifest"]

@@ -296,9 +296,11 @@ def _element_of(atom: AtomRecord) -> str:
     return (atom.element or "").strip().upper()
 
 
-# Covalent radii, for telling whether the atoms left in a cofactor without
-# its metal are still one molecule. Anything not listed is taken as carbon.
-_COVALENT_RADII = {
+# Covalent radii, RDKit's, for reading bonds from distances: whether the atoms
+# left in a cofactor without its metal are still one molecule, and where a
+# kept residue's geometry is too strained to read its bonds from
+# (residues/capping.py). Anything not listed is taken as carbon.
+COVALENT_RADII = {
     "H": 0.31, "B": 0.84, "C": 0.76, "N": 0.71, "O": 0.66, "F": 0.57,
     "SI": 1.11, "P": 1.07, "S": 1.05, "CL": 1.02, "AS": 1.19, "SE": 1.20,
     "BR": 1.20, "I": 1.39,
@@ -323,8 +325,8 @@ def _fragment_count(atoms: list[AtomRecord]) -> int:
         for j in range(i + 1, len(heavy)):
             second = heavy[j]
             limit = (
-                _COVALENT_RADII.get(_element_of(first), 0.76)
-                + _COVALENT_RADII.get(_element_of(second), 0.76)
+                COVALENT_RADII.get(_element_of(first), 0.76)
+                + COVALENT_RADII.get(_element_of(second), 0.76)
                 + 0.45
             )
             distance_squared = (

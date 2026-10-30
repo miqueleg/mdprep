@@ -28,6 +28,13 @@ curl -O https://files.rcsb.org/download/1H4X.pdb
   occupancy each; chain B's has one, and chain B is prepared. With both
   chains kept, both phosphoserines are one residue name, built from one
   template.
+- **A strained conformation.** The first of chain A's, the one mdprep keeps,
+  puts P and CB, both bonded to OG, 2.04 A apart: too far for a bond, too
+  close for anything else. A residue parameterised from its SMILES has its
+  bonds read from its coordinates, and that one reads as a three-membered
+  ring, so with chain A kept the planner refuses the SMILES routes at the
+  question and says why. AmberTools' template, which bonds the atoms by
+  name, builds both copies; chain B on its own takes either route.
 - **A Tris** beside each chain, from the buffer, removed as a
   crystallisation additive.
 

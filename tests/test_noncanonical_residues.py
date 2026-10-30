@@ -2,9 +2,11 @@
 
 The reference is SpoIIAA phosphorylated on Ser57 (PDB 1H4X): the fixture is
 chain B, residues 52-62, with SEP57 between Asp56 and Ser58, declared by
-MODRES and bonded by LINKs, one of them a short 1.23 A. Everything here runs
-without AmberTools; what needs RDKit is skipped without it. The builds
-themselves are in test_external_noncanonical_residues.py.
+MODRES and bonded by LINKs, one of them a short 1.23 A. The whole deposition
+is read too: chain A's copy, in the alternate location its file lists first,
+is too strained to read its bonds from. Everything here runs without
+AmberTools; what needs RDKit is skipped without it. The builds themselves are
+in test_external_noncanonical_residues.py.
 """
 
 from __future__ import annotations
@@ -31,7 +33,12 @@ from mdprep.config.loader import load_manifest
 from mdprep.config.models import ManifestConfig
 from mdprep.leap.builder import TLeapOutputs, build_tleap_script
 from mdprep.leap.forcefields import ResidueLibraryFiles, forcefield_sources
-from mdprep.residues.capping import ResidueCappingError, chain_context, residue_hydrogen_names
+from mdprep.residues.capping import (
+    ResidueCappingError,
+    chain_context,
+    residue_hydrogen_names,
+    strained_geometry,
+)
 from mdprep.residues.charges import BACKBONE_CHARGES, constrain_to_backbone
 from mdprep.residues.embedding import _aligned
 from mdprep.residues.frcmod import cmap_section, junction_parameters, parent_cmap
@@ -53,6 +60,9 @@ from tests.test_heterogen_groups import unknown_methionine_like, walk
 ROOT = Path(__file__).resolve().parents[1]
 HETEROGENS = ROOT / "tests" / "data" / "heterogens"
 PHOSPHOSERINE = HETEROGENS / "phosphoserine_1h4x.pdb"
+# The whole deposition: chain A's SEP57, in the alternate location the file
+# lists first, has its phosphorus 2.04 A from CB.
+SPOIIAA = ROOT / "examples" / "tutorials" / "spoiiaa_1h4x" / "1H4X.pdb"
 SELENOMETHIONINE = HETEROGENS / "selenomethionine_1rqr.pdb"
 SEP_CAPPED = "CC(=O)NC(COP(=O)([O-])[O-])C(=O)NC"
 SEP_FREE = "N[C@@H](COP(=O)([O-])[O-])C(=O)O"
@@ -427,6 +437,38 @@ def test_a_smiles_that_is_not_the_residue_is_refused(smiles, net, message):
         capped_residue(chain_context(structure.residues, sep), smiles, net_charge=net)
 
 
+def _spoiiaa_residue(display: str):
+    structure = read_pdb(SPOIIAA)
+    return structure, next(r for r in structure.residues if r.id.display() == display)
+
+
+def test_a_conformation_too_strained_to_read_bonds_from_is_named():
+    structure, strained = _spoiiaa_residue("A:SEP57")
+    reason = strained_geometry(chain_context(structure.residues, strained))
+
+    assert reason is not None
+    assert (
+        "CB and P, both bonded to OG, are 2.04 A apart (an angle of 97 degrees at OG), "
+        "where a bond between them would be at most 1.98 A"
+    ) in reason
+    assert "OG and P are in alternate location A, at occupancy 0.50" in reason
+    # Chain B's copy, whole or in the fixture, is sound.
+    structure, sound = _spoiiaa_residue("B:SEP57")
+    assert strained_geometry(chain_context(structure.residues, sound)) is None
+    structure, fragment = _sep()
+    assert strained_geometry(chain_context(structure.residues, fragment)) is None
+
+
+def test_a_strained_residue_is_refused_before_rdkit_reads_a_bond_into_it():
+    """RDKit would bond P to CB, give P a sixth valence and blame the SMILES."""
+
+    from mdprep.residues.capping import capped_residue
+
+    structure, strained = _spoiiaa_residue("A:SEP57")
+    with pytest.raises(ResidueCappingError, match="cannot be parameterised from its SMILES"):
+        capped_residue(chain_context(structure.residues, strained), SEP_CAPPED, net_charge=-2)
+
+
 # --------------------------------------------------------------------------
 # The structure the build sees
 # --------------------------------------------------------------------------
@@ -482,6 +524,22 @@ def test_a_template_without_the_residues_atoms_is_refused(tmp_path):
 
     with pytest.raises(StructureNormalizationError, match="it lacks O3P"):
         normalize_structure_stage(ManifestConfig.model_validate(data))
+
+
+def test_the_build_names_the_strain_rather_than_blame_the_smiles(tmp_path):
+    """A hand-written manifest keeping both copies of 1H4X's SEP57 from its SMILES."""
+
+    data = _manifest(
+        [_smiles_block(residues=[{**SEP57, "chain": "A"}, SEP57])],
+        structure=SPOIIAA,
+        remove_unknown_heterogens=True,
+    )
+    data["project"]["output_dir"] = str(tmp_path / "out")
+
+    with pytest.raises(StructureNormalizationError, match="CB and P, both bonded to OG") as raised:
+        normalize_structure_stage(ManifestConfig.model_validate(data))
+    assert "noncanonical residue A:SEP57 cannot be parameterised from its SMILES" in str(raised.value)
+    assert "AmberTools' template" in str(raised.value)
 
 
 def test_protonation_keeps_the_hydrogens_of_the_smiles(tmp_path):
@@ -741,6 +799,106 @@ def test_the_question_follows_the_chains_kept(tmp_path):
         plan, _answers(plan, "amber_library", **{"structure.chains": "C"})
     )
     assert manifest["noncanonical_residues"][0]["residues"] == [{**SEP57, "chain": "C", "icode": None}]
+
+
+@pytest.fixture(scope="module")
+def spoiiaa():
+    return plan_decisions(SPOIIAA)
+
+
+def test_a_strained_copy_is_explained_and_the_template_builds_both(spoiiaa):
+    decision = spoiiaa.by_id("residue.SEP.treatment")
+
+    # Chain B's copy alone can still be parameterised from its SMILES.
+    assert [choice.value for choice in decision.choices] == [
+        "replace",
+        "amber_library",
+        "am1bcc",
+        "qmmesp_pyscf",
+    ]
+    assert "A:SEP57 cannot be parameterised from its SMILES" in decision.why
+    assert "it is built with chain B prepared on its own" in decision.why
+    manifest = build_manifest(
+        spoiiaa, walk(spoiiaa, {"structure.chains": "all", "residue.SEP.treatment": "amber_library"})
+    )
+    assert [r["chain"] for r in manifest["noncanonical_residues"][0]["residues"]] == ["A", "B"]
+
+
+@pytest.mark.parametrize("treatment", ["am1bcc", "qmmesp_pyscf"])
+@pytest.mark.parametrize("chains", ["all", "A"])
+def test_a_strained_copy_rules_out_its_smiles_while_its_chain_is_built(spoiiaa, chains, treatment):
+    answers = walk(spoiiaa, {"structure.chains": chains, "residue.SEP.treatment": treatment})
+
+    with pytest.raises(DecisionError, match="A:SEP57 cannot be parameterised from its SMILES") as raised:
+        build_manifest(spoiiaa, answers)
+    assert raised.value.decision_id == "residue.SEP.treatment"
+    assert str(raised.value).endswith(
+        "Keep SEP with AmberTools' template, which bonds its atoms by name; prepare chain B "
+        "on its own; or replace SEP by SER."
+    )
+
+
+@pytest.mark.parametrize("treatment", ["am1bcc", "qmmesp_pyscf"])
+def test_without_the_strained_copy_its_smiles_builds(spoiiaa, treatment):
+    manifest = build_manifest(
+        spoiiaa, walk(spoiiaa, {"structure.chains": "B", "residue.SEP.treatment": treatment})
+    )
+
+    assert manifest["noncanonical_residues"][0]["residues"] == [{**SEP57, "icode": None}]
+
+
+def test_the_refusal_comes_at_the_question(spoiiaa):
+    """As the web builder and the wizard check each answer, not at the end."""
+
+    conflict = answer_conflicts(
+        spoiiaa, {"structure.chains": "all", "residue.SEP.treatment": "am1bcc"}
+    )
+
+    assert conflict is not None and conflict.decision_id == "residue.SEP.treatment"
+    assert (
+        answer_conflicts(spoiiaa, {"structure.chains": "B", "residue.SEP.treatment": "am1bcc"})
+        is None
+    )
+
+
+def _chain_b_ending_at_sep57(tmp_path) -> Path:
+    """1H4X with chain B cut after SEP57, which then ends its chain."""
+
+    kept = [
+        line
+        for line in SPOIIAA.read_text().splitlines(keepends=True)
+        if not (
+            line.startswith(("ATOM  ", "ANISOU")) and line[21] == "B" and int(line[22:26]) > 57
+        )
+        and not (line.startswith("LINK  ") and "B  58" in line)
+        and not line.startswith("CONECT")
+    ]
+    path = tmp_path / "1h4x_chain_b_to_sep57.pdb"
+    path.write_text("".join(kept))
+    return path
+
+
+def test_a_copy_ending_its_chain_rules_out_keeping_only_while_its_chain_is_built(tmp_path):
+    plan = plan_decisions(_chain_b_ending_at_sep57(tmp_path))
+    decision = plan.by_id("residue.SEP.treatment")
+
+    # Chain A's copy can be kept, from the template -- one copy ending its
+    # chain used to leave only replacing -- and neither copy from a SMILES:
+    # B's ends its chain and A's is strained.
+    assert [choice.value for choice in decision.choices] == ["replace", "amber_library"]
+    assert "Kept, it is built with chain A prepared on its own." in decision.why
+    manifest = build_manifest(
+        plan, walk(plan, {"structure.chains": "A", "residue.SEP.treatment": "amber_library"})
+    )
+    assert manifest["noncanonical_residues"][0]["residues"] == [
+        {**SEP57, "chain": "A", "icode": None}
+    ]
+    for chains in ("all", "B"):
+        answers = walk(plan, {"structure.chains": chains, "residue.SEP.treatment": "amber_library"})
+        with pytest.raises(DecisionError, match="B:SEP57 is at the C-terminus") as raised:
+            build_manifest(plan, answers)
+        assert raised.value.decision_id == "residue.SEP.treatment"
+        assert str(raised.value).endswith("Prepare chain A on its own, or replace SEP by SER.")
 
 
 def test_a_kept_residue_away_from_a_bonded_metal_is_no_conflict():
