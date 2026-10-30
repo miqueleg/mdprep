@@ -165,9 +165,10 @@ Relative paths are resolved from the manifest directory. Unknown heterogens
 are not deleted or guessed: configure them under `ligands` or `metals`, or
 explicitly request their removal.
 
-For a guided workflow, use the [web input builder](https://miqueleg.github.io/mdprep/):
-it shows the structure in 3D, asks only the questions your structure needs, and
-writes a validated manifest and a bundle. With no structure of your own, it
+For a guided workflow, use the [web input builder](https://miqueleg.github.io/mdprep/)
+(or [its copy on Cloudflare](https://mdprep.miqueleg.workers.dev/), if that one
+is down): it shows the structure in 3D, asks only the questions your structure
+needs, and writes a validated manifest and a bundle. With no structure of your own, it
 loads SyrB2 (PDB 2FCT) in one click. Then open the
 [official Colab notebook](https://colab.research.google.com/github/miqueleg/mdprep/blob/master/examples/mdprep_colab.ipynb)
 ([`examples/mdprep_colab.ipynb`](examples/mdprep_colab.ipynb)): it installs
