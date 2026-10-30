@@ -229,7 +229,15 @@ def run_tleap_stage(
             context="dry",
         )
         _ensure_outputs(dry_outputs)
-        residue_checks, residue_problems = kept_residue_checks(dry_outputs.prmtop, manifest)
+        residue_checks, residue_problems = kept_residue_checks(
+            dry_outputs.prmtop,
+            manifest,
+            mcpb_renames=(
+                metal_result.mcpb_site.all_residue_renames
+                if metal_result is not None and metal_result.mcpb_site is not None
+                else ()
+            ),
+        )
         if residue_problems:
             raise TLeapBuildError(
                 "The dry topology does not hold the kept noncanonical residues as "

@@ -26,7 +26,9 @@ from typing import TYPE_CHECKING, Sequence
 
 from mdprep.ambertools.commands import AmberToolsError
 from mdprep.config.models import ManifestConfig, NoncanonicalResidueConfig
-from mdprep.leap.forcefields import ResidueLibraryFiles
+from mdprep.leap.forcefields import ResidueLibraryFiles, protein_leaprc
+from mdprep.leap.log_parser import LeapLogError, assert_tleap_success
+from mdprep.leap.runner import TLeapRunError, run_tleap
 from mdprep.residues.capping import ResidueCappingError, chain_context
 from mdprep.residues.charges import ResidueChargeError
 from mdprep.residues.frcmod import ResidueFrcmodError
@@ -35,7 +37,7 @@ from mdprep.residues.parameterise import (
     ResidueParameterisationError,
     parameterise_residue,
 )
-from mdprep.residues.templates import AMBER_RESIDUE_TEMPLATES
+from mdprep.residues.templates import AMBER_RESIDUE_TEMPLATES, AmberResidueTemplate
 from mdprep.structure.models import PdbStructure, ResidueRecord
 from mdprep.structure.selectors import SelectorError, resolve_residue_selector
 
@@ -134,6 +136,20 @@ def final_resname(block: NoncanonicalResidueConfig) -> str:
     """The name the residues of ``block`` are built under."""
 
     return block.template if block.template is not None else block.resname
+
+
+def kept_residue_names(manifest: ManifestConfig) -> frozenset[str]:
+    """The names kept residues are built under: residues of the protein chains."""
+
+    return frozenset(final_resname(block) for block in manifest.noncanonical_residues)
+
+
+def kept_residue_net_charges(manifest: ManifestConfig) -> dict[str, int]:
+    """Each kept residue's net charge, by the name it is built under."""
+
+    return {
+        final_resname(block): expected_charge(block) for block in manifest.noncanonical_residues
+    }
 
 
 def expected_charge(block: NoncanonicalResidueConfig) -> int:
@@ -289,6 +305,45 @@ def run_residue_stage(
         write_stage_failure(output_dir, exc)
         raise ResidueStageError(str(exc)) from exc
     return ResidueStageResult(blocks=blocks, leap_inputs=inputs)
+
+
+def template_mol2(
+    template: AmberResidueTemplate, *, protein_forcefield: str, work_dir: Path
+) -> Path:
+    """An AmberTools template's unit as a mol2, with its Amber types and charges.
+
+    For a program that reads a residue from a mol2 rather than from tleap's
+    libraries, as MCPB.py does every residue it does not know. tleap writes
+    it from the library itself, so it is the unit the build loads.
+    """
+
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True)
+    mol2 = work / f"{template.name}.mol2"
+    leaprc = template.leaprc(protein_forcefield)
+    script = work / "tleap.savemol2.in"
+    script.write_text(
+        "\n".join(
+            [
+                f"source {protein_leaprc(protein_forcefield)}",
+                *([f"source {leaprc}"] if leaprc else []),
+                f"savemol2 {template.name} {mol2.name} 1",
+                "quit",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    try:
+        run = run_tleap(script, work_dir=work)
+        assert_tleap_success(
+            run.summary, fail_on_warnings=False, context=f"{template.name} template mol2"
+        )
+    except (TLeapRunError, LeapLogError) as exc:
+        raise ResidueStageError(str(exc)) from exc
+    if not mol2.is_file() or mol2.stat().st_size == 0:
+        raise ResidueStageError(f"tleap did not write {mol2} from the {template.name} template.")
+    return mol2
 
 
 def block_residues(

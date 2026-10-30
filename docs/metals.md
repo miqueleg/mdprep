@@ -665,12 +665,11 @@ silently choosing one charge model.
 - Metal charges are limited to +1 through +4 because the mandatory provisional
   hydrogenation/QMMESP environment uses Amber Li/Merz ion models.
 - No metal-metal bond inference, metal clusters, covalent ligands (heme c
-  among them), a kept noncanonical residue in the same build as a bonded site
-  (replace it by its parent, or model the metal nonbonded, which a kept
-  residue may coordinate; see
-  [noncanonical_residues.md](noncanonical_residues.md#metals-and-kept-residues)),
-  ORCA backend, or Multiwfn dependency. A metal inside a cofactor is supported; see
-  [A metal inside a cofactor](#a-metal-inside-a-cofactor-hemes).
+  among them), ORCA backend, or Multiwfn dependency. A kept noncanonical
+  residue may sit on a bonded site, modelled by MCPB.py as the amino acid it
+  is ([noncanonical_residues.md](noncanonical_residues.md#metals-and-kept-residues)),
+  and a metal inside a cofactor is supported
+  ([A metal inside a cofactor](#a-metal-inside-a-cofactor-hemes)).
 - No small-model optimization inside the MCPB Hessian stage. Geometry must come
   from a completed ASH QM/MM refinement or an explicitly supplied optimized PDB.
 - MCPB.py and its AmberTools RESP dependencies are always required. The

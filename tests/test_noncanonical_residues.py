@@ -157,14 +157,30 @@ def _with_kept_residue(example: str) -> dict:
     return data
 
 
-def test_a_bonded_metal_site_and_a_kept_residue_are_refused_together():
-    with pytest.raises(ValidationError, match="not supported yet: neither the QM/MM refinement"):
-        ManifestConfig.model_validate(_with_kept_residue("17_syrb2_bound_water_mcpb.yaml"))
+def test_a_bonded_metal_site_and_a_kept_residue_are_built_together():
+    ManifestConfig.model_validate(_with_kept_residue("17_syrb2_bound_water_mcpb.yaml"))
+    ManifestConfig.model_validate(_with_kept_residue("10_qmmm_refinement_ash.yaml"))
 
 
-def test_refinement_and_a_kept_residue_are_refused_together():
-    with pytest.raises(ValidationError, match="QM/MM refinement with noncanonical_residues"):
-        ManifestConfig.model_validate(_with_kept_residue("10_qmmm_refinement_ash.yaml"))
+def test_qmmesp_charges_for_a_residue_on_a_bonded_metal_are_refused():
+    """MCPB.py refits the charges of every residue on the metal."""
+
+    data = load_manifest(ROOT / "examples" / "17_syrb2_bound_water_mcpb.yaml").model_dump(mode="json")
+    data["noncanonical_residues"] = [
+        {
+            "resname": "KCX",
+            # Where the site's His116 is: a residue the fit refits.
+            "residues": [{"chain": "A", "resname": "KCX", "resid": 116}],
+            "parameters": "qmmesp_pyscf",
+            "smiles": KNOWN_RESIDUE_CHEMISTRY["KCX"].smiles,
+            "net_charge": -1,
+            "parent": "LYS",
+            "qmmesp": {"method": "HF", "basis": "6-31G*"},
+        }
+    ]
+
+    with pytest.raises(ValidationError, match="refits the charges of every residue on the metal"):
+        ManifestConfig.model_validate(data)
 
 
 # --------------------------------------------------------------------------
@@ -727,7 +743,7 @@ def test_the_question_follows_the_chains_kept(tmp_path):
     assert manifest["noncanonical_residues"][0]["residues"] == [{**SEP57, "chain": "C", "icode": None}]
 
 
-def test_a_kept_residue_and_a_bonded_metal_are_refused_at_the_question():
+def test_a_kept_residue_away_from_a_bonded_metal_is_no_conflict():
     from mdprep.config.decisions import _require_buildable_residues
 
     plan = DecisionPlan(
@@ -745,12 +761,10 @@ def test_a_kept_residue_and_a_bonded_metal_are_refused_at_the_question():
         findings={"noncanonical_residues": {"SEP": {"parent": "SER"}}},
     )
 
-    with pytest.raises(DecisionError, match="cannot be built together yet") as raised:
+    for treatment in ("amber_library", "am1bcc", "qmmesp_pyscf"):
         _require_buildable_residues(
-            plan, {"residue.SEP.treatment": "am1bcc", "metal.a_zn_1.model": "bonded_mcpb"}
+            plan, {"residue.SEP.treatment": treatment, "metal.a_zn_1.model": "bonded_mcpb"}
         )
-    # Not on the metal: the question to go back to is the metal's.
-    assert raised.value.decision_id == "metal.a_zn_1.model"
 
 
 def test_the_example_is_what_the_planner_writes():
@@ -797,19 +811,59 @@ def test_the_calcium_example_is_what_the_planner_writes():
         assert "A:CGU24" in [choice.value for choice in donors.choices]
 
 
-def test_keeping_gla_and_bonding_its_calcium_is_refused_at_the_residue():
+def _bonded_gla(treatment: str, **given) -> tuple:
     plan = plan_decisions(ROOT / "examples" / "tutorials" / "osteocalcin_1q8h" / "1Q8H.pdb")
     answers = walk(
         plan,
         {
-            "residue.CGU.treatment": "am1bcc",
+            "residue.CGU.treatment": treatment,
             "metal.a_ca_71_site.model": "bonded_mcpb",
+            "metal.a_ca_71_site.confirm_donors": ["A:CGU24", "A:HOH87"],
             "project.name": "osteocalcin_1q8h",
             "project.output_dir": "prepared/osteocalcin_1q8h",
+            **given,
         },
     )
+    return plan, answers
+
+
+@pytest.mark.parametrize(
+    ("treatment", "given", "charge", "terms"),
+    [
+        # Kept, Gla brings the charge its SMILES has.
+        ("am1bcc", {}, 0, ["CA +2", "CGU24 -2", "HOH87 +0"]),
+        # Replaced, it is a glutamate on the metal, asked about as one.
+        (
+            "replace",
+            {"metal.a_ca_71_site.donor_state.a_cgu_24": "GLU"},
+            1,
+            ["CA +2", "GLU24 -1", "HOH87 +0"],
+        ),
+    ],
+)
+def test_gla_on_a_bonded_calcium_counts_in_the_model_charge(treatment, given, charge, terms):
+    from mdprep.config.decisions import proposed_model_charge
+
+    plan, answers = _bonded_gla(treatment, **given)
+
+    assert answer_conflicts(plan, answers) is None
+    assert proposed_model_charge(plan, answers, "a_ca_71_site") == (charge, terms)
+
+
+def test_qmmesp_charges_for_gla_on_a_bonded_calcium_are_refused_at_the_residue():
+    plan, answers = _bonded_gla("qmmesp_pyscf")
 
     conflict = answer_conflicts(plan, answers)
 
-    assert conflict is not None and "CGU coordinates the metal" in str(conflict)
+    assert conflict is not None and "would never reach the build" in str(conflict)
     assert conflict.decision_id == "residue.CGU.treatment"
+
+
+def test_a_bonded_site_takes_one_gaff_family_for_ligands_and_kept_residues():
+    data = load_manifest(ROOT / "examples" / "17_syrb2_bound_water_mcpb.yaml").model_dump(mode="json")
+    data["noncanonical_residues"] = [_smiles_block()]
+    for ligand in data["ligands"]:
+        ligand["atom_types"] = "gaff"
+
+    with pytest.raises(ValidationError, match="one GAFF family per run"):
+        ManifestConfig.model_validate(data)

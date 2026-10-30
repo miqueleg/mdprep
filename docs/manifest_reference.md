@@ -366,9 +366,10 @@ noncanonical_residues:
   ligand. `scf_charge`, if given, must be `net_charge`, and `scf_spin` 0.
 
 A kept residue may not also be removed, replaced, overridden in protonation,
-configured as a ligand or a metal ion. It may coordinate a nonbonded metal;
-it is not supported together with a bonded MCPB site or QM/MM refinement.
-See [noncanonical_residues.md](noncanonical_residues.md).
+configured as a ligand or a metal ion. It may coordinate a metal, nonbonded
+or bonded, and be part of a QM/MM refinement; QMMESP charges for one on a
+bonded metal are refused, since MCPB.py refits them. See
+[noncanonical_residues.md](noncanonical_residues.md).
 
 ## refinement
 

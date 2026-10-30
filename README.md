@@ -33,8 +33,9 @@ recorded in the output reports.
   where they exist, or parameterised from their SMILES: AM1-BCC or QMMESP
   charges on the capped residue with the backbone's held at the force field's,
   GAFF2 on the side chain, the protein's types on the backbone, bonded into the
-  chain by tleap. A kept residue may coordinate a nonbonded metal, as
-  osteocalcin's Gla residues do its calcium
+  chain by tleap. A kept residue may coordinate a metal: nonbonded, as
+  osteocalcin's Gla residues do its calcium, or bonded, modelled by MCPB.py
+  as the amino acid it is
   ([docs/noncanonical_residues.md](docs/noncanonical_residues.md)).
 - Dimers, trimers, tetramers: every protein chain in one system. Copies of one
   protein can share parameters -- asked about once, matched residue for
@@ -268,8 +269,8 @@ charge model, protonation, force field, QM method, or metal model.
 mdprep does not support a noncanonical residue at a chain terminus, one
 parameterised from its SMILES whose backbone nitrogen has no hydrogen (a
 proline analogue, an N-methyl amino acid) or that holds an element GAFF2 does
-not type (a metal, a selenium), or one kept in the same build as a bonded MCPB
-site or a QM/MM refinement; covalent
+not type (a metal, a selenium), or QMMESP charges for one on a bonded metal,
+which MCPB.py refits; covalent
 ligands (heme c and the bonded hemes of peroxidases among them; glycans and
 other bonded heterogens can only be removed), metal clusters, oxoanions such
 as vanadate, automatic loop modeling (a missing loop is left as two

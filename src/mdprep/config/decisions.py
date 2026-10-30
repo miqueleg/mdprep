@@ -34,6 +34,7 @@ from mdprep.residues.capping import (
     unparameterisable_reason,
 )
 from mdprep.residues.templates import (
+    AMBER_RESIDUE_TEMPLATES,
     KNOWN_RESIDUE_CHEMISTRY,
     AmberResidueTemplate,
     KnownResidueChemistry,
@@ -3103,29 +3104,22 @@ def _require_buildable_residues(plan: DecisionPlan, resolved: Mapping[str, Any])
         and decision.id.endswith(".model")
         and resolved.get(decision.id) == "bonded_mcpb"
     ]
-    if bonded:
-        # The question to go back to: the residue's, if it is on the metal.
-        asked = {decision.id for decision in plan.decisions}
-        on_metal = [
-            target.resname
-            for site_id in bonded
-            if f"metal.{site_id}.confirm_donors" in asked
-            for target in selected_donor_targets(plan, resolved, site_id)
-            if target.resname in kept
-        ]
-        resname = on_metal[0] if on_metal else kept[0]
-        raise DecisionError(
-            f"Keeping {resname} and modelling {bonded[0]} bonded cannot be built "
-            "together yet: neither the QM/MM refinement a bonded site takes its "
-            "geometry from nor MCPB.py's models of the site handle a kept residue. "
-            + (
-                f"{resname} coordinates the metal: model the metal nonbonded, which a "
-                "kept residue can coordinate, or replace the residue by its parent."
-                if on_metal
-                else "Model the metal nonbonded, or replace the residue by its parent."
-            ),
-            decision_id=f"residue.{resname}.treatment" if on_metal else f"metal.{bonded[0]}.model",
-        )
+    # A residue on a bonded metal has its charges refitted by MCPB.py with
+    # the rest of the site, so a QMMESP fit of it would never be used.
+    asked = {decision.id for decision in plan.decisions}
+    for site_id in bonded:
+        if f"metal.{site_id}.confirm_donors" not in asked:
+            continue
+        for target in selected_donor_targets(plan, resolved, site_id):
+            resname = target.resname.strip().upper()
+            if resname in kept and resolved.get(f"residue.{resname}.treatment") == "qmmesp_pyscf":
+                raise DecisionError(
+                    f"{resname} coordinates {site_id}, a bonded site, whose MCPB.py fit "
+                    "refits the charges of every residue on the metal: QMMESP charges "
+                    "for it would never reach the build. Keep it with AM1-BCC charges, "
+                    "which only seed that fit, or model the metal nonbonded.",
+                    decision_id=f"residue.{resname}.treatment",
+                )
     if resolved.get("protein.forcefield") == "ff19SB":
         orphans = [
             resname
@@ -4150,10 +4144,13 @@ def proposed_model_charge(
     # A titratable side chain on the metal carries the state it was given,
     # not the one its residue name suggests: the cysteine on a heme is named
     # CYS and is a thiolate. Until that is answered its term is unknown.
+    # Only the questions that apply: a modified residue's is asked only if
+    # it is replaced by its parent, and kept it has a charge of its own.
     donor_states = {
         decision.id.rsplit(".", 1)[1]: answers.get(decision.id)
         for decision in plan.decisions
         if decision.id.startswith(f"metal.{site_id}.donor_state.")
+        and decision.is_applicable(answers)
     }
 
     complete = True
@@ -4176,6 +4173,8 @@ def proposed_model_charge(
                 continue
             resname = str(state).strip().upper()
         charge = STANDARD_DONOR_FORMAL_CHARGE.get(resname)
+        if charge is None:
+            charge = _modified_residue_charge(plan, answers, resname)
         if charge is None and key in ligand_charges:
             try:
                 charge = int(ligand_charges[key])
@@ -4188,6 +4187,35 @@ def proposed_model_charge(
         terms.append(f"{resname}{donor.resid} {charge:+d}")
         total += charge
     return (total if complete else None), terms
+
+
+def _modified_residue_charge(
+    plan: DecisionPlan, answers: Mapping[str, Any], resname: str
+) -> int | None:
+    """A modified residue's charge on a metal, as the answers so far have it.
+
+    Kept from its SMILES, the net charge given for it; kept with a template,
+    the template's; replaced, its parent's, when that does not depend on a
+    protonation the donor's own question settles. None until it is known.
+    """
+
+    finding = plan.findings.get("noncanonical_residues", {}).get(resname)
+    if finding is None:
+        return None
+    treatment = answers.get(f"residue.{resname}.treatment")
+    if treatment in SMILES_TREATMENTS:
+        try:
+            return int(answers.get(f"residue.{resname}.net_charge"))
+        except (TypeError, ValueError):
+            return None
+    if treatment == "amber_library":
+        templates = finding["templates"]
+        name = answers.get(f"residue.{resname}.template") if len(templates) > 1 else templates[0]
+        template = AMBER_RESIDUE_TEMPLATES.get(str(name))
+        return None if template is None else template.net_charge
+    if treatment == "replace" and finding["parent"] is not None:
+        return STANDARD_DONOR_FORMAL_CHARGE.get(finding["parent"])
+    return None
 
 
 def proposed_answers(

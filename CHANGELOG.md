@@ -55,9 +55,25 @@
   formal charge is among those that polarise the fit.
   `examples/23_osteocalcin_gla_calcium.yaml` keeps osteocalcin's three
   gamma-carboxyglutamates on its three Ca2+ (PDB 1Q8H, shipped as a
-  tutorial), and the SMILES and charge of Gla (CGU) are proposed. A bonded
-  site and a kept residue in one build are still refused, now saying why and,
-  when the residue is on the metal, at the residue's question.
+  tutorial), and the SMILES and charge of Gla (CGU) are proposed.
+- Bonded MCPB sites and QM/MM refinement in builds that keep residues,
+  including a kept residue on the metal. MCPB.py tells an amino acid by its
+  atoms, so it models the residue as one -- side chain in the small model,
+  backbone capped from its neighbours in the large -- reading its types and
+  charges from a mol2 mdprep stages for every kept residue: the residue's own
+  for one parameterised from its SMILES, or the template's unit written out
+  by tleap with its family's frcmod. MCPB.py's rename of the residue on the
+  metal is carried through: its template and peptide bonds reach the final
+  build, every other residue of the name keeps its library (no unit of the
+  residue's own name is taken from MCPB.py's commands), and the topology
+  checks count it under the new name with its refitted charge reported. The
+  planner counts a kept residue's charge in the model charge it proposes,
+  and refusals now cover only QMMESP charges for a residue on a bonded metal,
+  which MCPB.py refits. The pre-MCPB hydrogenation build loads the residues'
+  libraries, and the refinement's provisional system looks for them under the
+  project's output directory rather than its own; its QM region counts a kept
+  residue as protein, at its block's charge. A residue fitted with QMMESP after a refinement keeps the
+  refinement's hydrogens.
 - A metal deposited inside a modified residue of a chain -- a cysteine and its
   zinc as one residue -- is read the way a heme's iron is: moved into a
   residue of its own, a metal site, and written after the chain rather than

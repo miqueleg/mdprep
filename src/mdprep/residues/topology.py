@@ -6,11 +6,18 @@ residue with a dangling nitrogen. So the topology itself is read back
 (``mdprep.analysis.prmtop``, no ParmEd needed), and every kept residue must
 be there under its name, carry the charge it was built with, and be bonded
 by peptide bonds to the residues on either side.
+
+A kept residue on a bonded metal is the exception to the first two: MCPB.py
+gave it a template of its own, under a new name, and refitted its charges
+with the rest of the site, which leaves no residue of the site an integer.
+It is counted under the name MCPB.py gave it, and its charge is reported
+rather than checked; the peptide bonds still have to be there.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Mapping, Sequence
 
 from mdprep.analysis.prmtop import AmberTopology, read_prmtop
 from mdprep.config.models import ManifestConfig
@@ -20,9 +27,15 @@ CHARGE_TOLERANCE_E = 1.0e-3
 
 
 def kept_residue_checks(
-    prmtop: str | Path, manifest: ManifestConfig
+    prmtop: str | Path,
+    manifest: ManifestConfig,
+    mcpb_renames: Sequence[Mapping[str, object]] = (),
 ) -> tuple[list[dict[str, object]], list[str]]:
-    """One check per kept residue name, and the problems found."""
+    """One check per kept residue name, and the problems found.
+
+    ``mcpb_renames`` are MCPB.py's renames of the residues of a bonded site,
+    as its result reports them.
+    """
 
     if not manifest.noncanonical_residues:
         return [], []
@@ -32,34 +45,53 @@ def kept_residue_checks(
     for block in manifest.noncanonical_residues:
         name = final_resname(block)
         charge = expected_charge(block)
+        refitted_names = {
+            str(rename["final_resname"])
+            for rename in mcpb_renames
+            if rename.get("original_resname") == name
+        }
         found = [residue for residue in topology.residues if residue.name == name]
+        refitted = [residue for residue in topology.residues if residue.name in refitted_names]
         charges = [
             round(sum(topology.atoms[index].charge for index in residue.atom_indices), 6)
             for residue in found
         ]
+        refitted_charges = {
+            f"{residue.name}{residue.index + 1}": round(
+                sum(topology.atoms[index].charge for index in residue.atom_indices), 6
+            )
+            for residue in refitted
+        }
         unbonded = [
-            f"{name}{residue.index + 1}"
-            for residue in found
+            f"{residue.name}{residue.index + 1}"
+            for residue in (*found, *refitted)
             if not _peptide_bonded(topology, residue.index)
         ]
         wrong_charge = [value for value in charges if abs(value - charge) > CHARGE_TOLERANCE_E]
-        ok = len(found) == len(block.residues) and not unbonded and not wrong_charge
+        count = len(found) + len(refitted)
+        ok = count == len(block.residues) and not unbonded and not wrong_charge
         checks.append(
             {
                 "resname": block.resname,
                 "built_as": name,
                 "expected_count": len(block.residues),
-                "count": len(found),
+                "count": count,
                 "expected_charge": charge,
                 "charges": charges,
+                "refitted_by_mcpb": refitted_charges,
                 "peptide_bonded": not unbonded,
                 "ok": ok,
             }
         )
-        if len(found) != len(block.residues):
+        if count != len(block.residues):
             problems.append(
-                f"the topology holds {len(found)} residue(s) named {name} where "
-                f"noncanonical_residues {block.resname} keeps {len(block.residues)}"
+                f"the topology holds {count} residue(s) named {name}"
+                + (
+                    f" or MCPB.py's {', '.join(sorted(refitted_names))}"
+                    if refitted_names
+                    else ""
+                )
+                + f" where noncanonical_residues {block.resname} keeps {len(block.residues)}"
             )
         if wrong_charge:
             problems.append(

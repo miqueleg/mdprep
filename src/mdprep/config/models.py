@@ -1355,19 +1355,42 @@ class ManifestConfig(StrictModel):
                 + " also acts on; a kept residue is built as it is, with the "
                 "protonation its block states"
             )
-        bonded = [site.id for site in self.metals if site.model == "bonded_mcpb"]
-        if bonded:
+        # MCPB.py refits the charges of every residue of a bonded site, so a
+        # QMMESP fit of one would never reach the build.
+        fitted = {
+            (item.chain, item.resid, item.icode): block.resname
+            for block in blocks
+            if block.parameters == "qmmesp_pyscf"
+            for item in block.residues
+        }
+        for site in self.metals:
+            if site.model != "bonded_mcpb" or site.mcpb is None:
+                continue
+            in_site = [
+                (selector.chain, selector.resid, selector.icode)
+                for selector in [
+                    *(bond.coordinator for bond in site.mcpb.bonds),
+                    *site.mcpb.additional_residues,
+                ]
+            ]
+            on_site = sorted({fitted[key] for key in in_site if key in fitted})
+            if on_site:
+                raise ValueError(
+                    f"noncanonical_residues {', '.join(on_site)} "
+                    f"{'are' if len(on_site) > 1 else 'is'} part of bonded metal site "
+                    f"{site.id!r}, whose MCPB.py fit refits the charges of every residue "
+                    "on the metal, so QMMESP charges would never reach the build. Keep "
+                    "it with parameters: am1bcc, whose charges only seed the fit, or "
+                    "model the metal nonbonded"
+                )
+        bonded = any(site.model == "bonded_mcpb" for site in self.metals)
+        families = {block.atom_types for block in blocks if block.parameters != "amber_library"}
+        families |= {ligand.atom_types for ligand in self.ligands}
+        if bonded and len(families) > 1:
             raise ValueError(
-                f"Bonded metal site {bonded[0]!r} and noncanonical_residues in one "
-                "build are not supported yet: neither the QM/MM refinement a bonded "
-                "site takes its geometry from nor MCPB.py's models of the site handle "
-                "a kept residue. Model the site nonbonded -- a kept residue may "
-                "coordinate a nonbonded metal -- or replace the residues by their parents"
-            )
-        if self.refinement.enabled:
-            raise ValueError(
-                "QM/MM refinement with noncanonical_residues is not supported yet; "
-                "disable refinement, or replace the residues by their parents"
+                "A bonded metal site hands MCPB.py every ligand and kept residue, and "
+                "MCPB.py takes one GAFF family per run; the noncanonical_residues use "
+                "gaff2, so the ligands must as well"
             )
         if self.protein.forcefield == "ff19SB":
             orphans = [

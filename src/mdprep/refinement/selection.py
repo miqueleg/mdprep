@@ -13,6 +13,7 @@ from mdprep.refinement.mapping import (
     is_virtual_site,
     map_residues_by_coordinates,
 )
+from mdprep.residues.workflow import kept_residue_net_charges
 from mdprep.structure.classify import (
     is_bulk_ion_residue,
     is_nonstandard_nonwater_residue,
@@ -246,6 +247,7 @@ def select_refinement_regions(
     # site, a crystal ion from Amber's ion library -- is part of the MM
     # environment like any residue of the protein, not an undeclared
     # heterogen. 5OXU's magnesium sits on the heme's propionate.
+    kept_charges = kept_residue_net_charges(manifest)
     mm_ions = {
         input_index_by_object[id(ion.residue)]
         for site in resolved_metal_sites
@@ -272,6 +274,8 @@ def select_refinement_regions(
             and residue_index not in mm_ions
             and is_nonstandard_nonwater_residue(input_residue)
             and not is_bulk_ion_residue(input_residue)
+            # A kept noncanonical residue is a residue of the protein.
+            and input_residue.id.resname not in kept_charges
         ):
             raise RefinementSelectionError(
                 "A non-protein, non-water component contacts the configured QM region but "
@@ -305,6 +309,7 @@ def select_refinement_regions(
     charge_components = _charge_components(
         pairs=pairs,
         manifest=manifest,
+        kept_charges=kept_charges,
         selected_ligand_residues=selected_ligand_residues,
         selected_metal_residues=selected_metal_residues,
         selected_coordinating_ions=selected_coordinating_ions,
@@ -369,6 +374,7 @@ def _charge_components(
     selected_metal_residues: dict[int, tuple[str, int]],
     selected_coordinating_ions: dict[int, tuple[str, object]],
     coordinator_residue_indices: set[int],
+    kept_charges: dict[str, int] | None = None,
 ) -> list[ChargeComponent]:
     ligand_by_id = {ligand.id: ligand for ligand in manifest.ligands}
     site_by_id = {site.id: site for site in manifest.metals}
@@ -423,6 +429,18 @@ def _charge_components(
                     label=f"water:{input_residue.id.display()}",
                     kind="water",
                     charge=0,
+                )
+            )
+            continue
+        if input_residue.id.resname in (kept_charges or {}):
+            # Its charge is the one its block states, a closed shell; it sits
+            # inside the chain, so no terminus changes it.
+            assert kept_charges is not None
+            components.append(
+                ChargeComponent(
+                    label=f"protein:{input_residue.id.display()}",
+                    kind="protein_residue",
+                    charge=kept_charges[input_residue.id.resname],
                 )
             )
             continue

@@ -91,10 +91,12 @@ QMMESP_RESIDUE_CONFIRMATION = (
     "not written to the residue's library."
 )
 
-# The residue's hydrogens are placed in the structure from the same SMILES
-# and heavy atoms as the capped model's; anything further apart than this is
-# not the same molecule.
+# The residue's heavy atoms are the structure's, so they are where the capped
+# model has them; anything further apart than this is not the same molecule.
 COORDINATE_TOLERANCE_ANGSTROM = 0.01
+
+# A hydrogen further than this from the atom it belongs to is not bonded to it.
+HYDROGEN_BOND_LENGTH_MAX_ANGSTROM = 1.3
 
 # Further than this from its AM1-BCC charge, an atom's fitted charge is more
 # likely RESP's freedom with a buried atom than polarisation: on osteocalcin's
@@ -514,14 +516,22 @@ def at_structure_coordinates(
 
     The provisional system holds the residue as the structure does, and its
     embedding is found and measured from there. Its heavy atoms are the
-    capped model's own; its hydrogens were placed from the same SMILES by the
-    same procedure, so they agree too, and a residue whose atoms do not is
-    not the one the model describes.
+    capped model's own, to the hundredth of an angstrom. Its hydrogens were
+    placed from the same SMILES, but a QM/MM refinement may have moved them
+    since, so each need only still be bonded to the atom the SMILES puts it
+    on; a residue whose atoms are otherwise is not the one the model
+    describes.
     """
 
     placed = {atom.name.strip(): atom for atom in residue.atoms}
+    parent_of: dict[int, int] = {}
+    for first, second, _ in capped.bonds:
+        if capped.atoms[first].element == "H":
+            parent_of[first] = second
+        elif capped.atoms[second].element == "H":
+            parent_of[second] = first
     atoms = []
-    for atom in capped.atoms:
+    for index, atom in enumerate(capped.atoms):
         if atom.role != "RES":
             atoms.append(atom)
             continue
@@ -530,13 +540,24 @@ def at_structure_coordinates(
             raise ResidueQmmespError(
                 f"{label}: the structure has no {atom.name}, which its SMILES gives it."
             )
-        moved = dist((atom.x, atom.y, atom.z), (source.x, source.y, source.z))
-        if moved > COORDINATE_TOLERANCE_ANGSTROM:
-            raise ResidueQmmespError(
-                f"{label}: {atom.name} is {moved:.3f} A from where the capped model "
-                "places it; the residue in the structure is not the one its SMILES "
-                "describes."
-            )
+        if atom.element != "H":
+            moved = dist((atom.x, atom.y, atom.z), (source.x, source.y, source.z))
+            if moved > COORDINATE_TOLERANCE_ANGSTROM:
+                raise ResidueQmmespError(
+                    f"{label}: {atom.name} is {moved:.3f} A from where the capped model "
+                    "places it; the residue in the structure is not the one its SMILES "
+                    "describes."
+                )
+        else:
+            parent = capped.atoms[parent_of[index]]
+            anchor = placed.get(parent.name) if parent.role == "RES" else None
+            reference = (anchor.x, anchor.y, anchor.z) if anchor else (parent.x, parent.y, parent.z)
+            length = dist(reference, (source.x, source.y, source.z))
+            if length > HYDROGEN_BOND_LENGTH_MAX_ANGSTROM:
+                raise ResidueQmmespError(
+                    f"{label}: its hydrogen {atom.name} is {length:.2f} A from "
+                    f"{parent.name}, the atom its SMILES puts it on."
+                )
         atoms.append(replace(atom, x=source.x, y=source.y, z=source.z))
     extra = sorted(set(placed) - {atom.name for atom in capped.atoms if atom.role == "RES"})
     if extra:

@@ -74,6 +74,7 @@ def test_a_phosphoserine_parameterised_from_its_smiles_builds_into_the_chain(tmp
         "count": 1,
         "expected_charge": -2,
         "charges": [-2.0],
+        "refitted_by_mcpb": {},
         "peptide_bonded": True,
         "ok": True,
     }

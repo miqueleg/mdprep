@@ -68,10 +68,10 @@ Explicitly unsupported for v0.2:
 
 - noncanonical residues at a chain terminus, parameterised ones whose
   backbone nitrogen has no hydrogen or that hold an element GAFF2 does not
-  type (a metal, a selenium), organometallic ones, and kept ones in the same
-  build as a bonded MCPB site or a QM/MM refinement (residues inside a chain
-  are supported, with AM1-BCC or QMMESP charges, and may coordinate a
-  nonbonded metal; see `docs/noncanonical_residues.md`)
+  type (a metal, a selenium), organometallic ones, and QMMESP charges for one
+  on a bonded metal, which MCPB.py refits (residues inside a chain are
+  supported, with AM1-BCC or QMMESP charges, and may coordinate a metal,
+  nonbonded or bonded; see `docs/noncanonical_residues.md`)
 - covalent ligands
 - ORCA backend
 - Multiwfn dependency

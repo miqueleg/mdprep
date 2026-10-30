@@ -156,7 +156,15 @@ def validate_final_outputs(
     residue_checks: list[dict[str, object]] = []
     if manifest.noncanonical_residues and paths["prmtop"].is_file():
         try:
-            residue_checks, residue_problems = kept_residue_checks(paths["prmtop"], manifest)
+            residue_checks, residue_problems = kept_residue_checks(
+                paths["prmtop"],
+                manifest,
+                mcpb_renames=(
+                    metal_result.mcpb_site.all_residue_renames
+                    if metal_result is not None and metal_result.mcpb_site is not None
+                    else ()
+                ),
+            )
         except PrmtopError as exc:
             residue_problems = [f"the final topology could not be read ({exc})"]
         errors.extend(f"Kept noncanonical residues: {problem}." for problem in residue_problems)

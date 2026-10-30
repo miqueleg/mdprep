@@ -11,6 +11,7 @@ from typing import Mapping, Sequence
 import numpy as np
 
 from mdprep.config.models import LigandConfig, ManifestConfig, QmmespConfig
+from mdprep.residues.workflow import kept_residue_names
 from mdprep.structure.classify import STANDARD_PROTEIN_RESIDUES, WATER_RESIDUES
 
 # Closer than this to a QM atom, an MM atom is overlapping it, not around it.
@@ -241,15 +242,6 @@ def _find_target_ligand_atoms(
             f"Candidates: {details}."
         )
     return matches[0][0]
-
-
-def kept_residue_names(manifest: ManifestConfig) -> frozenset[str]:
-    """The names kept noncanonical residues are built under: protein, not ligands."""
-
-    return frozenset(
-        block.template if block.template is not None else block.resname
-        for block in manifest.noncanonical_residues
-    )
 
 
 def extract_residue_point_charges(

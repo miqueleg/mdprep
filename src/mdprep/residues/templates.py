@@ -48,6 +48,14 @@ LIBRARY_FILES: dict[str, dict[str, str]] = {
     "protein": {"ff14SB": "amino12.lib", "ff19SB": "amino19.lib"},
 }
 
+# The frcmod with each family's own atom types and terms, under
+# $AMBERHOME/dat/leap/parm, which its leaprc loads; the force field needs none.
+LIBRARY_FRCMODS: dict[str, dict[str, str | None]] = {
+    "phosaa": {"ff14SB": "frcmod.phosaa14SB", "ff19SB": "frcmod.phosaa19SB"},
+    "modAA": {"ff14SB": "frcmod.ff14SBmodAA", "ff19SB": "frcmod.ff19SBmodAA"},
+    "protein": {"ff14SB": None, "ff19SB": None},
+}
+
 LIBRARY_NAMES: dict[str, dict[str, str]] = {
     "phosaa": {"ff14SB": "phosaa14SB", "ff19SB": "phosaa19SB"},
     "modAA": {"ff14SB": "ff14SB_modAA", "ff19SB": "ff19SB_modAA"},
@@ -76,6 +84,9 @@ class AmberResidueTemplate:
 
     def library_file(self, forcefield: str) -> str:
         return LIBRARY_FILES[self.library][forcefield]
+
+    def frcmod_file(self, forcefield: str) -> str | None:
+        return LIBRARY_FRCMODS[self.library][forcefield]
 
 
 _SERINE_PHOSPHATE = frozenset(

@@ -752,8 +752,12 @@ def _build_qmmesp_provisional_system(
         water_model=manifest.protein.water_model,
         ligands=manifest.ligands,
         # A residue whose charges are fitted in this system is in it with
-        # its provisional AM1-BCC ones, as every ligand is.
-        residues=residue_leap_inputs(manifest, output, provisional=True),
+        # its provisional AM1-BCC ones, as every ligand is. The residue
+        # stage writes them under the project's output directory, which is
+        # not this system's when the refinement builds it.
+        residues=residue_leap_inputs(
+            manifest, manifest.project.output_dir, provisional=True
+        ),
     )
     ligand_files = validate_ligand_parameter_files(
         manifest=manifest,

@@ -279,10 +279,47 @@ the ion's formal charge is among the MM charges that polarise the fit -- and
 osteocalcin, three Gla residues on three calcium ions, is the reference case:
 [examples/23_osteocalcin_gla_calcium.yaml](../examples/23_osteocalcin_gla_calcium.yaml)
 and [its tutorial](../examples/tutorials/osteocalcin_1q8h/README.md).
-Modelled bonded, it is refused for now, with the residue's question to go
-back to: neither the QM/MM refinement a bonded site takes its geometry from
-nor MCPB.py's models of the site handle a kept residue yet. So is a bonded
-site elsewhere in a build that keeps a residue.
+
+**Bonded, with MCPB.py.** A kept residue on a bonded metal is modelled the
+way a histidine on it is. MCPB.py tells an amino acid by its atoms, not its
+name, so the residue's side chain joins the small model, and in the large
+model its backbone is capped from its neighbours; its atom types and charges
+MCPB.py reads from a mol2, as it reads a ligand's. mdprep hands it one for
+every kept residue -- the large model reaches the residues beside those on
+the metal -- with its frcmod: a residue parameterised from its SMILES has
+both under `residues/<NAME>/`, and one built from an AmberTools template has
+its unit written out by tleap (`savemol2`) with its family's frcmod
+(`frcmod.phosaa14SB`, `frcmod.ff14SBmodAA`...). Hydroxyproline is part of the
+protein force field, which MCPB.py reads itself. A residue parameterised from
+its SMILES brings GAFF2, and MCPB.py takes one GAFF family per run, so the
+site's ligands must use GAFF2 too.
+
+What comes back is the residue on the metal under a name of MCPB.py's -- the
+first and third letters of its own and a number, HSK becoming HK1 -- with a
+template carrying the metal-bonded atom types and the charges MCPB.py fitted
+to the large model, and explicit peptide bonds into the chain, since a
+template loaded from a mol2 knows nothing of it. Every other residue of the
+name keeps its library: mdprep takes only the renamed templates from
+MCPB.py's tleap commands, never a `loadmol2` of the residue's own name. The
+topology checks count the renamed residue under its new name and
+require its peptide bonds, and report its charge rather than hold it to an
+integer: MCPB.py shares charge across the site, as it does for the histidines
+on it. The QM/MM refinement a bonded site takes its geometry from treats a
+kept residue as protein, on the metal at the net charge its block states.
+
+QMMESP charges for a residue on a bonded metal are refused, with the
+residue's question to go back to: MCPB.py refits them, so they would never
+reach the build. Kept with AM1-BCC charges, they only seed that fit; a kept
+residue beside the site, not on its metal, may still be fitted with QMMESP.
+
+Two things to know. MCPB.py fits the large model's charges with RESP, and a
+residue buried in an ionic site can come out of that fit as badly as from
+any: on osteocalcin's Gla24 bonded to Ca71, the GFN2-ESP fit gave CB +3.8 e
+and CG -3.1. And the Seminario force constants of a calcium or a magnesium
+at a crystal geometry are where negative ones are most likely, which mdprep
+refuses ([metals.md](metals.md)); on that site the O-Ca-O angles came out
+negative. Both are further reasons to model those two ions nonbonded, as the
+planner proposes.
 
 **A metal deposited inside a residue.** Some depositions write a metal and the
 residue that binds it as one residue: CSB, a cysteine bound to a lead ion,
@@ -314,7 +351,9 @@ stays whole for the same outcome.
 - In the dry topology and the final one, read back without ParmEd: every kept
   residue is there, under its name and as many times as the manifest lists
   it, carries the charge it was built with, and is bonded by peptide bonds to
-  the residues on either side. `reports/validation_report.md` lists them.
+  the residues on either side. One MCPB.py renamed is counted under its new
+  name, and its refitted charge reported. `reports/validation_report.md`
+  lists them.
 - The residue report, `reports/residue_report.md`, records how each was
   built.
 
@@ -330,7 +369,10 @@ written with HF/6-31G*. For the common modifications -- phosphorylated
 serine, threonine and tyrosine, methylated and acetylated lysines, oxidised
 cysteines, carboxylysine, gamma-carboxyglutamate -- the template, SMILES and
 charge are proposed, with the reason for the protonation chosen, and can be
-changed. Choosing QMMESP adds PySCF to what the Colab setup installs.
+changed. Choosing QMMESP adds PySCF to what the Colab setup installs. A
+kept residue on a metal is one of the metal's donors like any other; on a
+bonded site, the model charge the planner proposes counts it at its net
+charge or its template's, and replaced, at its parent's.
 
 ## Not supported
 
@@ -342,8 +384,8 @@ changed. Choosing QMMESP adds PySCF to what the Colab setup installs.
   field's own template.
 - Residues of one name with different chemistry: tleap holds one template
   per name. Rename one of them in the input.
-- A kept residue in the same build as a bonded MCPB metal site, whether or
-  not the residue is on the metal, or as a QM/MM refinement.
+- QMMESP charges for a residue on a bonded metal, which MCPB.py refits; and
+  a kept residue with GAFF2 in a bonded site whose ligands use GAFF.
 - A residue holding a metal, a selenium or any element GAFF2 does not type,
   from its SMILES; an organometallic residue at all.
 - Gas-phase RESP for a residue, and a QMMESP fit averaged over several
