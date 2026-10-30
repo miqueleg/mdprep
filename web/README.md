@@ -57,6 +57,27 @@ fills in the copies. See [docs/oligomers.md](../docs/oligomers.md);
 `tests/test_web_builder_oligomer_case.py` drives the SyrB2 dimer through the
 page.
 
+## When the 3D view misbehaves
+
+The protein's cartoon is the one large thing the viewer draws -- 40 MB of
+geometry for an octamer of 4,400 residues, against a few kilobytes for the
+ligands -- so a browser short of graphics memory drops it and draws the
+ligands alone. That happened on one laptop at a workshop. 3Dmol 2.5 draws
+every viewer through one WebGL context it keeps for the page, and its
+handler for a lost context listens on the wrong canvas, so the page looks
+after its own:
+
+- a context the browser resets (a driver hiccup, a laptop switching
+  graphics cards) rebuilds the view on a new one;
+- out of memory, which WebGL reports only when asked and the page asks after
+  every draw, redraws the protein as lines, a fortieth of the geometry, and
+  the caption says so;
+- loading a structure again deletes the last view's buffers at once;
+- after three rebuilds the view stops and says what to do, and **Redraw the
+  3D view** rebuilds it by hand.
+
+`tests/test_web_builder_viewer.py` forces each of these in a real browser.
+
 ## Running it locally
 
 ```bash
@@ -131,6 +152,6 @@ micromamba environment since it is not on the notebook's own Python.
 
 ## Things worth knowing
 
-- The generated cell installs mdprep **from the repository**, not PyPI: the
-  published 0.2.0 wheel predates the Roe--Brooks NaN and large-PDB fixes.
-  Change `MDPREP_INSTALL` in `app.js` once a release carrying them is on PyPI.
+- The generated cell installs the release `MDPREP_INSTALL` in `app.js` pins,
+  from PyPI, so everyone in a workshop installs the same code. It moves only
+  once a release is on PyPI (CONTRIBUTING.md, Releasing).

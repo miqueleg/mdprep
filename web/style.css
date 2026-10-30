@@ -183,6 +183,13 @@ input[type="number"] {
   overflow: hidden;
 }
 
+/* Small: for when the drawing looks wrong, not part of every question. */
+button.redraw {
+  margin-top: 8px;
+  padding: 5px 12px;
+  font-size: 0.86rem;
+}
+
 .progress {
   height: 5px;
   background: var(--line);

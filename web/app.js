@@ -12,10 +12,8 @@ const PYODIDE_PACKAGES = ["pydantic", "pyyaml", "micropip"];
 // filename, which carries the version and therefore cannot be hard-coded.
 const WHEEL_INDEX_URL = "vendor/wheel.json";
 
-// How the generated Colab cell installs mdprep. The released PyPI wheel is
-// still 0.2.0, which predates the stage-2 NaN and large-PDB fixes, so the
-// generated cell installs from the repository instead. Switch this to
-// pinned to a release so every student installs the same code.
+// How the generated Colab cell installs mdprep: a release from PyPI, pinned
+// so every student installs the same code. Raised once PyPI has the next one.
 const MDPREP_INSTALL = '"mdprep==0.5.3"';
 // The official notebook: it takes the bundle this page writes, prepares and
 // equilibrates the system, and shows every step of it.
@@ -35,6 +33,14 @@ const state = {
   structureName: null,
   pdbId: null, // set only when fetched from RCSB
   viewer: null,
+  // Set when the browser could not hold the protein's cartoon: it is drawn
+  // as lines instead, a fortieth of the memory.
+  lightViewer: false,
+  // How many times the viewer was rebuilt for this structure after the
+  // browser reset its graphics context or ran out of memory.
+  viewerRecoveries: 0,
+  // A rebuild is scheduled: the triggers that follow it are the same failure.
+  viewerRecovering: false,
 };
 
 const el = (id) => document.getElementById(id);
@@ -297,6 +303,11 @@ async function loadStructure(text, name, pdbId = null) {
   // a later resize happens to fix it.
   show("findings-panel");
   show("question-panel");
+  // A new structure is drawn in full again: what the browser could not hold
+  // for the last one says nothing about this one.
+  state.lightViewer = false;
+  state.viewerRecoveries = 0;
+  state.viewerRecovering = false;
   initViewer();
   hide("result-panel");
   renderCurrentQuestion();
@@ -435,7 +446,28 @@ function readableLoadError(error) {
 
 /* ----------------------------------------------------------------- viewer */
 
+/*
+ * The protein's cartoon is the one large thing the viewer draws -- 40 MB of
+ * geometry for an octamer of 4,400 residues, against a few kilobytes for the
+ * ligands -- so it is what a browser short of graphics memory drops,
+ * leaving the ligands drawn on their own. At a workshop that happened on one
+ * laptop and went away after several tries.
+ *
+ * 3Dmol 2.5 draws every viewer through one WebGL context it keeps for the
+ * page, on an offscreen canvas, and copies each frame to the canvas on the
+ * page. Its own handler for a lost context listens on the copy, which is
+ * never lost, so a context the browser reset left the viewer dead until a new
+ * one was made -- 3Dmol makes a fresh context for it then. So the viewer
+ * listens on the real one and rebuilds itself, frees the last viewer's
+ * buffers when a structure is loaded again, draws the protein as lines when
+ * the cartoon did not fit, and can be redrawn by hand.
+ */
+const MAX_VIEWER_RECOVERIES = 3;
+// Each context 3Dmol has made, once it has a listener: they outlive viewers.
+const watchedContexts = new WeakSet();
+
 function initViewer() {
+  releaseViewer();
   const container = el("viewer");
   container.innerHTML = "";
   state.viewer = $3Dmol.createViewer(container, { backgroundColor: "white" });
@@ -445,9 +477,110 @@ function initViewer() {
   // the chain, resname and resid the selectors use are the ones on screen.
   state.viewer.addModel(state.viewerText || state.structureText,
                         state.viewerText ? "pdb" : structureFormat(state.structureName));
-  state.viewer.setStyle({}, { cartoon: { color: "spectrum" } });
+  const context = viewerContext();
+  if (context && context.canvas && !watchedContexts.has(context)) {
+    watchedContexts.add(context);
+    context.canvas.addEventListener("webglcontextlost", (event) => {
+      event.preventDefault();
+      if (state.viewer && viewerContext() === context) recoverViewer(false);
+    });
+  }
+  state.viewer.setStyle({}, proteinStyle({ color: "spectrum" }));
   state.viewer.zoomTo();
   state.viewer.render();
+  checkViewer();
+}
+
+// The WebGL context the viewer draws with: 3Dmol's renderer holds it, and the
+// canvas on the page is only where its frames are copied to.
+function viewerContext() {
+  const renderer = state.viewer && state.viewer.renderer;
+  return (renderer && renderer.context) || null;
+}
+
+/*
+ * Replacing a viewer drops its model, and 3Dmol disposes only the top of the
+ * drawn object, not the meshes under it that hold the buffers: those waited
+ * for garbage collection, 80 MB of them for an octamer. They are disposed
+ * here, which deletes their buffers at once.
+ */
+function releaseViewer() {
+  const viewer = state.viewer;
+  state.viewer = null;
+  if (!viewer) return;
+  try {
+    const drawn = viewer.getModel() && viewer.getModel().renderedMolObj;
+    for (const mesh of (drawn && drawn.children) || []) {
+      if (mesh.geometry) mesh.geometry.dispose();
+      if (mesh.material) mesh.material.dispose();
+    }
+    viewer.clear();
+  } catch {
+    /* a lost context took its buffers with it */
+  }
+}
+
+/*
+ * WebGL reports running out of memory only when asked, and 3Dmol never asks;
+ * the draw just comes out without whatever did not fit. Asked after every
+ * draw: the only cost is a wait for the card to finish, once per question.
+ */
+function checkViewer() {
+  const context = viewerContext();
+  if (!context) return;
+  if (context.isContextLost()) {
+    recoverViewer(false);
+    return;
+  }
+  for (let i = 0; i < 8; i += 1) {
+    const error = context.getError();
+    if (error === context.NO_ERROR) return;
+    if (error === context.OUT_OF_MEMORY) {
+      recoverViewer(true);
+      return;
+    }
+  }
+}
+
+// Rebuilt a few times at most, and drawn as lines once memory ran out or the
+// context was lost twice: a browser that keeps dropping the cartoon will not
+// hold it on the next try either. One rebuild at a time: a lost context is
+// both an event and what the next draw finds.
+function recoverViewer(outOfMemory) {
+  if (state.viewerRecovering) return;
+  state.viewerRecoveries += 1;
+  if (state.viewerRecoveries > MAX_VIEWER_RECOVERIES) {
+    releaseViewer();
+    el("viewer-caption").textContent =
+      "This browser could not keep the 3D view. Close other tabs or windows that " +
+      "use the graphics card, then press Redraw; the questions work without it.";
+    return;
+  }
+  if (outOfMemory || state.viewerRecoveries > 1) state.lightViewer = true;
+  state.viewerRecovering = true;
+  setTimeout(redrawViewer, 300);
+}
+
+// A new viewer, drawn for the question on screen: what recovery does, and
+// what the Redraw button does when the drawing looks wrong to the student.
+function redrawViewer() {
+  state.viewerRecovering = false;
+  if (!state.viewerText && !state.structureText) return;
+  initViewer();
+  const decision = currentDecision();
+  if (decision) focusOn(decision);
+}
+
+// The protein as a cartoon, or as lines when the cartoon did not fit. A
+// line style has no "spectrum", so the chains tell themselves apart instead.
+function proteinStyle(cartoon) {
+  if (!state.lightViewer) return { cartoon };
+  return {
+    line: {
+      colorscheme: "chain",
+      ...(cartoon.opacity === undefined ? {} : { opacity: cartoon.opacity }),
+    },
+  };
 }
 
 // 3Dmol selects on chain/resi/resn, which is exactly what a ResidueTarget
@@ -471,7 +604,7 @@ function targetList(targets) {
 function focusOn(decision) {
   const viewer = state.viewer;
   if (!viewer) return;
-  viewer.setStyle({}, { cartoon: { color: "spectrum", opacity: 0.55 } });
+  viewer.setStyle({}, proteinStyle({ color: "spectrum", opacity: 0.55 }));
 
   const caption = [];
   if (decision.focus === "targets") {
@@ -483,7 +616,7 @@ function focusOn(decision) {
       viewer.setStyle(selector, {
         stick: { radius: 0.22, colorscheme: "greenCarbon" },
         sphere: { radius: 0.45 },
-        cartoon: { color: "green" },
+        ...(state.lightViewer ? {} : { cartoon: { color: "green" } }),
       });
       viewer.addStyle(selector, { sphere: { radius: 0.35 } });
     });
@@ -515,7 +648,7 @@ function focusOn(decision) {
     // Which chains to keep, and which copies match: the whole assembly, each
     // chain its own colour, with the residues the question is about picked
     // out in every copy at once.
-    viewer.setStyle({}, { cartoon: { colorscheme: "chain" } });
+    viewer.setStyle({}, proteinStyle({ colorscheme: "chain" }));
     // Drawn larger than a single site's: the whole assembly is in view.
     decision.targets.map(targetSelector).forEach((selector) => {
       viewer.setStyle(selector, {
@@ -529,15 +662,19 @@ function focusOn(decision) {
       caption.push(`Highlighted: ${targetList(decision.targets)}.`);
     }
   } else if (decision.focus === "structure") {
-    viewer.setStyle({}, { cartoon: { color: "spectrum" } });
+    viewer.setStyle({}, proteinStyle({ color: "spectrum" }));
     viewer.zoomTo();
     caption.push("Showing the whole structure.");
   } else {
-    viewer.setStyle({}, { cartoon: { color: "spectrum" } });
+    viewer.setStyle({}, proteinStyle({ color: "spectrum" }));
     viewer.zoomTo();
+  }
+  if (state.lightViewer) {
+    caption.push("The protein is drawn as lines: this browser could not hold its cartoon.");
   }
   viewer.render();
   el("viewer-caption").textContent = caption.join(" ");
+  checkViewer();
 }
 
 /* -------------------------------------------------------------- questions */
@@ -1041,6 +1178,12 @@ function wire() {
 
   el("next").addEventListener("click", onNext);
   el("back").addEventListener("click", onBack);
+  // By hand, the recoveries start over: the student may have closed what was
+  // using the graphics card.
+  el("redraw-viewer").addEventListener("click", () => {
+    state.viewerRecoveries = 0;
+    redrawViewer();
+  });
   el("restart").addEventListener("click", () => {
     // Going back to question one with every answer still held is not
     // starting over: a student who clicks this to try different chemistry
