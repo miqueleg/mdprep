@@ -124,6 +124,14 @@ Two paths, because they have different constraints:
 `.github/workflows/pages.yml` builds the wheel and publishes `web/` to GitHub
 Pages on every push to `master`. Pull requests build but do not deploy.
 
+A second copy runs on Cloudflare, at <https://mdprep.miqueleg.workers.dev/>,
+for when GitHub Pages is down or slow during a workshop. Cloudflare is
+connected to this repository and builds it the same way -- `python
+web/build.py`, then serves `web/` -- so it carries the same page and the same
+wheel. The page has no address of its own written into it. Either copy still
+needs jsDelivr (Pyodide), cdnjs (3Dmol), RCSB for structures fetched by ID,
+and GitHub for Colab to open the official notebook.
+
 ## The generated Colab cells
 
 The page emits two cells, both runnable in a stock Colab notebook.

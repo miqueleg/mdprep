@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Added
+
+- A second copy of the web builder, on Cloudflare at
+  <https://mdprep.miqueleg.workers.dev/>, built from this repository the same
+  way as the GitHub Pages one, for when that is down. The README and the
+  official notebook link to both.
+
 ### Changed
 
 - The web builder and the official Colab notebook install mdprep 0.5.3, so
