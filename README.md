@@ -1,6 +1,6 @@
 # mdprep
 
-`mdprep` 0.5.1 prepares reproducible Amber molecular-dynamics systems from a
+`mdprep` 0.5.2 prepares reproducible Amber molecular-dynamics systems from a
 PDB structure and a validated YAML manifest. It supports standard proteins,
 independent ligands and cofactors, explicit metal models, optional active-site
 QM/MM refinement, final `tleap` assembly, validation, and an optional OpenMM
