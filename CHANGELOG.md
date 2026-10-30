@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The web builder and the official Colab notebook install mdprep 0.5.3, so
+  the notebook's install section no longer prints pip's red ERROR about the
+  Python tools AmberTools ships.
+
 ## 0.5.3 - 2026-10-30
 
 ### Changed
