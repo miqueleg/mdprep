@@ -147,9 +147,23 @@ def test_setup_commands_install_micromamba_and_then_mdprep():
     assert "micromamba" in joined
     assert "-c conda-forge" in joined
     assert "ambertools" in joined
-    assert "pip install -q mdprep==9.9.9" in joined
+    assert "pip install -q --no-warn-conflicts mdprep==9.9.9" in joined
     # The environment is created before anything is installed into it.
     assert joined.index("micromamba create") < joined.index("pip install")
+
+
+def test_installing_mdprep_does_not_print_ambertools_conflicts_as_an_error():
+    """AmberTools' proprep, ndfes and edgembar ask for numpy<2 beside numpy 2.
+
+    pip checks them once mdprep's PyYAML goes in, and printed their conflicts
+    in red as an ERROR in the Colab setup, none of them mdprep's.
+    """
+
+    (install,) = [
+        line for line in micromamba_setup_commands(manifest()) if "pip install" in line
+    ]
+
+    assert "--no-warn-conflicts" in install
 
 
 def test_setup_commands_do_not_disturb_the_notebook_python():
