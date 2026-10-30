@@ -56,6 +56,15 @@ residue as it reads the structure unless the metal is bonded to atoms beyond
 the amino acid -- an organometallic residue, which can only be replaced by its
 parent.
 
+A residue parameterised from its SMILES whose conformation is strained --
+two atoms bonded to a third, too far apart for a bond yet close enough to be
+read as one -- is refused with the atoms, their distance and the alternate
+location they are in: its bonds are read from its coordinates, and those
+read as a three-membered ring it does not have. Keep it with AmberTools'
+template, which bonds its atoms by name; leave its chain out, when another
+copy is sound (1H4X's chain B); or keep a sound alternate location in the
+input. The planner refuses it at the residue's question.
+
 ## A QMMESP Residue Fit Looks Wrong
 
 The residue report lists each atom's provisional AM1-BCC and fitted QMMESP
