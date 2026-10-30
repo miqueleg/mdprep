@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The web builder and the official Colab notebook install mdprep 0.5.2. A
+  modified residue kept in its chain now prepares in Colab, where 0.5.1
+  refused the manifest, and so do a saturated ligand whose hydrogens come
+  from its SMILES and a docked substrate written after the crystal waters.
+
 ## 0.5.2 - 2026-10-30
 
 ### Added
