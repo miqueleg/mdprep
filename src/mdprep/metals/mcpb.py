@@ -9,7 +9,7 @@ import os
 import re
 import shutil
 import sys
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING, Collection, Sequence
 
 from mdprep.ambertools.mol2 import Mol2Error, read_mol2
 from mdprep.config.models import ManifestConfig
@@ -24,6 +24,7 @@ from mdprep.metals.nonbonded import (
     resolve_amberhome,
     write_single_ion_mol2,
 )
+from mdprep.residues.workflow import kept_residue_names
 from mdprep.structure.classify import (
     WATER_RESIDUES,
     is_standard_protein_residue,
@@ -255,8 +256,9 @@ def run_mcpb_site(
         raise McpbWorkflowError(str(exc)) from exc
     mcpb_environment = dict(os.environ)
     mcpb_environment["AMBERHOME"] = str(amberhome)
+    kept = kept_residue_names(manifest)
     for item in (site, *copies):
-        _validate_site_in_one_chain(item)
+        _validate_site_in_one_chain(item, protein_names=kept)
     _validate_nonstandard_site_residues(site, manifest)
 
     work = Path(output_dir)
@@ -266,13 +268,19 @@ def run_mcpb_site(
     numbering = write_mcpb_numbered_pdb(
         structure, input_pdb, ion_names=_mcpb_ion_names(site)
     )
-    ligand_mol2, ligand_frcmods, gaff = _stage_ligand_parameters(
+    ligand_mol2, ligand_frcmods, families = _stage_ligand_parameters(
         manifest=manifest,
         ligand_result=ligand_result,
         work_dir=work,
     )
+    residue_mol2, residue_frcmods, residue_families = _stage_kept_residue_parameters(
+        manifest, amberhome=amberhome, work_dir=work
+    )
+    gaff = _gaff_version(families | residue_families)
+    ligand_mol2 = ligand_mol2 + residue_mol2
     ligand_frcmods = (
         ligand_frcmods
+        + residue_frcmods
         + _stage_coordinating_ion_frcmods(site, manifest, work_dir=work)
         + _stage_bound_water_frcmod(site, work_dir=work)
     )
@@ -429,7 +437,14 @@ def run_mcpb_site(
         numbering=numbering,
         output_path=restored_pdb,
     )
-    setup_commands, bond_commands = parse_mcpb_tleap_commands(tleap_path, work_dir=work)
+    # A kept residue went to MCPB.py as a mol2 so it could be modelled. Its
+    # bonded model loads only the templates of the residues it renamed, but a
+    # unit of the kept residue's own name from MCPB.py would replace the
+    # library whose head and tail bond it into the chain wherever it is not
+    # on the metal, so none is taken.
+    setup_commands, bond_commands = parse_mcpb_tleap_commands(
+        tleap_path, work_dir=work, skip_units=kept
+    )
     refitted_ligands = collect_mcpb_refitted_ligands(
         manifest=manifest,
         structure=structure,
@@ -577,7 +592,7 @@ def apply_mcpb_site_copies(
             if (
                 abs(step) != 1
                 or other.id.chain_id != linked.id.chain_id
-                or not is_standard_protein_residue(other)
+                or not _is_chain_residue(other, manifest)
             ):
                 raise McpbWorkflowError(
                     f"MCPB.py bonded the site to a residue it does not list: {command}"
@@ -659,7 +674,7 @@ def apply_mcpb_site_copies(
             if (
                 neighbour is None
                 or neighbour.id.chain_id != own.id.chain_id
-                or not is_standard_protein_residue(neighbour)
+                or not _is_chain_residue(neighbour, manifest)
                 or _one_letter(neighbour.id.resname) != _one_letter(other.id.resname)
             ):
                 raise McpbWorkflowError(
@@ -697,6 +712,14 @@ def apply_mcpb_site_copies(
     )
     write_pdb(copied, output_path)
     return replace(result, copies=tuple(built), final_pdb_path=Path(output_path))
+
+
+def _is_chain_residue(residue: ResidueRecord, manifest: ManifestConfig) -> bool:
+    """A residue of a protein chain: a standard one, or one kept as it is."""
+
+    return is_standard_protein_residue(residue) or residue.id.resname in kept_residue_names(
+        manifest
+    )
 
 
 def _one_letter(resname: str) -> str:
@@ -1090,8 +1113,13 @@ def parse_mcpb_tleap_commands(
     path: str | Path,
     *,
     work_dir: str | Path,
+    skip_units: Collection[str] = (),
 ) -> tuple[list[str], list[str]]:
-    """Extract only parameter/type setup and bond commands from MCPB.py output."""
+    """Extract only parameter/type setup and bond commands from MCPB.py output.
+
+    ``skip_units`` are units the final build defines itself, whose
+    ``loadmol2`` lines are left out.
+    """
 
     work = Path(work_dir)
     lines = Path(path).read_text(encoding="utf-8").splitlines()
@@ -1112,6 +1140,8 @@ def parse_mcpb_tleap_commands(
                 in_atom_types = False
             continue
         if " = loadmol2 " in line:
+            if line.split(" = loadmol2 ", 1)[0].strip() in skip_units:
+                continue
             prefix, filename = line.rsplit(" ", 1)
             local = work / filename
             if not local.is_file():
@@ -1266,11 +1296,6 @@ def _stage_ligand_parameters(
 ) -> tuple[list[Path], list[Path], int]:
     by_id = {item.ligand_id: item for item in ligand_result.ligands}
     families = {ligand.atom_types for ligand in manifest.ligands}
-    if len(families) > 1:
-        raise McpbWorkflowError(
-            "MCPB.py accepts one GAFF family per run; bonded metal preparation cannot mix GAFF and GAFF2."
-        )
-    gaff = 0 if not families else (1 if next(iter(families)) == "gaff" else 2)
     mol2_paths: list[Path] = []
     frcmod_paths: list[Path] = []
     seen_resnames: set[str] = set()
@@ -1290,7 +1315,86 @@ def _stage_ligand_parameters(
         frcmod_target = work_dir / f"ligand_{_safe_group_name(ligand.id)}.frcmod"
         shutil.copyfile(item.final_frcmod_path, frcmod_target)
         frcmod_paths.append(frcmod_target)
-    return mol2_paths, frcmod_paths, gaff
+    return mol2_paths, frcmod_paths, families
+
+
+def _stage_kept_residue_parameters(
+    manifest: ManifestConfig, *, amberhome: Path, work_dir: Path
+) -> tuple[list[Path], list[Path], set[str]]:
+    """Each kept residue as a mol2 and an frcmod, for MCPB.py to read.
+
+    MCPB.py tells an amino acid by its atoms, not its name, so a kept
+    residue of a chain is modelled as one -- its side chain on the metal in
+    the small model, its backbone capping a neighbour's in the large one --
+    and its atom types and charges are read from a mol2, as a ligand's are.
+    Every kept residue is staged, since the large model reaches the residues
+    beside those on the metal. One parameterised from its SMILES has its
+    mol2 and frcmod already; one built from an AmberTools template has its
+    unit written out by tleap and takes its family's frcmod. A template of
+    the protein force field itself, HYP, MCPB.py reads with the rest of it.
+    """
+
+    from mdprep.residues.templates import AMBER_RESIDUE_TEMPLATES
+    from mdprep.residues.workflow import (
+        ResidueStageError,
+        final_resname,
+        residue_directory,
+        template_mol2,
+    )
+
+    forcefield = manifest.protein.forcefield
+    mol2_paths: list[Path] = []
+    frcmod_paths: list[Path] = []
+    families: set[str] = set()
+    for block in manifest.noncanonical_residues:
+        name = final_resname(block)
+        if block.parameters == "amber_library":
+            assert block.template is not None
+            template = AMBER_RESIDUE_TEMPLATES[block.template]
+            frcmod_name = template.frcmod_file(forcefield)
+            if frcmod_name is None:
+                continue
+            try:
+                exported = template_mol2(
+                    template,
+                    protein_forcefield=forcefield,
+                    work_dir=work_dir / "residue_templates" / name,
+                )
+            except ResidueStageError as exc:
+                raise McpbWorkflowError(str(exc)) from exc
+            source_mol2 = exported
+            source_frcmod = amberhome / "dat" / "leap" / "parm" / frcmod_name
+        else:
+            directory = residue_directory(manifest.project.output_dir, block.resname)
+            source_mol2 = directory / f"{name}.mol2"
+            source_frcmod = directory / f"{name}.frcmod"
+            families.add(block.atom_types)
+        for source in (source_mol2, source_frcmod):
+            if not source.is_file():
+                raise McpbWorkflowError(
+                    f"Kept residue {name} has no {source.name} to give MCPB.py: {source}"
+                )
+        mol2_target = work_dir / f"{name}.mol2"
+        if source_mol2.resolve() != mol2_target.resolve():
+            shutil.copyfile(source_mol2, mol2_target)
+        frcmod_target = work_dir / f"residue_{name}.frcmod"
+        shutil.copyfile(source_frcmod, frcmod_target)
+        mol2_paths.append(mol2_target)
+        frcmod_paths.append(frcmod_target)
+    return mol2_paths, frcmod_paths, families
+
+
+def _gaff_version(families: set[str]) -> int:
+    """MCPB.py's ``gaff`` setting for the GAFF families staged, of which it takes one."""
+
+    if len(families) > 1:
+        raise McpbWorkflowError(
+            "MCPB.py accepts one GAFF family per run; bonded metal preparation cannot mix "
+            f"GAFF and GAFF2 (the ligands and kept residues use {', '.join(sorted(families))})."
+        )
+    if not families:
+        return 0
+    return 1 if next(iter(families)) == "gaff" else 2
 
 
 def _mcpb_ion_names(
@@ -1766,21 +1870,26 @@ def _validate_nonstandard_site_residues(
             for residue in site.additional_residues
         }
     )
+    kept = kept_residue_names(manifest)
     missing = [
         residue.id.display()
         for key, residue in site_residues.items()
         if not is_standard_protein_residue(residue)
         and not is_water_residue(residue)
+        and residue.id.resname not in kept
         and key not in ligand_keys
     ]
     if missing:
         raise McpbWorkflowError(
             "Every non-protein/non-water residue in an MCPB.py site must be configured and "
-            "parameterized under ligands; missing: " + ", ".join(sorted(missing))
+            "parameterized under ligands, or kept under noncanonical_residues; missing: "
+            + ", ".join(sorted(missing))
         )
 
 
-def _validate_site_in_one_chain(site: ResolvedMetalSite) -> None:
+def _validate_site_in_one_chain(
+    site: ResolvedMetalSite, *, protein_names: Collection[str] = ()
+) -> None:
     """Refuse a site whose protein donors come from more than one chain.
 
     MCPB.py reads one long chain: mdprep renumbers the structure for it, and
@@ -1797,7 +1906,7 @@ def _validate_site_in_one_chain(site: ResolvedMetalSite) -> None:
             *(bond.coordinator_residue for bond in site.bonds),
             *site.additional_residues,
         )
-        if is_standard_protein_residue(residue)
+        if is_standard_protein_residue(residue) or residue.id.resname in protein_names
     }
     if len(chains) > 1:
         raise McpbWorkflowError(

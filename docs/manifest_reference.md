@@ -44,7 +44,8 @@ relative executable path when needed.
   removed is listed in `reports/structure_report.md`.
 - `altloc_policy`: `highest_occupancy`, `first`, or `fail`.
 - `remove_unknown_heterogens`: remove unconfigured heterogens instead of
-  failing.
+  failing. Never a modified residue of a chain: one that nothing keeps,
+  replaces or removes stops the build (see `noncanonical_residues`).
 - `remove_residues`: residues left out on purpose, each with its reason:
 
   ```yaml
@@ -195,9 +196,12 @@ Each ligand has:
   instead of silently thinning the requested surface.
 - `resp_fitting`: canonical AmberTools two-stage RESP (`backend: ambertools`,
   `stage_2: true`).
-- `environment`: include/exclude protein, waters, and other ligands.
+- `environment`: include/exclude protein, waters, and other ligands. A kept
+  noncanonical residue counts as protein.
 
-The target ligand is always excluded from its own MM embedding.
+The target ligand is always excluded from its own MM embedding. A residue of
+the chain fitted with QMMESP is excluded with the two residues its caps stand
+in for and the peptide bonds that join those to the chain beyond.
 
 ## metals
 
@@ -322,6 +326,50 @@ For `model: bonded_mcpb`, the `mcpb` block contains:
 
 See [Metal centers](metals.md) for staging, protonation behavior, QMMESP
 interactions, OpenMM 12-6-4 behavior, and current limits.
+
+## noncanonical_residues
+
+Modified residues of a protein chain kept as they are, bonded into the chain
+by tleap. One block per residue name, since tleap builds every residue of a
+name from one template:
+
+```yaml
+noncanonical_residues:
+- resname: SEP
+  residues:
+  - {chain: B, resname: SEP, resid: 57}
+  parameters: amber_library
+  template: SEP
+```
+
+- `resname`: the residue name, as the input has it.
+- `residues`: every residue of that name the build keeps, each named. Each
+  must sit inside its chain, bonded on both sides.
+- `parameters`: `amber_library`, a template AmberTools ships for the protein
+  force field; `am1bcc`, parameterised by mdprep from `smiles` with AM1-BCC
+  charges; or `qmmesp_pyscf`, the same with charges fitted by RESP to the
+  capped residue's PySCF ESP in the field of the rest of the system.
+- `template` (`amber_library`): `SEP`, `S1P`, `TPO`, `T1P`, `PTR`, `ALY`,
+  `MSE`, `AZF` (for `4II`), `CYF` (for `4CF`) or `HYP`. The name is the
+  protonation (`SEP` dianionic, `S1P` monoanionic); a residue built under a
+  name other than its own is renamed, and the rename reported.
+- `smiles` (`am1bcc`, `qmmesp_pyscf`): the residue between an acetyl and a
+  methylamide, `CC(=O)N...C(=O)NC`, or the free amino acid, with the
+  protonation intended. Its elements must be ones GAFF2 types: H, C, N, O,
+  F, P, S, Cl, Br, I.
+- `net_charge` (`am1bcc`, `qmmesp_pyscf`): the residue's formal charge, which
+  the SMILES's must match.
+- `parent` (`am1bcc`, `qmmesp_pyscf`): the standard amino acid it is a
+  modified form of, required with ff19SB, whose backbone CMAP it takes.
+- `atom_types`: `gaff2`, for the side chain of a parameterised residue.
+- `qmmesp` (`qmmesp_pyscf`, required): the [qmmesp](#qmmesp) block, as for a
+  ligand. `scf_charge`, if given, must be `net_charge`, and `scf_spin` 0.
+
+A kept residue may not also be removed, replaced, overridden in protonation,
+configured as a ligand or a metal ion. It may coordinate a metal, nonbonded
+or bonded, and be part of a QM/MM refinement; QMMESP charges for one on a
+bonded metal are refused, since MCPB.py refits them. See
+[noncanonical_residues.md](noncanonical_residues.md).
 
 ## refinement
 

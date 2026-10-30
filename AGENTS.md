@@ -27,6 +27,9 @@ preparation.
   charge must be preserved or failures must be explicit.
 - Do not add molecule-conversion fallback paths.
 - Final topology generation must go through `tleap`.
+- Every `tleap` build loads the kept noncanonical residues' templates; a
+  residue's frcmod holds only terms involving a GAFF2 type, never the protein
+  force field's own.
 - All `tleap` scripts and logs must be preserved.
 - Do not silently ignore `tleap` warnings or errors; report them and fail when
   configured to do so.
@@ -44,7 +47,9 @@ preparation.
 - PySCF is the primary QM backend for ligand RESP/ESP and QMMESP-like charges.
 - Do not add ORCA or Multiwfn in this task series.
 - RESP/ESP fitting must be deterministic and tested.
-- QMMESP charges must fit only target ligand atom charges.
+- QMMESP charges must fit only target ligand atom charges; for a residue of
+  the chain, only the residue's own atoms' charges are kept, with its backbone
+  held at the force field's and its caps at zero.
 - MM point charges are only for density polarization.
 - Never include environment point charges as ligand charge centers.
 - Never write environment point charges into ligand mol2 files.
@@ -61,7 +66,12 @@ where practical, and documentation.
 
 Explicitly unsupported for v0.2:
 
-- noncanonical amino acids inside peptide chains
+- noncanonical residues at a chain terminus, parameterised ones whose
+  backbone nitrogen has no hydrogen or that hold an element GAFF2 does not
+  type (a metal, a selenium), organometallic ones, and QMMESP charges for one
+  on a bonded metal, which MCPB.py refits (residues inside a chain are
+  supported, with AM1-BCC or QMMESP charges, and may coordinate a metal,
+  nonbonded or bonded; see `docs/noncanonical_residues.md`)
 - covalent ligands
 - ORCA backend
 - Multiwfn dependency

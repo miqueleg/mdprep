@@ -43,6 +43,13 @@ from mdprep.refinement.workflow import (
     run_refinement_stage,
 )
 from mdprep.reports.structure_report import write_structure_reports
+from mdprep.residues.qmmesp import run_residue_qmmesp_stage
+from mdprep.residues.workflow import (
+    ResidueStageError,
+    ResidueStageResult,
+    run_residue_stage,
+    write_residue_reports,
+)
 from mdprep.structure.normalize import StructureNormalizationResult, normalize_structure_stage
 from mdprep.structure.writer import write_pdb
 from mdprep.validation.openmm_check import openmm_version
@@ -65,6 +72,7 @@ class PrepareResult:
     metal_result: MetalStageResult | None = None
     tleap_result: TLeapStageResult | None = None
     md_result: RoeBrooksResult | None = None
+    residue_result: ResidueStageResult | None = None
 
     @property
     def output_path(self) -> Path | None:
@@ -177,6 +185,24 @@ def prepare_system(
         input_manifest_path=manifest_file,
     )
     _write_versions(output_dir / "versions.json")
+
+    # Kept noncanonical residues are parameterised from the normalised
+    # structure before anything else needs them: the histidine embedding
+    # takes their charges, and every tleap build of the system, provisional
+    # or final, loads their libraries.
+    residue_result = None
+    if manifest.noncanonical_residues and stop_after != "structure":
+        try:
+            residue_result = run_residue_stage(
+                result.normalized_structure, manifest, output_dir=output_dir
+            )
+        except ResidueStageError as exc:
+            raise PrepareWorkflowError(str(exc)) from exc
+        write_residue_reports(
+            residue_result,
+            json_path=reports_dir / "residue_report.json",
+            markdown_path=reports_dir / "residue_report.md",
+        )
 
     protonation_report = None
     protonation_result = None
@@ -315,6 +341,34 @@ def prepare_system(
             csv_path=reports_dir / "ligand_report.csv",
             markdown_path=reports_dir / "ligand_report.md",
         )
+        if any(
+            block.parameters == "qmmesp_pyscf" for block in manifest.noncanonical_residues
+        ):
+            # Fitted in the provisional system the ligand stage built, which
+            # holds every ligand and this residue with AM1-BCC charges.
+            assert residue_result is not None
+            provisional = ligand_result.qmmesp_provisional_system
+            if provisional is None:
+                raise PrepareWorkflowError(
+                    "The ligand stage built no provisional system for the QMMESP fit of "
+                    "the noncanonical residues."
+                )
+            try:
+                residue_result = run_residue_qmmesp_stage(
+                    protonation_result.structure,
+                    manifest,
+                    residue_result,
+                    output_dir=output_dir,
+                    prmtop=provisional.prmtop_path,
+                    inpcrd=provisional.inpcrd_path,
+                )
+            except ResidueStageError as exc:
+                raise PrepareWorkflowError(str(exc)) from exc
+            write_residue_reports(
+                residue_result,
+                json_path=reports_dir / "residue_report.json",
+                markdown_path=reports_dir / "residue_report.md",
+            )
         _write_manifest_lock(
             manifest=manifest,
             structure_report=report,
@@ -487,6 +541,7 @@ def prepare_system(
         metal_result=metal_result,
         tleap_result=tleap_result,
         md_result=md_result,
+        residue_result=residue_result,
     )
 
 
@@ -538,6 +593,7 @@ def _write_manifest_lock(
             "unknown_heterogens_removed": structure_report["unknown_heterogens_removed"],
             "unknown_heterogens_causing_failure": structure_report["unknown_heterogens_causing_failure"],
             "input_hydrogens": structure_report.get("input_hydrogens"),
+            "noncanonical_residues_kept": structure_report.get("noncanonical_residues_kept", []),
             "possible_disulfides": structure_report["possible_disulfides"],
             "structure_repair": structure_report.get("structure_repair"),
         },

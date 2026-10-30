@@ -108,6 +108,13 @@ def conda_packages_for(manifest: Mapping[str, Any]) -> list[str]:
             # Placing hydrogens from a SMILES goes through RDKit.
             add("rdkit")
 
+    for block in manifest.get("noncanonical_residues") or []:
+        if block.get("parameters") in {"am1bcc", "qmmesp_pyscf"}:
+            # Capping the residue and placing its hydrogens from the SMILES.
+            add("rdkit")
+        if block.get("parameters") == "qmmesp_pyscf":
+            add("pyscf")
+
     for site in manifest.get("metals") or []:
         if site.get("model") != "bonded_mcpb":
             continue

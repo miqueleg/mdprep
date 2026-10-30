@@ -133,6 +133,16 @@ def split_cofactor_metals(
     four oxygens bonded to nothing but the vanadium, and taking it out
     leaves four loose oxygens under one residue name, not a ligand. That is
     told by every remaining atom being on its own.
+
+    A modified residue of a protein chain is read the same way -- a cysteine
+    deposited with the zinc it binds, as one residue -- with two differences.
+    The metal is written after the chain rather than after the residue,
+    because a one-atom residue between two residues of a chain is where
+    tleap would end the chain. And the residue is left whole if what remains
+    would be in more than one piece: a metal bonded to atoms beyond the amino
+    acid, as the mercury of S-(methylmercury)cysteine is to its methyl, is an
+    organometallic group, which is neither a metal site nor a residue mdprep
+    can parameterise, and the planner says so.
     """
 
     keys: list[tuple[str, str, int, str | None]] = []
@@ -144,6 +154,7 @@ def split_cofactor_metals(
             members[key] = []
         members[key].append(atom)
 
+    chained: set[tuple[str, str, int, str | None]] = set()
     split: dict[tuple[str, str, int, str | None], tuple[AtomRecord, AtomRecord]] = {}
     for key in keys:
         chain_id, resname, resid, icode = key
@@ -155,6 +166,8 @@ def split_cofactor_metals(
             continue
         (metal,) = metals
         element = _element_of(metal)
+        if _in_chain(key, keys, members):
+            chained.add(key)
         remainder = [
             atom for atom in residue_atoms
             if atom is not metal and _element_of(atom) not in {"H", "D"}
@@ -169,6 +182,14 @@ def split_cofactor_metals(
                 f"({_canonical(element)}), whose removal would leave {fragments} "
                 "fragments bonded to nothing but it -- an oxoanion such as "
                 "vanadate -- so it was left whole."
+            )
+            continue
+        if key in chained and fragments > 1:
+            warnings.append(
+                f"{_label(key)}, a residue of its chain, holds a metal atom, "
+                f"{metal.name.strip()} ({_canonical(element)}), bonded to atoms beyond "
+                f"the amino acid: taking it out would leave {fragments} pieces of the "
+                "residue. An organometallic group, so it was left whole."
             )
             continue
         new_key = (chain_id, element, resid, icode)
@@ -193,23 +214,65 @@ def split_cofactor_metals(
         warnings.append(
             f"{_label(key)} holds a metal atom, {metal.name.strip()} ({_canonical(element)}). "
             f"mdprep moved it into a residue of its own, {_label(new_key)}, so it "
-            f"can be modelled as a metal site; the rest of {resname} is a ligand "
-            f"that coordinates it. Selectors in the manifest use {_label(new_key)}."
+            "can be modelled as a metal site; the rest of "
+            + (
+                f"{resname} is a residue of the chain that coordinates it, and the "
+                "metal is written after the chain."
+                if key in chained
+                else f"{resname} is a ligand that coordinates it."
+            )
+            + f" Selectors in the manifest use {_label(new_key)}."
         )
     if not split:
         return atoms, frozenset()
 
     # Every other atom keeps its place; the metal goes right after the last
-    # atom of its cofactor.
+    # atom of its cofactor, or of its chain.
+    last_in_chain = {atom.chain_id: id(atom) for atom in atoms}
     moved_out = {id(metal) for metal, _ in split.values()}
-    last_of = {id(members[key][-1]): moved for key, (_, moved) in split.items()}
+    after: dict[int, list[AtomRecord]] = {}
+    for key, (_, moved) in split.items():
+        anchor = last_in_chain[key[0]] if key in chained else id(members[key][-1])
+        after.setdefault(anchor, []).append(moved)
     result: list[AtomRecord] = []
     for atom in atoms:
         if id(atom) not in moved_out:
             result.append(atom)
-        if id(atom) in last_of:
-            result.append(last_of[id(atom)])
+        result.extend(after.get(id(atom), ()))
     return result, frozenset(moved.resname for _, moved in split.values())
+
+
+# A peptide C-N bond is 1.33 A; this is the limit the rest of mdprep uses.
+_PEPTIDE_BOND_MAX_ANGSTROM = 2.0
+
+
+def _in_chain(
+    key: tuple[str, str, int, str | None],
+    keys: list[tuple[str, str, int, str | None]],
+    members: dict[tuple[str, str, int, str | None], list[AtomRecord]],
+) -> bool:
+    """Whether this residue's backbone is peptide-bonded to another of its chain."""
+
+    own = {atom.name.strip(): atom for atom in members[key]}
+    if not {"N", "CA", "C"} <= set(own):
+        return False
+    for other in keys:
+        if other == key or other[0] != key[0]:
+            continue
+        for atom in members[other]:
+            name = atom.name.strip()
+            if (name == "N" and _within(own["C"], atom, _PEPTIDE_BOND_MAX_ANGSTROM)) or (
+                name == "C" and _within(own["N"], atom, _PEPTIDE_BOND_MAX_ANGSTROM)
+            ):
+                return True
+    return False
+
+
+def _within(first: AtomRecord, second: AtomRecord, limit: float) -> bool:
+    return (
+        (first.x - second.x) ** 2 + (first.y - second.y) ** 2 + (first.z - second.z) ** 2
+        <= limit * limit
+    )
 
 
 @contextmanager

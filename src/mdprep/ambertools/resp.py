@@ -12,9 +12,9 @@ import json
 import math
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping, Sequence
 
 import numpy as np
 
@@ -84,6 +84,10 @@ class AmberRespFitResult:
     stage_2_qout_path: Path
     command_runs: tuple[RespCommandRun, ...]
     warnings: list[str]
+    # Atom names held at a fixed charge, and groups constrained to a sum.
+    fixed_charges: dict[str, float] = field(default_factory=dict)
+    charge_groups: list[dict[str, object]] = field(default_factory=list)
+    constraint_path: Path | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -113,6 +117,9 @@ class AmberRespFitResult:
             "stage_2_qout_path": str(self.stage_2_qout_path),
             "commands": [run.to_dict() for run in self.command_runs],
             "warnings": self.warnings,
+            "fixed_charges": dict(self.fixed_charges),
+            "charge_groups": [dict(group) for group in self.charge_groups],
+            "constraint_path": str(self.constraint_path) if self.constraint_path else None,
         }
 
 
@@ -181,6 +188,45 @@ def parse_resp_qout(path: str | Path, *, atom_count: int) -> np.ndarray:
     return charges
 
 
+def respgen_constraint_text(
+    atom_names: Sequence[str],
+    *,
+    fixed_charges: Mapping[int, float],
+    charge_groups: Sequence[tuple[Sequence[int], float]],
+) -> str:
+    """respgen's additional input: charges held fixed, and groups of fixed sum.
+
+    Atoms are given by 0-based index into ``atom_names``, the fit's atom
+    order. This is how a residue of a chain is fitted between its caps: its
+    backbone atoms held at the force field's charges, each cap summing to
+    zero, so that what is left of the total is the residue's own.
+    """
+
+    lines = ["//charges held fixed: CHARGE partial_charge atom_ID atom_name"]
+    for index in sorted(fixed_charges):
+        lines.append(f"CHARGE\t{fixed_charges[index]: .6f}\t{index + 1}\t{atom_names[index]}")
+    for number, (members, charge) in enumerate(charge_groups, start=1):
+        lines.append(f"//group {number}: GROUP number_of_atoms net_charge, then its atoms")
+        lines.append(f"GROUP\t{len(members)}\t{charge: .5f}")
+        lines.extend(f"ATOM\t{index + 1}\t{atom_names[index]}" for index in members)
+    return "\n".join(lines) + "\n"
+
+
+def write_resp_qin(path: str | Path, charges: Sequence[float]) -> Path:
+    """Initial charges for ``resp -q``, eight to a line in Amber's 8F10.6."""
+
+    values = [float(value) for value in charges]
+    output = Path(path)
+    output.write_text(
+        "".join(
+            "".join(f"{value:10.6f}" for value in values[start : start + 8]) + "\n"
+            for start in range(0, len(values), 8)
+        ),
+        encoding="ascii",
+    )
+    return output
+
+
 def run_amber_resp_fit(
     *,
     provisional_mol2_path: str | Path,
@@ -194,8 +240,16 @@ def run_amber_resp_fit(
     antechamber_executable: str = "antechamber",
     respgen_executable: str = "respgen",
     resp_executable: str = "resp",
+    fixed_charges: Mapping[int, float] | None = None,
+    charge_groups: Sequence[tuple[Sequence[int], float]] = (),
 ) -> AmberRespFitResult:
-    """Run Amber's standard ``respgen``/two-stage ``resp`` workflow."""
+    """Run Amber's standard ``respgen``/two-stage ``resp`` workflow.
+
+    ``fixed_charges`` (by 0-based atom index) are held at their values in
+    both stages, and each of ``charge_groups`` sums to its charge; respgen
+    writes both into the RESP inputs from its additional-input file, and the
+    fitted charges are checked against them.
+    """
 
     work = Path(work_dir).resolve()
     work.mkdir(parents=True, exist_ok=True)
@@ -270,7 +324,25 @@ def run_amber_resp_fit(
             output_paths=[ac_path],
         )
     )
-    _assert_ac_atom_order(ac_path, [atom.name for atom in mol2.atoms])
+    atom_names = [atom.name for atom in mol2.atoms]
+    _assert_ac_atom_order(ac_path, atom_names)
+
+    fixed = dict(fixed_charges or {})
+    groups = [(list(members), float(charge)) for members, charge in charge_groups]
+    constrained = bool(fixed or groups)
+    for index in [*fixed, *(index for members, _ in groups for index in members)]:
+        if not 0 <= index < atom_count:
+            raise AmberRespError(
+                f"RESP constraint names atom index {index}; the fit has {atom_count} atoms."
+            )
+    constraint_path = work / "respgen_constraints.dat"
+    respgen_extra: list[str] = []
+    if constrained:
+        constraint_path.write_text(
+            respgen_constraint_text(atom_names, fixed_charges=fixed, charge_groups=groups),
+            encoding="utf-8",
+        )
+        respgen_extra = ["-a", constraint_path.name]
 
     for stage, output_path in (("resp1", resp1_input), ("resp2", resp2_input)):
         runs.append(
@@ -284,6 +356,7 @@ def run_amber_resp_fit(
                     output_path.name,
                     "-f",
                     stage,
+                    *respgen_extra,
                 ],
                 work_dir=work,
                 output_paths=[output_path],
@@ -295,7 +368,8 @@ def run_amber_resp_fit(
         atom_count=atom_count,
         total_charge=total_charge,
         expected_qwt=0.0005,
-        require_iqopt=False,
+        # Charges held fixed are read from a starting set in the first stage.
+        require_iqopt=bool(fixed),
     )
     stage_2_ivary = _validate_respin(
         resp2_input,
@@ -304,7 +378,28 @@ def run_amber_resp_fit(
         expected_qwt=0.001,
         require_iqopt=True,
     )
+    for stage, ivary in (("1", stage_1_ivary), ("2", stage_2_ivary)):
+        loose = sorted(index for index in fixed if ivary[index] >= 0)
+        if loose:
+            raise AmberRespError(
+                f"respgen left {', '.join(atom_names[index] for index in loose)} free in "
+                f"RESP stage {stage}, though they are to be held at fixed charges."
+            )
+        tied = sorted(
+            index for index, value in enumerate(ivary) if value > 0 and value - 1 in fixed
+        )
+        if tied:
+            raise AmberRespError(
+                f"respgen made {', '.join(atom_names[index] for index in tied)} equivalent "
+                f"to an atom held at a fixed charge in RESP stage {stage}."
+            )
 
+    stage_1_starting: list[str] = []
+    if fixed:
+        qin = write_resp_qin(
+            work / "qin_stage1", [fixed.get(index, 0.0) for index in range(atom_count)]
+        )
+        stage_1_starting = ["-q", qin.name]
     runs.append(
         _run_checked(
             name="resp_stage1",
@@ -317,6 +412,7 @@ def run_amber_resp_fit(
                 resp1_output.name,
                 "-p",
                 resp1_punch.name,
+                *stage_1_starting,
                 "-t",
                 qout1.name,
                 "-e",
@@ -364,6 +460,22 @@ def run_amber_resp_fit(
             f"Two-stage RESP charge sum is {charge_sum:.8f} e, but the requested ligand charge is "
             f"{total_charge}; qout rounding tolerance is {rounding_tolerance:.2e} e."
         )
+    moved = [
+        f"{atom_names[index]} {charges[index]:+.6f} (held at {value:+.6f})"
+        for index, value in sorted(fixed.items())
+        if abs(charges[index] - value) > 1.0e-6
+    ]
+    if moved:
+        raise AmberRespError(
+            "Two-stage RESP moved charges it was to hold fixed: " + "; ".join(moved) + "."
+        )
+    for members, charge in groups:
+        group_sum = float(np.sum(charges[members]))
+        if abs(group_sum - charge) > max(1.0e-5, len(members) * 5.1e-7):
+            raise AmberRespError(
+                f"Two-stage RESP gave the group {[atom_names[index] for index in members]} "
+                f"a charge of {group_sum:+.6f} e; it was constrained to {charge:+.6f} e."
+            )
     rms, relative_rms, max_error = _fit_statistics(
         atom_coordinates_bohr=atoms,
         grid_coordinates_bohr=points,
@@ -397,6 +509,12 @@ def run_amber_resp_fit(
         stage_2_qout_path=qout2,
         command_runs=tuple(runs),
         warnings=[],
+        fixed_charges={atom_names[index]: value for index, value in sorted(fixed.items())},
+        charge_groups=[
+            {"atoms": [atom_names[index] for index in members], "charge": charge}
+            for members, charge in groups
+        ],
+        constraint_path=constraint_path if constrained else None,
     )
     (work / "resp_fit.json").write_text(
         json.dumps(result.to_dict(), indent=2, sort_keys=True) + "\n",
@@ -454,12 +572,19 @@ def _run_checked(
     return run
 
 
+def ac_atom_names(text: str) -> list[str]:
+    """Atom names in an antechamber AC file, in order.
+
+    The format is fixed-width -- ``ATOM%7d  %-4s%-4s...`` -- so a four-letter
+    name runs straight into the residue name (``OE11CGU``) and splitting the
+    line on whitespace would read the two as one.
+    """
+
+    return [line[13:17].strip() for line in text.splitlines() if line.startswith("ATOM")]
+
+
 def _assert_ac_atom_order(path: Path, expected_names: list[str]) -> None:
-    names = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        fields = line.split()
-        if fields and fields[0] == "ATOM" and len(fields) >= 3:
-            names.append(fields[2])
+    names = ac_atom_names(path.read_text(encoding="utf-8"))
     if names != expected_names:
         raise AmberRespError(
             "antechamber mol2-to-AC conversion changed ligand atom count, names, or order: "

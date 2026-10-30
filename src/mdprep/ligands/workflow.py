@@ -143,14 +143,19 @@ def run_ligand_stage(
             for index, item in enumerate(extracted)
             if item.config.charge_method == "qmmesp_pyscf" and item.config.parameters_from is None
         ]
-        if not qmmesp_indices:
+        # A residue of the chain fitted with QMMESP is fitted in the same
+        # provisional system, after this stage (mdprep.residues.qmmesp).
+        residues_need_it = any(
+            block.parameters == "qmmesp_pyscf" for block in manifest.noncanonical_residues
+        )
+        if not qmmesp_indices and not residues_need_it:
             return LigandStageResult(
                 ligands=_each_once(
                     extracted, lambda item: _process_ligand(item, output_dir=output_dir)
                 )
             )
 
-        if qmmesp_indices:
+        if qmmesp_indices or residues_need_it:
             if protonation_result is None:
                 raise LigandWorkflowError("qmmesp_pyscf requires a protonation result to build the provisional Amber system.")
             provisional_items = _each_once(
@@ -740,10 +745,19 @@ def _build_qmmesp_provisional_system(
         manifest=manifest,
         ligand_result=ligand_result,
     )
+    from mdprep.residues.workflow import residue_leap_inputs
+
     sources = forcefield_sources(
         protein_forcefield=manifest.protein.forcefield,
         water_model=manifest.protein.water_model,
         ligands=manifest.ligands,
+        # A residue whose charges are fitted in this system is in it with
+        # its provisional AM1-BCC ones, as every ligand is. The residue
+        # stage writes them under the project's output directory, which is
+        # not this system's when the refinement builds it.
+        residues=residue_leap_inputs(
+            manifest, manifest.project.output_dir, provisional=True
+        ),
     )
     ligand_files = validate_ligand_parameter_files(
         manifest=manifest,

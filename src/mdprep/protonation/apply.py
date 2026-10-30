@@ -814,6 +814,13 @@ def _configured_ligand_atom_keys(
                 f"Ligand {ligand.id} selector did not resolve exactly one residue before hydrogen removal: {exc}"
             ) from exc
         keys.add((residue.id.chain_id, residue.id.resname, residue.id.resid, residue.id.icode))
+    # A noncanonical residue parameterised from its SMILES has the SMILES's
+    # hydrogens, as a ligand has; its library is made with them.
+    for block in manifest.noncanonical_residues:
+        if block.parameters != "amber_library":
+            keys.update(
+                (item.chain, item.resname, item.resid, item.icode) for item in block.residues
+            )
     return keys
 
 

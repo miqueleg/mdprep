@@ -37,10 +37,35 @@ against its charge and multiplicity before antechamber runs.
 
 ## Glycans, Bonded Heterogens Or Modified Residues Stop The Build
 
-mdprep builds neither sugars nor other heterogens bonded to the protein, nor a
-modified amino acid inside a chain. Answering no to removing the first two, or
-to replacing the third by its standard parent, stops the build at that
-question. See [heterogens.md](heterogens.md).
+mdprep builds neither sugars nor other heterogens bonded to the protein.
+Answering no to removing them stops the build at that question. See
+[heterogens.md](heterogens.md).
+
+A modified amino acid inside a chain has to be accounted for: replaced by its
+parent, kept under `noncanonical_residues`, or removed with
+`structure.remove_residues`. One that nothing accounts for stops the build as
+the structure is read, even with `remove_unknown_heterogens: true`, which
+would have cut its chain in two. A kept one must be bonded into its chain on
+both sides; see [noncanonical_residues.md](noncanonical_residues.md).
+
+A residue parameterised from its SMILES that holds a metal or a selenium is
+refused with the atom named: GAFF2 types neither, and antechamber would type
+a selenium as sulfur without saying so. A selenomethionine takes AmberTools'
+MSE template; a metal is a site of its own, which mdprep moves out of the
+residue as it reads the structure unless the metal is bonded to atoms beyond
+the amino acid -- an organometallic residue, which can only be replaced by its
+parent.
+
+## A QMMESP Residue Fit Looks Wrong
+
+The residue report lists each atom's provisional AM1-BCC and fitted QMMESP
+charge side by side, and warns when one departs from the other by more than
+0.5 e. RESP fits the potential outside the molecule, which a buried atom
+barely shapes; a fit to one conformation in a strong field can let it trade
+charge with its neighbours. Keep the residue with `parameters: am1bcc`, or
+look at what the fit's environment held next to that atom: the MM charges are
+in `residues/<NAME>/qm/qmmesp_pyscf/mm_point_charges.csv`. An MM atom closer
+than 1.0 A to the capped residue stops the fit as a clash.
 
 ## Missing External Tool
 

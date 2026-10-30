@@ -15,15 +15,113 @@
   charges still come from the site's fit is stopped at the checklist with
   what to change. It replaces the single yes/no on the whole shell; an
   answer given to that still reads as all ticked or none.
+- `noncanonical_residues`: modified residues kept in their chain rather than
+  replaced by their parent -- a phosphoserine with its phosphate, an
+  acetyl-lysine, a p-azido-phenylalanine -- and bonded into it by tleap. One
+  block per residue name, every residue named. `parameters: amber_library`
+  builds them from a template AmberTools ships for the protein force field
+  (SEP, S1P, TPO, T1P, PTR from phosaa14SB/phosaa19SB; ALY, MSE, AZF, CYF from
+  ff14SB_modAA/ff19SB_modAA; HYP from the force field itself), the template's
+  name being the protonation. `parameters: am1bcc` parameterises them from
+  their SMILES, capped or as the free amino acid: the residue is cut out
+  between an acetyl and a methylamide built from its neighbours' atoms, given
+  the SMILES's hydrogens, AM1-BCC charges with the backbone's fixed to the
+  force field's for a residue of its sign, the protein's atom types on the
+  backbone and CB and GAFF2's beyond, parmchk2's estimates for the junction
+  only, ff19SB's CMAP of its parent, and a library whose head and tail bond
+  it into the chain. Every topology is read back: each kept residue is there,
+  with its charge, and peptide-bonded on both sides. A residue report records
+  how each was built. See [docs/noncanonical_residues.md](docs/noncanonical_residues.md)
+  and `examples/22_spoiiaa_phosphoserine.yaml` (SpoIIAA, PDB 1H4X).
+- `parameters: qmmesp_pyscf` for a kept residue: the same parameterisation,
+  with its charges fitted by Amber's two-stage RESP to the PySCF ESP of the
+  capped residue polarised by the rest of the system. The provisional system
+  QMMESP ligands are fitted in -- which the ligand stage now builds whenever a
+  ligand or a residue asks for QMMESP -- holds the residue with its AM1-BCC
+  parameters, written apart under `residues/<NAME>/provisional_am1bcc/`. Its
+  MM point charges leave out the residue, the two residues the caps stand in
+  for, and the peptide bonds joining those to the chain beyond; an MM atom
+  within 1.0 A of the QM model stops the fit as a clash. RESP holds the
+  residue's backbone N, H, C and O at the force field's charges and each cap
+  at zero, through respgen's predefined charges and charge groups; only the
+  residue's own charges are kept, in a library with the provisional one's
+  types and frcmod, and the final build takes only that one. Any charge more
+  than 0.5 e from its AM1-BCC value is reported. A kept residue counts as
+  protein in any QMMESP embedding, a ligand's included. The planner and the
+  web builder offer it beside AM1-BCC, written with HF/6-31G*, and the Colab
+  setup then installs PySCF -- and RDKit for any residue parameterised from
+  its SMILES, which it did not before.
+- A kept residue may coordinate a nonbonded metal; with QMMESP the metal's
+  formal charge is among those that polarise the fit.
+  `examples/23_osteocalcin_gla_calcium.yaml` keeps osteocalcin's three
+  gamma-carboxyglutamates on its three Ca2+ (PDB 1Q8H, shipped as a
+  tutorial), and the SMILES and charge of Gla (CGU) are proposed.
+- Bonded MCPB sites and QM/MM refinement in builds that keep residues,
+  including a kept residue on the metal. MCPB.py tells an amino acid by its
+  atoms, so it models the residue as one -- side chain in the small model,
+  backbone capped from its neighbours in the large -- reading its types and
+  charges from a mol2 mdprep stages for every kept residue: the residue's own
+  for one parameterised from its SMILES, or the template's unit written out
+  by tleap with its family's frcmod. MCPB.py's rename of the residue on the
+  metal is carried through: its template and peptide bonds reach the final
+  build, every other residue of the name keeps its library (no unit of the
+  residue's own name is taken from MCPB.py's commands), and the topology
+  checks count it under the new name with its refitted charge reported. The
+  planner counts a kept residue's charge in the model charge it proposes,
+  and refusals now cover only QMMESP charges for a residue on a bonded metal,
+  which MCPB.py refits. The pre-MCPB hydrogenation build loads the residues'
+  libraries, and the refinement's provisional system looks for them under the
+  project's output directory rather than its own; its QM region counts a kept
+  residue as protein, at its block's charge. A residue fitted with QMMESP after a refinement keeps the
+  refinement's hydrogens.
+- A metal deposited inside a modified residue of a chain -- a cysteine and its
+  zinc as one residue -- is read the way a heme's iron is: moved into a
+  residue of its own, a metal site, and written after the chain rather than
+  inside it, where tleap would have ended the chain. A residue whose metal is
+  bonded to more than the amino acid, as S-(methylmercury)cysteine's is, is
+  left whole as an organometallic group and can only be replaced by its
+  parent. Replaced, a residue on a bonded metal has its parent's protonation
+  asked, as a cysteine's on a zinc is.
+- `run_amber_resp_fit` takes charges to hold fixed and groups of atoms whose
+  charges sum to a given value, handed to respgen as its additional input and
+  checked in the fitted charges.
+- The planner, and so the web builder, asks one question per modified residue
+  name: replace it, keep it with AmberTools' template, or keep it
+  parameterised from its SMILES with AM1-BCC or QMMESP charges, offering what
+  applies. Kept, the template's protonation, or the SMILES and charge, follow;
+  for the common modifications they are proposed, with the reason for the
+  protonation.
+- The xTB histidine embedding takes a kept residue's charges, its template's
+  or those mdprep fitted, instead of leaving it out; a residue fitted with
+  QMMESP takes part with its provisional AM1-BCC ones.
+- A residue parameterised from its SMILES may hold only what GAFF2 types: H,
+  C, N, O, F, P, S, Cl, Br and I. antechamber types a selenium as GAFF2's
+  thioether sulfur without complaint, which would build a selenomethionine
+  with sulfur's mass and radius; it is refused with the atom named, and MSE
+  is kept only from AmberTools' template.
 
 ### Changed
 
+- `structure.replace_modified_residues`, a yes/no question for all modified
+  residues together, is replaced by `residue.<NAME>.treatment`. Keeping a
+  modified residue no longer stops the build, and one with no known parent
+  inside its chain is no longer refused: it can be kept.
+- A modified residue of a chain that the manifest neither keeps, replaces nor
+  removes stops the build as the structure is read, even with
+  `remove_unknown_heterogens: true`. It used to be removed with the unknown
+  heterogens, which cut its chain in two.
 - The web builder and the official Colab notebook install mdprep 0.5.1, so a
   structure that arrives with hydrogens and a docked ligand with only its
   polar ones reach the students as they now prepare.
 
 ### Fixed
 
+- Choosing gas-phase RESP or QMMESP for a ligand in the planner or the web
+  builder wrote a manifest without the `qmmesp` block those methods require,
+  so it failed validation at Finish. The block is written, with HF/6-31G*.
+- The RESP fit read antechamber's AC file by splitting on spaces, so a
+  four-letter atom name, written run together with the residue name
+  (`OE11CGU`), failed the atom-order check. The fixed columns are read.
 - RDKit 2026.03, which the Colab runtime installs, left some of the
   hydrogens it places from a SMILES at the origin when the molecule had not
   been sanitised first: one or two on a saturated ligand (ethanol, methanol,

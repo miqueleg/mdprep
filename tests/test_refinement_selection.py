@@ -295,3 +295,69 @@ def test_an_undeclared_heterogen_against_the_qm_region_still_stops_it():
             topology_structure=topology,
             manifest=_magnesium_beside_the_ligand().model_copy(update={"metals": []}),
         )
+
+
+def _keeping(manifest: ManifestConfig, resname: str, chain: str, resid: int) -> ManifestConfig:
+    """The manifest with a residue of that name kept, as a block states it."""
+
+    from mdprep.config.models import NoncanonicalResidueConfig, ResidueSelector
+
+    block = NoncanonicalResidueConfig(
+        resname=resname,
+        residues=[ResidueSelector(chain=chain, resname=resname, resid=resid)],
+        parameters="am1bcc",
+        smiles="CC(=O)NC(CCCCNC(=O)[O-])C(=O)NC",
+        net_charge=-1,
+        parent="LYS",
+    )
+    return manifest.model_copy(update={"noncanonical_residues": [block]})
+
+
+def test_a_kept_residue_against_the_qm_region_is_protein_environment():
+    leap_input, topology = _with_neighbour("KCX", "O")
+    manifest = _keeping(
+        _magnesium_beside_the_ligand().model_copy(update={"metals": []}), "KCX", "Z", 1
+    )
+
+    selection = select_refinement_regions(
+        leap_input_structure=leap_input, topology_structure=topology, manifest=manifest
+    )
+
+    assert selection.qm_residue_indices == (0,)
+    assert 1 in selection.active_residue_indices
+
+
+def test_a_kept_residue_on_the_metal_brings_its_blocks_charge():
+    """A carbamylated lysine on the zinc, where the aspartate was."""
+
+    leap_input = _structure(
+        "input.pdb",
+        [
+            _atom(1, "N", "KCX", "A", 10, 1.0, "N", "ATOM"),
+            _atom(2, "OQ1", "KCX", "A", 10, 1.5, "O", "ATOM"),
+            _atom(3, "C1", "SUB", "B", 501, 0.0, "C", "HETATM"),
+            _atom(4, "O1", "SUB", "B", 501, 0.5, "O", "HETATM"),
+            _atom(5, "ZN", "ZN", "Z", 1, 2.0, "Zn", "HETATM"),
+        ],
+    )
+    topology = _structure(
+        "provisional.pdb",
+        [
+            _atom(1, "N", "KCX", "", 1, 1.0, "N", "ATOM"),
+            _atom(2, "OQ1", "KCX", "", 1, 1.5, "O", "ATOM"),
+            _atom(3, "C1", "SUB", "", 2, 0.0, "C", "HETATM"),
+            _atom(4, "O1", "SUB", "", 2, 0.5, "O", "HETATM"),
+            _atom(5, "ZN", "ZN", "", 3, 2.0, "Zn", "HETATM"),
+        ],
+    )
+    data = _manifest().model_dump(mode="json")
+    data["refinement"]["qm_components"]["metal_coordinating_residues"] = {
+        "zinc": [{"chain": "A", "resname": "KCX", "resid": 10}]
+    }
+    manifest = _keeping(ManifestConfig.model_validate(data), "KCX", "A", 10)
+
+    selection = select_refinement_regions(
+        leap_input_structure=leap_input, topology_structure=topology, manifest=manifest
+    )
+
+    assert selection.total_qm_charge == 1  # substrate 0 + Zn(II) 2 + KCX -1

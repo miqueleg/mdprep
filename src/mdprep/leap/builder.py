@@ -33,6 +33,8 @@ from mdprep.metals.workflow import MetalStageResult
 from mdprep.metals.mcpb import McpbRefittedLigand
 from mdprep.metals.c4 import C4PostprocessError, C4PostprocessRun, apply_12_6_4_c4
 from mdprep.protonation.apply import ProtonationResult
+from mdprep.residues.topology import kept_residue_checks
+from mdprep.residues.workflow import ResidueStageError, residue_leap_inputs
 from mdprep.structure.models import PdbStructure
 
 
@@ -77,6 +79,8 @@ class TLeapStageResult:
     # 1-4 pairs through a bonded metal with no repulsion on one side, whose
     # interaction was switched off (metals/through_metal.py).
     through_metal_14_switched_off: list[dict[str, str]] = field(default_factory=list)
+    # Each kept noncanonical residue, read back from the dry topology.
+    noncanonical_residue_checks: list[dict[str, object]] = field(default_factory=list)
 
     def to_report_dict(self) -> dict[str, object]:
         return {
@@ -104,6 +108,15 @@ class TLeapStageResult:
             "salt_volume_a3": self.salt_volume_a3,
             "c4_postprocessing": [run.to_dict() for run in self.c4_postprocessing],
             "through_metal_14_switched_off": self.through_metal_14_switched_off,
+            "residue_libraries": [
+                {
+                    "resname": files.resname,
+                    "library_path": str(files.library_path),
+                    "frcmod_path": str(files.frcmod_path),
+                }
+                for files in self.forcefields.residue_files
+            ],
+            "noncanonical_residue_checks": self.noncanonical_residue_checks,
             "final_tleap": self.final_run.to_dict() if self.final_run is not None else None,
             "final_outputs": self.final_outputs.to_dict(),
             "warnings": self.warnings,
@@ -132,6 +145,7 @@ def run_tleap_stage(
             protein_forcefield=manifest.protein.forcefield,
             water_model=manifest.protein.water_model,
             ligands=manifest.ligands,
+            residues=residue_leap_inputs(manifest, output),
         )
         metal_structure = (
             metal_result.structure
@@ -215,6 +229,20 @@ def run_tleap_stage(
             context="dry",
         )
         _ensure_outputs(dry_outputs)
+        residue_checks, residue_problems = kept_residue_checks(
+            dry_outputs.prmtop,
+            manifest,
+            mcpb_renames=(
+                metal_result.mcpb_site.all_residue_renames
+                if metal_result is not None and metal_result.mcpb_site is not None
+                else ()
+            ),
+        )
+        if residue_problems:
+            raise TLeapBuildError(
+                "The dry topology does not hold the kept noncanonical residues as "
+                "configured: " + "; ".join(residue_problems) + "."
+            )
         bonded_site = metal_result is not None and metal_result.mcpb_site is not None
         through_metal: list[dict[str, str]] = []
         if bonded_site:
@@ -282,6 +310,7 @@ def run_tleap_stage(
         TLeapRunError,
         C4PostprocessError,
         ThroughMetalError,
+        ResidueStageError,
         FileNotFoundError,
     ) as exc:
         raise TLeapBuildError(str(exc)) from exc
@@ -305,6 +334,7 @@ def run_tleap_stage(
         salt_volume_a3=salt_volume_a3,
         c4_postprocessing=c4_runs,
         through_metal_14_switched_off=through_metal,
+        noncanonical_residue_checks=residue_checks,
         warnings=warnings,
     )
 
@@ -325,6 +355,9 @@ def build_tleap_script(
     lines: list[str] = []
     for source in sources.all_sources:
         lines.append(f"source {source}")
+    for residue in sources.residue_files:
+        lines.append(f"loadoff {_tleap_path(residue.library_path, work_dir)}")
+        lines.append(f"loadamberparams {_tleap_path(residue.frcmod_path, work_dir)}")
     for ligand in ligands:
         mol2_path = _tleap_path(ligand.final_mol2_path, work_dir)
         frcmod_path = _tleap_path(ligand.final_frcmod_path, work_dir)

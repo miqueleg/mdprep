@@ -84,10 +84,15 @@ def hydrogenate_for_mcpb(
         manifest=manifest,
         ligand_result=ligand_result,
     )
+    from mdprep.residues.workflow import residue_leap_inputs
+
     sources = forcefield_sources(
         protein_forcefield=manifest.protein.forcefield,
         water_model=manifest.protein.water_model,
         ligands=manifest.ligands,
+        # Kept residues with their final charges: those on the metal are
+        # refitted by MCPB.py, and the rest are as the final build has them.
+        residues=residue_leap_inputs(manifest, manifest.project.output_dir),
     )
     ligand_files = validate_ligand_parameter_files(
         manifest=manifest,

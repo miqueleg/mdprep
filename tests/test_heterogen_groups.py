@@ -225,11 +225,15 @@ def test_a_selenomethionine_is_a_residue_of_its_chain_not_a_ligand(selenomethion
 
 
 def test_replacing_a_selenomethionine_is_proposed(selenomethionine):
-    decision = selenomethionine.by_id("structure.replace_modified_residues")
+    decision = selenomethionine.by_id("residue.MSE.treatment")
 
-    assert decision.default == "true"
+    assert decision.default == "replace"
     assert not decision.requires_user_input
     assert decision.evidence == ("A:MSE14 -> MET, from the file's MODRES records",)
+    # Keeping it is offered too: AmberTools has a template for it. Not from a
+    # SMILES: GAFF2 has no selenium, and antechamber would type it as sulfur.
+    assert [choice.value for choice in decision.choices] == ["replace", "amber_library"]
+    assert "Se (SE)" in decision.why
 
 
 def test_the_replacement_reaches_the_repair_block(selenomethionine, tmp_path):
@@ -250,11 +254,22 @@ def test_the_replacement_reaches_the_repair_block(selenomethionine, tmp_path):
     ManifestConfig.model_validate(manifest)
 
 
-def test_keeping_a_modified_residue_stops_the_build(selenomethionine):
-    answers = walk(selenomethionine, {"structure.replace_modified_residues": "false"})
+def test_keeping_a_selenomethionine_builds_it_from_its_template(selenomethionine, tmp_path):
+    answers = walk(selenomethionine, {"residue.MSE.treatment": "amber_library"})
 
-    with pytest.raises(DecisionError, match="modified amino acid inside a chain"):
-        build_manifest(selenomethionine, answers)
+    manifest = build_manifest(selenomethionine, answers)
+
+    assert manifest["noncanonical_residues"] == [
+        {
+            "resname": "MSE",
+            "residues": [{"chain": "A", "resname": "MSE", "resid": 14, "icode": None}],
+            "parameters": "amber_library",
+            "template": "MSE",
+        }
+    ]
+    assert "repair" not in manifest["structure"]
+    manifest["project"]["output_dir"] = str(tmp_path / "out")
+    ManifestConfig.model_validate(manifest)
 
 
 def test_without_modres_the_peptide_bonds_say_it_is_in_the_chain(tmp_path):
@@ -280,7 +295,7 @@ def test_anything_else_modified_is_asked_without_a_proposal(tmp_path):
     ).replace(" MET  SELENOMETHIONINE", " SER  PHOSPHOSERINE    ")
 
     plan = plan_decisions(_write(tmp_path, text))
-    decision = plan.by_id("structure.replace_modified_residues")
+    decision = plan.by_id("residue.SEP.treatment")
 
     assert decision.default is None and decision.requires_user_input
 
@@ -290,7 +305,7 @@ def test_a_pyroglutamate_is_said_to_lose_its_lactam():
     nitrogen. Replacing it rebuilds the side chain and frees the amine, which
     is the student's to weigh, so it is said, and nothing is proposed."""
 
-    decision = plan_decisions(PYROGLUTAMATE).by_id("structure.replace_modified_residues")
+    decision = plan_decisions(PYROGLUTAMATE).by_id("residue.PCA.treatment")
 
     assert decision.evidence == ("A:PCA0 -> GLN, from the file's MODRES records",)
     assert decision.default is None and decision.requires_user_input
@@ -299,7 +314,7 @@ def test_a_pyroglutamate_is_said_to_lose_its_lactam():
 
 
 def test_a_selenomethionine_keeps_its_side_chain(selenomethionine):
-    decision = selenomethionine.by_id("structure.replace_modified_residues")
+    decision = selenomethionine.by_id("residue.MSE.treatment")
 
     assert "bonded to its own backbone" not in decision.why
 
@@ -314,14 +329,44 @@ def test_only_proline_may_have_a_side_chain_on_its_backbone():
     assert not side_chain_closes_onto_backbone(lactam, "PRO")
 
 
-def test_a_modified_residue_with_no_known_parent_is_refused(tmp_path):
+def unknown_methionine_like(line: str) -> str:
+    """1RQR's selenomethionine as a residue nobody knows, its selenium a sulfur.
+
+    A selenium is not something GAFF2 describes, so a residue holding one
+    cannot be parameterised from a SMILES; with sulfur in its place it can.
+    """
+
+    if "MSE" in line and line[12:16] == "SE  ":
+        line = line[:12] + " SD " + line[16:76] + " S" + line[78:]
+    return line.replace("MSE", "XYZ")
+
+
+def test_a_modified_residue_with_no_known_parent_can_only_be_parameterised(tmp_path):
+    """Nothing to replace it by, and no template: it is kept from its SMILES or not at all."""
+
     text = "".join(
-        line.replace("MSE", "XYZ") + "\n"
+        unknown_methionine_like(line) + "\n"
         for line in SELENOMETHIONINE.read_text().splitlines()
         if not line.startswith("MODRES")
     )
 
-    with pytest.raises(DecisionError, match="noncanonical amino acids inside a chain"):
+    decision = plan_decisions(_write(tmp_path, text)).by_id("residue.XYZ.treatment")
+
+    assert [choice.value for choice in decision.choices] == ["am1bcc", "qmmesp_pyscf"]
+    assert decision.default is None and decision.requires_user_input
+
+
+def test_a_modified_residue_that_ends_its_chain_with_no_parent_is_refused(tmp_path):
+    """1RQR's first residue, renamed: no parent to replace it by, and a residue
+    mdprep keeps must be bonded into its chain on both sides."""
+
+    text = "".join(
+        (line.replace("ATOM  ", "HETATM").replace("ILE A  11", "XYZ A  11") if " ILE A  11" in line else line)
+        + "\n"
+        for line in SELENOMETHIONINE.read_text().splitlines()
+    )
+
+    with pytest.raises(DecisionError, match="A:XYZ11 is a residue of a protein chain.*N-terminus"):
         plan_decisions(_write(tmp_path, text))
 
 

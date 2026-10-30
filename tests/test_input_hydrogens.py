@@ -335,7 +335,18 @@ def test_input_hydrogens_are_kept_when_the_manifest_says_so():
 
 
 def test_the_riding_hydrogen_lysine_reaches_protonation_without_them():
-    result = normalize_structure_stage(_manifest(DATA / "riding_peptide.pdb"))
+    manifest = _manifest(DATA / "riding_peptide.pdb").model_dump()
+    # The fragment has a selenomethionine in its chain, which a manifest has to
+    # account for; it used to be dropped from the chain as an unknown heterogen.
+    manifest["noncanonical_residues"] = [
+        {
+            "resname": "MSE",
+            "residues": [{"chain": "A", "resname": "MSE", "resid": 83}],
+            "parameters": "amber_library",
+            "template": "MSE",
+        }
+    ]
+    result = normalize_structure_stage(ManifestConfig.model_validate(manifest))
 
     lysine = next(r for r in result.normalized_structure.residues if r.id.resname == "LYS")
     assert [atom.name for atom in lysine.atoms] == ["N", "CA", "C", "O", "CB", "CG", "CD", "CE", "NZ"]

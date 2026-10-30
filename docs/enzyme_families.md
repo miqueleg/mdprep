@@ -38,7 +38,9 @@ also taken through the whole toolchain to a validated Amber topology.
   one question, proposed yes, every residue listed. Answer no to be asked
   about each as a ligand.
 - **Modified residues.** Selenomethionine is replaced by methionine on one
-  question. Anything else modified is asked with nothing proposed. A
+  question. Anything else modified is asked with nothing proposed: replaced
+  by its parent, or kept -- with AmberTools' template where there is one, or
+  parameterised from its SMILES ([noncanonical_residues.md](noncanonical_residues.md)). A
   pyroglutamate (chloroperoxidase's N-terminus) becomes a glutamine whose side
   chain is built afresh and whose N-terminus is charged; the report says how
   close the new side chain starts to its neighbours. See
@@ -72,7 +74,8 @@ also taken through the whole toolchain to a validated Amber topology.
 
 Covalently attached cofactors (heme c, the hemes of myeloperoxidase and
 lactoperoxidase), vanadate and other oxoanions, iron-sulfur clusters,
-corrinoids together with their clusters, modified residues with no standard
-parent, and protein-protein crosslinks other than disulfides are refused when
+corrinoids together with their clusters, modified residues that can be
+neither replaced nor kept (no standard parent, at the end of a chain), and
+protein-protein crosslinks other than disulfides are refused when
 the structure is loaded, with the reason. Two metal sites that would each need
 their own MCPB fit are refused at the question that makes them so.
