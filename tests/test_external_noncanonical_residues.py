@@ -7,7 +7,7 @@ templates. Each topology is read back: the residue is there, carries its
 charge, and is bonded into the chain on both sides.
 
 Skips without antechamber, parmchk2 or tleap, and the SMILES route without
-RDKit.
+RDKit. The QMMESP fit also needs PySCF, ParmEd, respgen and resp.
 """
 
 from __future__ import annotations
@@ -17,9 +17,11 @@ from pathlib import Path
 
 import pytest
 
+from mdprep.ambertools.resp import amber_resp_available
 from mdprep.analysis.prmtop import read_prmtop
 from mdprep.config.models import ManifestConfig
 from mdprep.external.discovery import which_executable
+from mdprep.residues.charges import BACKBONE_CHARGES
 from mdprep.residues.embedding import kept_residue_charges
 from mdprep.residues.frcmod import is_gaff_type, junction_parameters
 from mdprep.structure.normalize import normalize_structure_stage
@@ -149,3 +151,112 @@ def test_a_templates_charges_reach_the_histidine_embedding(tmp_path):
     sep = next(residue for residue in structure.residues if residue.id.resname == "SEP")
     assert len(values) == len(sep.atoms) == 10
     assert sum(values) == pytest.approx(-2.0, abs=1e-5)
+
+
+def test_its_charges_can_be_fitted_to_the_esp_the_protein_polarises(tmp_path):
+    for module in ("rdkit", "pyscf", "parmed"):
+        pytest.importorskip(module)
+    if not amber_resp_available():
+        pytest.skip("respgen and resp are required")
+
+    out = _prepare(
+        tmp_path,
+        [
+            _smiles_block(
+                parameters="qmmesp_pyscf",
+                qmmesp={"method": "HF", "basis": "6-31G*", "num_threads": 2},
+            )
+        ],
+    )
+
+    validation = _reports(out, "validation_report")
+    assert validation["errors"] == []
+    (check,) = validation["noncanonical_residue_checks"]
+    assert (check["charges"], check["peptide_bonded"]) == ([-2.0], True)
+    residue = _reports(out, "residue_report")["noncanonical_residues"][0]
+    fit = residue["qmmesp"]
+    # Embedded in everything but the residue and the two its caps stand for.
+    embedding = fit["embedding"]
+    assert embedding["excluded_residues"] == ["B:ASP56", "B:SER58"]
+    assert embedding["point_charge_count_after_cutoff"] > 50
+    # And the peptide bonds joining those two to the chain beyond.
+    assert embedding["boundary_atoms_excluded"] == ["MET@C", "MET@O", "GLY@N", "GLY@H"]
+    assert embedding["min_distance"] > 1.0
+    assert fit["pyscf_result"]["converged"] is True
+    # RESP held the backbone and the caps; the residue keeps only its own.
+    assert set(fit["fit"]["fixed_charges"]) == {"N", "H", "C", "O"}
+    assert [len(group["atoms"]) for group in fit["fit"]["charge_groups"]] == [6, 6]
+    fitted = fit["charges"]["charges"]
+    assert set(fitted) == set(residue["parameterisation"]["atom_types"])
+    assert fitted != residue["parameterisation"]["charges"]["charges"]
+    # And those are the charges the final topology carries.
+    topology, sep = _sep_in(out / "final" / "system.prmtop")
+    built = {topology.atoms[index].name: topology.atoms[index].charge for index in sep.atom_indices}
+    assert built == pytest.approx(fitted, abs=1e-4)
+    assert {name: built[name] for name in ("N", "H", "C", "O")} == pytest.approx(
+        BACKBONE_CHARGES["anionic"], abs=1e-4
+    )
+    # The provisional AM1-BCC library was only ever the provisional system's.
+    tleap_input = (out / "leap" / "dry" / "tleap.in").read_text()
+    assert "provisional_am1bcc" not in tleap_input
+    assert "provisional_am1bcc" in (out / "qmmesp" / "provisional_leap" / "tleap.in").read_text()
+
+
+def test_gla_is_fitted_in_the_field_of_the_calcium_it_binds(tmp_path):
+    """Osteocalcin's Gla residues kept, with QMMESP charges, and its Ca2+ nonbonded.
+
+    The fit's environment holds the three calcium ions at their formal +2,
+    which is what polarising a metal-binding residue in place is for; the
+    topology is the residues bonded into the chain beside the ions.
+    """
+
+    for module in ("rdkit", "pyscf", "parmed"):
+        pytest.importorskip(module)
+    if not amber_resp_available():
+        pytest.skip("respgen and resp are required")
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    data = yaml.safe_load((root / "examples" / "23_osteocalcin_gla_calcium.yaml").read_text())
+    data["project"]["input_structure"] = str(
+        root / "examples" / "tutorials" / "osteocalcin_1q8h" / "1Q8H.pdb"
+    )
+    data["project"]["output_dir"] = str(tmp_path / "prepared")
+    # Keep the test to AmberTools, PySCF and ParmEd: His35 stated rather than
+    # decided by PropKa and xTB, and no water box.
+    data["protonation"] = {
+        "ph": 7.0,
+        "method": "manual_only",
+        "overrides": [
+            {
+                "selector": {"chain": "A", "resname": "HIS", "resid": 35},
+                "state": "HIE",
+                "reason": "stated for the test",
+            }
+        ],
+    }
+    data["solvation"] = {"enabled": False}
+    (block,) = data["noncanonical_residues"]
+    block["parameters"] = "qmmesp_pyscf"
+    block["qmmesp"] = {"method": "HF", "basis": "6-31G*", "num_threads": 4}
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="utf-8")
+
+    prepare_system(path)
+
+    out = tmp_path / "prepared"
+    validation = _reports(out, "validation_report")
+    assert validation["errors"] == []
+    (check,) = validation["noncanonical_residue_checks"]
+    assert (check["count"], check["charges"], check["peptide_bonded"]) == (3, [-2.0] * 3, True)
+    fit = _reports(out, "residue_report")["noncanonical_residues"][0]["qmmesp"]
+    assert fit["fitted_from"] == "A:CGU17"
+    import csv
+
+    with (out / "residues" / "CGU" / "qm" / "qmmesp_pyscf" / "mm_point_charges.csv").open() as handle:
+        calcium = [row for row in csv.DictReader(handle) if row["residue_name"] == "CA"]
+    assert [float(row["charge"]) for row in calcium] == [2.0, 2.0, 2.0]
+    # The fit left the buried methine to trade charge with its hydrogen, and
+    # the report says so rather than passing it on quietly.
+    residue = _reports(out, "residue_report")["noncanonical_residues"][0]
+    assert any("depart from its AM1-BCC ones" in warning for warning in residue["warnings"])

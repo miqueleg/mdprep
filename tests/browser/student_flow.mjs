@@ -131,6 +131,7 @@ try {
 
   report.manifest = await page.$eval("#manifest-yaml", (n) => n.textContent).catch(() => null);
   report.warnings = await page.$eval("#result-warnings", (n) => n.textContent).catch(() => "");
+  report.setup = await page.$eval("#colab-setup", (n) => n.textContent).catch(() => "");
   report.ok = Boolean(report.manifest);
 } catch (error) {
   report.ok = false;

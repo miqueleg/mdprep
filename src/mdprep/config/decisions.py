@@ -28,7 +28,11 @@ from mdprep.ligands.cofactors import (
     known_metal_free_cofactor,
     known_organic_cofactor,
 )
-from mdprep.residues.capping import ResidueCappingError, chain_context
+from mdprep.residues.capping import (
+    ResidueCappingError,
+    chain_context,
+    unparameterisable_reason,
+)
 from mdprep.residues.templates import (
     KNOWN_RESIDUE_CHEMISTRY,
     AmberResidueTemplate,
@@ -79,6 +83,17 @@ DecisionKind = Literal["choice", "integer", "number", "text", "boolean", "multic
 #   chains    -- the whole system with each chain in its own colour, and the
 #                targets emphasised: which chains to keep, which copies match
 FocusMode = Literal["none", "targets", "structure", "chains"]
+
+# How a modified residue kept in its chain is parameterised: from AmberTools'
+# template, or from its SMILES with either of two charge models.
+SMILES_TREATMENTS = ("am1bcc", "qmmesp_pyscf")
+KEEP_TREATMENTS = ("amber_library", *SMILES_TREATMENTS)
+
+# The QM level a RESP fit is written with, for a ligand or a residue: HF/6-31G*,
+# the level Amber's protein charges were fitted at, so the fitted charges sit
+# beside the protein's on the same footing. The manifest says so, and can say
+# otherwise.
+QM_CHARGE_LEVEL = {"method": "HF", "basis": "6-31G*"}
 
 
 class DecisionError(ValueError):
@@ -570,6 +585,7 @@ def plan_decisions(
                 residue,
                 summary.structure.residues,
                 getattr(summary.structure, "assigned_resnames", frozenset()),
+                modified=modified,
             )
         )
     decisions.extend(_qm_region_decisions(summary))
@@ -791,9 +807,13 @@ def unsupported_heterogens(
         modified = modified_residue_options(groups, summary.structure.residues)
     for name in modified:
         if not name.treatments:
-            reason = name.keep_problem or (
-                "its backbone nitrogen carries no hydrogen, so mdprep cannot "
-                "parameterise it from a SMILES, and AmberTools has no template for it."
+            reason = (
+                name.keep_problem
+                or name.unparameterisable
+                or (
+                    "its backbone nitrogen carries no hydrogen, so mdprep cannot "
+                    "parameterise it from a SMILES, and AmberTools has no template for it."
+                )
             )
             problems.append(
                 f"{', '.join(name.displays)} "
@@ -1108,6 +1128,8 @@ class ModifiedResidueName:
     templates: tuple[AmberResidueTemplate, ...]
     # Why they cannot be kept in the chain, if they cannot.
     keep_problem: str | None
+    # Why they cannot be parameterised from a SMILES, if an element is why.
+    unparameterisable: str | None
     # Whether mdprep can parameterise them: kept, and an amide N-H backbone.
     parameterisable: bool
     chemistry: KnownResidueChemistry | None
@@ -1124,7 +1146,7 @@ class ModifiedResidueName:
         if self.keep_problem is None and self.templates:
             found.append("amber_library")
         if self.parameterisable:
-            found.append("am1bcc")
+            found.extend(SMILES_TREATMENTS)
         return tuple(found)
 
     def to_finding(self) -> dict[str, Any]:
@@ -1134,6 +1156,7 @@ class ModifiedResidueName:
             "treatments": list(self.treatments),
             "known_chemistry": self.chemistry is not None,
             "keep_problem": self.keep_problem,
+            "unparameterisable": self.unparameterisable,
             "residues": [
                 {
                     "chain": item.residue.id.chain_id,
@@ -1185,6 +1208,9 @@ def modified_residue_options(
             )
             for atoms in heavy
         )
+        foreign = next(
+            (reason for atoms in heavy if (reason := unparameterisable_reason(atoms))), None
+        )
         names.append(
             ModifiedResidueName(
                 resname=resname,
@@ -1193,7 +1219,8 @@ def modified_residue_options(
                 parent_source=source,
                 templates=templates,
                 keep_problem=keep_problem,
-                parameterisable=keep_problem is None and not closed,
+                unparameterisable=foreign,
+                parameterisable=keep_problem is None and not closed and foreign is None,
                 chemistry=known_residue_chemistry(
                     resname, (atom.element or atom.name[:1] for atom in heavy[0])
                 ),
@@ -1266,6 +1293,17 @@ def _modified_residue_decisions(
                     "its SMILES and charge next.",
                 )
             )
+        if "qmmesp_pyscf" in treatments:
+            choices.append(
+                Choice(
+                    "qmmesp_pyscf",
+                    "Keep it, parameterised from its SMILES, with QMMESP charges",
+                    "As above, but the charges are fitted by RESP to the HF/6-31G* "
+                    "electrostatic potential of the capped residue polarised by the "
+                    "protein around it (PySCF), the backbone's held at the force "
+                    "field's. Slower: a QM calculation. See docs/qmmesp_pyscf.md.",
+                )
+            )
         why = (
             "A modified amino acid inside a chain is built either as its standard "
             "parent or as it is. Replacing it keeps the backbone and the atoms the "
@@ -1289,6 +1327,8 @@ def _modified_residue_decisions(
             )
         if name.keep_problem is not None:
             why += f"It cannot be kept as it is: {name.keep_problem} "
+        elif name.unparameterisable is not None:
+            why += f"It cannot be parameterised from a SMILES: {name.unparameterisable} "
         elif not name.parameterisable:
             why += (
                 "Its backbone nitrogen carries no hydrogen, so mdprep cannot "
@@ -1357,7 +1397,7 @@ def _modified_residue_decisions(
                 )
             )
         if "am1bcc" in treatments:
-            parameterising = gate + (Condition(treatment_id, ("am1bcc",)),)
+            parameterising = gate + (Condition(treatment_id, SMILES_TREATMENTS),)
             decisions.append(
                 Decision(
                     id=f"{stem}.net_charge",
@@ -2021,12 +2061,13 @@ def _ligand_decisions(
                 Choice(
                     "gas_resp_pyscf",
                     "Gas-phase RESP (PySCF)",
-                    "Adds a qmmesp block you must complete; see docs/ligands.md.",
+                    "RESP fit to the HF/6-31G* ESP of the ligand alone; see docs/ligands.md.",
                 ),
                 Choice(
                     "qmmesp_pyscf",
                     "QMMESP RESP (PySCF)",
-                    "Environment-polarised ESP fit; adds a qmmesp block; see docs/qmmesp_pyscf.md.",
+                    "RESP fit to the HF/6-31G* ESP of the ligand polarised by the protein "
+                    "around it; see docs/qmmesp_pyscf.md.",
                 ),
                 Choice(
                     "user_mol2",
@@ -2170,6 +2211,8 @@ def _metal_decisions(
     residue: ResidueRecord,
     all_residues: Sequence[ResidueRecord],
     assigned_resnames: frozenset[str] = frozenset(),
+    *,
+    modified: Sequence["ModifiedResidueName"] = (),
 ) -> list[Decision]:
     site_id = metal_site_id_for(residue)
     display = residue.id.display()
@@ -2443,6 +2486,7 @@ def _metal_decisions(
             },
             confirmed=confirmed,
             metal_display=display,
+            parents={name.resname: name.parent for name in modified if name.parent is not None},
         )
     )
     decisions.extend(
@@ -2539,8 +2583,15 @@ def _metal_donor_protonation_decisions(
     distances: Mapping[str, tuple[str, float]],
     confirmed: tuple[Condition, ...],
     metal_display: str,
+    parents: Mapping[str, str] | None = None,
 ) -> list[Decision]:
     """Ask the protonation of each titratable side chain on the metal.
+
+    A modified residue on the metal is asked about as its parent, and only
+    if it is replaced by it: a cysteine deposited with the zinc it binds as
+    one residue is, once the zinc is a site of its own and the residue its
+    parent, a cysteine like any other on a metal. Kept, its protonation is
+    the SMILES's or the template's.
 
     Preparation refuses to build a bonded site whose ASP, GLU, CYS, LYS or
     ARG donor has no stated protonation, because coordination does not
@@ -2556,9 +2607,13 @@ def _metal_donor_protonation_decisions(
     seen: set[str] = set()
     for donor_residue in coordinators:
         resname = donor_residue.id.resname.strip().upper()
-        states = COORDINATING_DONOR_STATES.get(resname)
+        parent = (parents or {}).get(resname)
+        states = COORDINATING_DONOR_STATES.get(parent or resname)
         if states is None:
             continue
+        when = confirmed + (
+            (Condition(f"residue.{resname}.treatment", ("replace",)),) if parent else ()
+        )
         donor_id = _id_stem(donor_residue)
         if donor_id in seen:
             continue
@@ -2570,7 +2625,8 @@ def _metal_donor_protonation_decisions(
                 section="protonation",
                 question=(
                     f"Protonation state of {donor_residue.id.display()}, "
-                    f"which coordinates {metal_display}"
+                    + (f"replaced by {parent}, " if parent else "")
+                    + f"which coordinates {metal_display}"
                 ),
                 kind="choice",
                 choices=tuple(
@@ -2601,7 +2657,7 @@ def _metal_donor_protonation_decisions(
                 ),
                 targets=(_target_for(donor_residue),),
                 focus="targets",
-                when=confirmed,
+                when=when,
             )
         )
     return decisions
@@ -3030,7 +3086,7 @@ def _kept_residue_names(plan: DecisionPlan, resolved: Mapping[str, Any]) -> list
     return [
         resname
         for resname in plan.findings.get("noncanonical_residues", {})
-        if resolved.get(f"residue.{resname}.treatment") in {"amber_library", "am1bcc"}
+        if resolved.get(f"residue.{resname}.treatment") in KEEP_TREATMENTS
     ]
 
 
@@ -3048,18 +3104,33 @@ def _require_buildable_residues(plan: DecisionPlan, resolved: Mapping[str, Any])
         and resolved.get(decision.id) == "bonded_mcpb"
     ]
     if bonded:
+        # The question to go back to: the residue's, if it is on the metal.
+        asked = {decision.id for decision in plan.decisions}
+        on_metal = [
+            target.resname
+            for site_id in bonded
+            if f"metal.{site_id}.confirm_donors" in asked
+            for target in selected_donor_targets(plan, resolved, site_id)
+            if target.resname in kept
+        ]
+        resname = on_metal[0] if on_metal else kept[0]
         raise DecisionError(
-            f"Keeping {kept[0]} and modelling {bonded[0]} bonded cannot be built "
-            "together yet: MCPB.py builds its own tleap system, which does not load "
-            "the residue's template. Replace the residue by its parent, or model the "
-            "metal nonbonded.",
-            decision_id=f"residue.{kept[0]}.treatment",
+            f"Keeping {resname} and modelling {bonded[0]} bonded cannot be built "
+            "together yet: neither the QM/MM refinement a bonded site takes its "
+            "geometry from nor MCPB.py's models of the site handle a kept residue. "
+            + (
+                f"{resname} coordinates the metal: model the metal nonbonded, which a "
+                "kept residue can coordinate, or replace the residue by its parent."
+                if on_metal
+                else "Model the metal nonbonded, or replace the residue by its parent."
+            ),
+            decision_id=f"residue.{resname}.treatment" if on_metal else f"metal.{bonded[0]}.model",
         )
     if resolved.get("protein.forcefield") == "ff19SB":
         orphans = [
             resname
             for resname in kept
-            if resolved.get(f"residue.{resname}.treatment") == "am1bcc"
+            if resolved.get(f"residue.{resname}.treatment") in SMILES_TREATMENTS
             and plan.findings["noncanonical_residues"][resname]["parent"] is None
         ]
         if orphans:
@@ -3148,7 +3219,7 @@ def _noncanonical_residue_blocks(
     blocks: list[dict[str, Any]] = []
     for resname, finding in plan.findings.get("noncanonical_residues", {}).items():
         treatment = resolved.get(f"residue.{resname}.treatment")
-        if treatment not in {"amber_library", "am1bcc"}:
+        if treatment not in KEEP_TREATMENTS:
             continue
         residues = [
             dict(selector)
@@ -3172,6 +3243,8 @@ def _noncanonical_residue_blocks(
             block["net_charge"] = resolved[f"residue.{resname}.net_charge"]
             if finding["parent"] is not None:
                 block["parent"] = finding["parent"]
+            if treatment == "qmmesp_pyscf":
+                block["qmmesp"] = dict(QM_CHARGE_LEVEL)
         blocks.append(block)
     return blocks
 
@@ -3610,6 +3683,7 @@ def _metal_donor_overrides(
     """
 
     overrides: list[dict[str, Any]] = []
+    modified = plan.findings.get("noncanonical_residues", {})
     for decision in plan.decisions:
         if ".donor_state." not in decision.id:
             continue
@@ -3617,11 +3691,13 @@ def _metal_donor_overrides(
         if not state:
             continue
         target = decision.subject
+        # Asked only when it is replaced: by then it carries its parent's name.
+        replaced = modified.get(target.resname.strip().upper(), {}).get("parent")
         overrides.append(
             {
                 "selector": {
                     "chain": target.chain,
-                    "resname": target.resname,
+                    "resname": replaced or target.resname,
                     "resid": target.resid,
                     "icode": target.icode,
                 },
@@ -3683,6 +3759,8 @@ def _ligand_blocks(
                 "charge_method": resolved[f"ligand.{ligand_id}.charge_method"],
             }
         )
+        if blocks[-1]["charge_method"] in {"gas_resp_pyscf", "qmmesp_pyscf"}:
+            blocks[-1]["qmmesp"] = dict(QM_CHARGE_LEVEL)
         smiles = resolved.get(f"ligand.{ligand_id}.smiles")
         if smiles:
             blocks[-1]["smiles"] = smiles

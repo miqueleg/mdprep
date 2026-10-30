@@ -25,6 +25,16 @@
 #     smiles: CC(=O)NC(COP(=O)([O-])[O-])C(=O)NC
 #     net_charge: -2
 #     parent: SER
+#
+# and with parameters: qmmesp_pyscf, plus
+#
+#     qmmesp:
+#       method: HF
+#       basis: 6-31G*
+#
+# fits its charges instead to the ESP of the capped residue polarised by the
+# rest of chain B, its waters and their charges, the backbone held at ff14SB's
+# (docs/noncanonical_residues.md, "QMMESP charges").
 project:
   name: spoiiaa_1h4x
   input_structure: tutorials/spoiiaa_1h4x/1H4X.pdb

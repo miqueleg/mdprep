@@ -666,9 +666,10 @@ silently choosing one charge model.
   hydrogenation/QMMESP environment uses Amber Li/Merz ion models.
 - No metal-metal bond inference, metal clusters, covalent ligands (heme c
   among them), a kept noncanonical residue in the same build as a bonded site
-  (replace it by its parent, or model the metal nonbonded; see
-  [noncanonical_residues.md](noncanonical_residues.md)), ORCA backend, or
-  Multiwfn dependency. A metal inside a cofactor is supported; see
+  (replace it by its parent, or model the metal nonbonded, which a kept
+  residue may coordinate; see
+  [noncanonical_residues.md](noncanonical_residues.md#metals-and-kept-residues)),
+  ORCA backend, or Multiwfn dependency. A metal inside a cofactor is supported; see
   [A metal inside a cofactor](#a-metal-inside-a-cofactor-hemes).
 - No small-model optimization inside the MCPB Hessian stage. Geometry must come
   from a completed ASH QM/MM refinement or an explicitly supplied optimized PDB.

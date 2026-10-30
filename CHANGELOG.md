@@ -33,13 +33,56 @@
   with its charge, and peptide-bonded on both sides. A residue report records
   how each was built. See [docs/noncanonical_residues.md](docs/noncanonical_residues.md)
   and `examples/22_spoiiaa_phosphoserine.yaml` (SpoIIAA, PDB 1H4X).
+- `parameters: qmmesp_pyscf` for a kept residue: the same parameterisation,
+  with its charges fitted by Amber's two-stage RESP to the PySCF ESP of the
+  capped residue polarised by the rest of the system. The provisional system
+  QMMESP ligands are fitted in -- which the ligand stage now builds whenever a
+  ligand or a residue asks for QMMESP -- holds the residue with its AM1-BCC
+  parameters, written apart under `residues/<NAME>/provisional_am1bcc/`. Its
+  MM point charges leave out the residue, the two residues the caps stand in
+  for, and the peptide bonds joining those to the chain beyond; an MM atom
+  within 1.0 A of the QM model stops the fit as a clash. RESP holds the
+  residue's backbone N, H, C and O at the force field's charges and each cap
+  at zero, through respgen's predefined charges and charge groups; only the
+  residue's own charges are kept, in a library with the provisional one's
+  types and frcmod, and the final build takes only that one. Any charge more
+  than 0.5 e from its AM1-BCC value is reported. A kept residue counts as
+  protein in any QMMESP embedding, a ligand's included. The planner and the
+  web builder offer it beside AM1-BCC, written with HF/6-31G*, and the Colab
+  setup then installs PySCF -- and RDKit for any residue parameterised from
+  its SMILES, which it did not before.
+- A kept residue may coordinate a nonbonded metal; with QMMESP the metal's
+  formal charge is among those that polarise the fit.
+  `examples/23_osteocalcin_gla_calcium.yaml` keeps osteocalcin's three
+  gamma-carboxyglutamates on its three Ca2+ (PDB 1Q8H, shipped as a
+  tutorial), and the SMILES and charge of Gla (CGU) are proposed. A bonded
+  site and a kept residue in one build are still refused, now saying why and,
+  when the residue is on the metal, at the residue's question.
+- A metal deposited inside a modified residue of a chain -- a cysteine and its
+  zinc as one residue -- is read the way a heme's iron is: moved into a
+  residue of its own, a metal site, and written after the chain rather than
+  inside it, where tleap would have ended the chain. A residue whose metal is
+  bonded to more than the amino acid, as S-(methylmercury)cysteine's is, is
+  left whole as an organometallic group and can only be replaced by its
+  parent. Replaced, a residue on a bonded metal has its parent's protonation
+  asked, as a cysteine's on a zinc is.
+- `run_amber_resp_fit` takes charges to hold fixed and groups of atoms whose
+  charges sum to a given value, handed to respgen as its additional input and
+  checked in the fitted charges.
 - The planner, and so the web builder, asks one question per modified residue
   name: replace it, keep it with AmberTools' template, or keep it
-  parameterised from its SMILES, offering what applies. Kept, the template's
-  protonation, or the SMILES and charge, follow; for the common modifications
-  they are proposed, with the reason for the protonation.
+  parameterised from its SMILES with AM1-BCC or QMMESP charges, offering what
+  applies. Kept, the template's protonation, or the SMILES and charge, follow;
+  for the common modifications they are proposed, with the reason for the
+  protonation.
 - The xTB histidine embedding takes a kept residue's charges, its template's
-  or those mdprep fitted, instead of leaving it out.
+  or those mdprep fitted, instead of leaving it out; a residue fitted with
+  QMMESP takes part with its provisional AM1-BCC ones.
+- A residue parameterised from its SMILES may hold only what GAFF2 types: H,
+  C, N, O, F, P, S, Cl, Br and I. antechamber types a selenium as GAFF2's
+  thioether sulfur without complaint, which would build a selenomethionine
+  with sulfur's mass and radius; it is refused with the atom named, and MSE
+  is kept only from AmberTools' template.
 
 ### Changed
 
@@ -57,6 +100,12 @@
 
 ### Fixed
 
+- Choosing gas-phase RESP or QMMESP for a ligand in the planner or the web
+  builder wrote a manifest without the `qmmesp` block those methods require,
+  so it failed validation at Finish. The block is written, with HF/6-31G*.
+- The RESP fit read antechamber's AC file by splitting on spaces, so a
+  four-letter atom name, written run together with the residue name
+  (`OE11CGU`), failed the atom-order check. The fixed columns are read.
 - RDKit 2026.03, which the Colab runtime installs, left some of the
   hydrogens it places from a SMILES at the origin when the molecule had not
   been sanitised first: one or two on a saturated ligand (ethanol, methanol,

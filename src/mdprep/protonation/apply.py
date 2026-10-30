@@ -817,7 +817,7 @@ def _configured_ligand_atom_keys(
     # A noncanonical residue parameterised from its SMILES has the SMILES's
     # hydrogens, as a ligand has; its library is made with them.
     for block in manifest.noncanonical_residues:
-        if block.parameters == "am1bcc":
+        if block.parameters != "amber_library":
             keys.update(
                 (item.chain, item.resname, item.resid, item.icode) for item in block.residues
             )

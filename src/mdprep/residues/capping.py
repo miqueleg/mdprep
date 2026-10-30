@@ -40,8 +40,48 @@ NME_ATOMS = (("NT", "N", "N"), ("CAT", "C", "CA"))
 CAP_HYDROGEN_NAMES = {"CAY": ("HY1", "HY2", "HY3"), "NT": ("HNT",), "CAT": ("HT1", "HT2", "HT3")}
 
 
+# What GAFF2 types and AM1-BCC charges: a residue parameterised from its
+# SMILES can hold nothing else.
+PARAMETERISABLE_ELEMENTS = frozenset({"H", "C", "N", "O", "F", "P", "S", "Cl", "Br", "I"})
+
+# Beyond those, the elements that are not metals.
+_NONMETALS = frozenset({"B", "Si", "Ge", "As", "Se", "Sb", "Te", "At", "D"})
+
+
 class ResidueCappingError(ValueError):
     """Raised when a residue cannot be capped or matched to its SMILES."""
+
+
+def unparameterisable_reason(atoms: Sequence[AtomRecord]) -> str | None:
+    """Why a residue holding these atoms cannot be parameterised from a SMILES.
+
+    None when it can. A metal gets its own explanation: mdprep models one as
+    a metal site, a one-atom residue bonded or not to what surrounds it, and
+    a residue deposited with a metal inside it is read with the metal moved
+    out (structure/pdb_fields.py) unless that would break the residue apart.
+    """
+
+    foreign = [
+        (atom.name.strip(), _element(atom))
+        for atom in atoms
+        if _element(atom) not in PARAMETERISABLE_ELEMENTS
+    ]
+    if not foreign:
+        return None
+    listed = ", ".join(f"{element} ({name})" for name, element in foreign)
+    reason = (
+        f"it holds {listed}, which neither GAFF2 nor AM1-BCC describes, so mdprep "
+        "cannot parameterise it from a SMILES."
+    )
+    if any(element not in _NONMETALS for _, element in foreign):
+        reason += (
+            " mdprep models a metal as a metal site of its own, not as an atom of a "
+            "residue. This one stayed in the residue because taking it out would have "
+            "broken the residue apart -- the metal is bonded to atoms beyond the amino "
+            "acid, an organometallic group -- or because it is not a metal mdprep "
+            "builds sites for; see docs/noncanonical_residues.md."
+        )
+    return reason
 
 
 @dataclass(frozen=True)
@@ -217,6 +257,12 @@ def capped_residue(
     takes backbone charges no table in mdprep holds.
     """
 
+    residue = context.residue
+    label = label or residue.id.display()
+    heavy = [atom for atom in residue.atoms if not is_hydrogen(atom)]
+    foreign = unparameterisable_reason(heavy)
+    if foreign is not None:
+        raise ResidueCappingError(f"{label}: {foreign}")
     try:
         from rdkit import Chem
         from rdkit.Chem import AllChem
@@ -226,9 +272,6 @@ def capped_residue(
         ) from exc
     from mdprep.ligands.hydrogenate import geometry_contradicts_bond_orders
 
-    residue = context.residue
-    label = label or residue.id.display()
-    heavy = [atom for atom in residue.atoms if not is_hydrogen(atom)]
     template, form = capped_template(smiles, len(heavy), label=label)
     formal = Chem.GetFormalCharge(template)
     if formal != net_charge:

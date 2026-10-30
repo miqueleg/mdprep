@@ -69,103 +69,6 @@ class ModifiedResidueReplacement(StrictModel):
         return parent
 
 
-class NoncanonicalResidueConfig(StrictModel):
-    """Residues of a protein chain that are not one of the twenty, kept as they are.
-
-    tleap builds every residue of a name from one template, so a block is one
-    residue name, listing each residue of it the build keeps -- named, as
-    everything else a manifest acts on is. Nothing is kept by inference: a
-    modified residue of a chain that no block, replacement or removal names
-    stops the build.
-
-    ``amber_library`` builds them from a template AmberTools ships for the
-    protein force field (``mdprep.residues.templates``); its name is the
-    protonation. ``am1bcc`` parameterises them from ``smiles``: GAFF2 types on
-    the side chain, the protein force field's on the backbone, AM1-BCC charges
-    with the backbone's fixed to the force field's. The SMILES is the
-    residue's protonation, and ``net_charge`` must agree with it. Either way
-    the residue is bonded into its chain, so it must have a residue on each
-    side.
-    """
-
-    resname: str = Field(pattern=r"^[A-Z0-9]{1,3}$")
-    residues: list[ResidueSelector] = Field(min_length=1)
-    parameters: Literal["amber_library", "am1bcc"]
-    # amber_library: the template, which may rename the residue -- a
-    # phosphoserine deposited as SEP and wanted monoanionic is built as S1P.
-    template: str | None = None
-    # am1bcc: the residue between an acetyl and a methylamide, or the free
-    # amino acid, with the protonation intended.
-    smiles: str | None = None
-    net_charge: int | None = None
-    # The standard amino acid it is a modified form of. ff19SB corrects each
-    # residue's backbone with a CMAP chosen by residue name, and a residue
-    # parameterised here takes its parent's.
-    parent: str | None = None
-    atom_types: Literal["gaff2"] = "gaff2"
-
-    @field_validator("parent")
-    @classmethod
-    def validate_parent(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        parent = value.strip().upper()
-        if parent not in STANDARD_AMINO_ACIDS:
-            raise ValueError(f"parent {value!r} is not one of the twenty standard amino acids")
-        return parent
-
-    @model_validator(mode="after")
-    def validate_source(self) -> "NoncanonicalResidueConfig":
-        label = f"noncanonical_residues {self.resname}"
-        for selector in self.residues:
-            if selector.resname != self.resname:
-                raise ValueError(
-                    f"{label} lists {selector.chain}:{selector.resname}{selector.resid}; "
-                    f"every residue of a block is a {self.resname}"
-                )
-        keys = [(item.chain, item.resid, item.icode) for item in self.residues]
-        if len(set(keys)) != len(keys):
-            raise ValueError(f"{label} lists a residue more than once")
-        if self.resname in LEAP_RESERVED_RESIDUE_NAMES:
-            raise ValueError(
-                f"{label}: {self.resname} is a residue the force fields already define, "
-                "not a noncanonical one"
-            )
-        if self.parameters == "amber_library":
-            if self.template is None:
-                raise ValueError(f"{label}: parameters: amber_library requires template")
-            template = AMBER_RESIDUE_TEMPLATES.get(self.template)
-            if template is None:
-                raise ValueError(
-                    f"{label}: template {self.template!r} is not one mdprep knows; known: "
-                    + ", ".join(sorted(AMBER_RESIDUE_TEMPLATES))
-                )
-            if self.resname not in template.deposited_as | {template.name}:
-                raise ValueError(
-                    f"{label}: template {template.name} ({template.description}) builds "
-                    f"{', '.join(sorted(template.deposited_as))}, not {self.resname}"
-                )
-            given = [
-                name
-                for name in ("smiles", "net_charge", "parent")
-                if getattr(self, name) is not None
-            ]
-            if given:
-                raise ValueError(
-                    f"{label}: {', '.join(given)} belong to parameters: am1bcc; a "
-                    "template brings its own chemistry and charge"
-                )
-            return self
-        if self.template is not None:
-            raise ValueError(f"{label}: template belongs to parameters: amber_library")
-        if not self.smiles or self.net_charge is None:
-            raise ValueError(
-                f"{label}: parameters: am1bcc requires smiles and net_charge; the "
-                "SMILES is the residue's protonation, which nothing can guess"
-            )
-        return self
-
-
 class ProjectConfig(StrictModel):
     name: str
     input_structure: str
@@ -460,6 +363,127 @@ class QmmespConfig(StrictModel):
     grid: QmEspGridConfig = Field(default_factory=QmEspGridConfig)
     resp_fitting: RespFittingConfig = Field(default_factory=RespFittingConfig)
     environment: QmmespEnvironmentConfig = Field(default_factory=QmmespEnvironmentConfig)
+
+
+class NoncanonicalResidueConfig(StrictModel):
+    """Residues of a protein chain that are not one of the twenty, kept as they are.
+
+    tleap builds every residue of a name from one template, so a block is one
+    residue name, listing each residue of it the build keeps -- named, as
+    everything else a manifest acts on is. Nothing is kept by inference: a
+    modified residue of a chain that no block, replacement or removal names
+    stops the build.
+
+    ``amber_library`` builds them from a template AmberTools ships for the
+    protein force field (``mdprep.residues.templates``); its name is the
+    protonation. ``am1bcc`` parameterises them from ``smiles``: GAFF2 types on
+    the side chain, the protein force field's on the backbone, AM1-BCC charges
+    with the backbone's fixed to the force field's. ``qmmesp_pyscf`` is the
+    same parameterisation with the charges fitted instead to the PySCF ESP of
+    the capped residue, polarised by the rest of the system (``qmmesp``),
+    with the backbone's fixed in the fit. The SMILES is the residue's
+    protonation, and ``net_charge`` must agree with it. Either way the residue
+    is bonded into its chain, so it must have a residue on each side.
+    """
+
+    resname: str = Field(pattern=r"^[A-Z0-9]{1,3}$")
+    residues: list[ResidueSelector] = Field(min_length=1)
+    parameters: Literal["amber_library", "am1bcc", "qmmesp_pyscf"]
+    # amber_library: the template, which may rename the residue -- a
+    # phosphoserine deposited as SEP and wanted monoanionic is built as S1P.
+    template: str | None = None
+    # am1bcc and qmmesp_pyscf: the residue between an acetyl and a
+    # methylamide, or the free amino acid, with the protonation intended.
+    smiles: str | None = None
+    net_charge: int | None = None
+    # The standard amino acid it is a modified form of. ff19SB corrects each
+    # residue's backbone with a CMAP chosen by residue name, and a residue
+    # parameterised here takes its parent's.
+    parent: str | None = None
+    atom_types: Literal["gaff2"] = "gaff2"
+    # qmmesp_pyscf: the QM level and the environment that polarises it.
+    qmmesp: QmmespConfig | None = None
+
+    @field_validator("parent")
+    @classmethod
+    def validate_parent(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        parent = value.strip().upper()
+        if parent not in STANDARD_AMINO_ACIDS:
+            raise ValueError(f"parent {value!r} is not one of the twenty standard amino acids")
+        return parent
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "NoncanonicalResidueConfig":
+        label = f"noncanonical_residues {self.resname}"
+        for selector in self.residues:
+            if selector.resname != self.resname:
+                raise ValueError(
+                    f"{label} lists {selector.chain}:{selector.resname}{selector.resid}; "
+                    f"every residue of a block is a {self.resname}"
+                )
+        keys = [(item.chain, item.resid, item.icode) for item in self.residues]
+        if len(set(keys)) != len(keys):
+            raise ValueError(f"{label} lists a residue more than once")
+        if self.resname in LEAP_RESERVED_RESIDUE_NAMES:
+            raise ValueError(
+                f"{label}: {self.resname} is a residue the force fields already define, "
+                "not a noncanonical one"
+            )
+        if self.parameters == "amber_library":
+            if self.template is None:
+                raise ValueError(f"{label}: parameters: amber_library requires template")
+            template = AMBER_RESIDUE_TEMPLATES.get(self.template)
+            if template is None:
+                raise ValueError(
+                    f"{label}: template {self.template!r} is not one mdprep knows; known: "
+                    + ", ".join(sorted(AMBER_RESIDUE_TEMPLATES))
+                )
+            if self.resname not in template.deposited_as | {template.name}:
+                raise ValueError(
+                    f"{label}: template {template.name} ({template.description}) builds "
+                    f"{', '.join(sorted(template.deposited_as))}, not {self.resname}"
+                )
+            given = [
+                name
+                for name in ("smiles", "net_charge", "parent", "qmmesp")
+                if getattr(self, name) is not None
+            ]
+            if given:
+                raise ValueError(
+                    f"{label}: {', '.join(given)} belong to a residue parameterised "
+                    "from its SMILES; a template brings its own chemistry and charge"
+                )
+            return self
+        if self.template is not None:
+            raise ValueError(f"{label}: template belongs to parameters: amber_library")
+        if not self.smiles or self.net_charge is None:
+            raise ValueError(
+                f"{label}: parameters: {self.parameters} requires smiles and "
+                "net_charge; the SMILES is the residue's protonation, which nothing "
+                "can guess"
+            )
+        if self.parameters == "am1bcc":
+            if self.qmmesp is not None:
+                raise ValueError(f"{label}: qmmesp belongs to parameters: qmmesp_pyscf")
+            return self
+        if self.qmmesp is None:
+            raise ValueError(
+                f"{label}: parameters: qmmesp_pyscf requires qmmesp, the QM method "
+                "and basis the charges are fitted at"
+            )
+        if self.qmmesp.scf_charge is not None and self.qmmesp.scf_charge != self.net_charge:
+            raise ValueError(
+                f"{label}: qmmesp.scf_charge must equal net_charge; the caps are "
+                "neutral, so the capped residue carries the residue's charge"
+            )
+        if self.qmmesp.scf_spin not in (None, 0):
+            raise ValueError(
+                f"{label}: qmmesp.scf_spin must be 0; a residue of the chain is "
+                "fitted as a closed shell"
+            )
+        return self
 
 
 class LigandConfig(StrictModel):
@@ -1335,9 +1359,10 @@ class ManifestConfig(StrictModel):
         if bonded:
             raise ValueError(
                 f"Bonded metal site {bonded[0]!r} and noncanonical_residues in one "
-                "build are not supported: MCPB.py builds its own tleap system, which "
-                "does not load the residues' templates. Model the site nonbonded, or "
-                "replace the residues by their parents"
+                "build are not supported yet: neither the QM/MM refinement a bonded "
+                "site takes its geometry from nor MCPB.py's models of the site handle "
+                "a kept residue. Model the site nonbonded -- a kept residue may "
+                "coordinate a nonbonded metal -- or replace the residues by their parents"
             )
         if self.refinement.enabled:
             raise ValueError(
@@ -1348,7 +1373,7 @@ class ManifestConfig(StrictModel):
             orphans = [
                 block.resname
                 for block in blocks
-                if block.parameters == "am1bcc" and block.parent is None
+                if block.parameters != "amber_library" and block.parent is None
             ]
             if orphans:
                 many = len(orphans) > 1
@@ -1393,7 +1418,9 @@ class ManifestConfig(StrictModel):
         self._validate_removed_residues_are_not_built()
         self._validate_refinement(ligand_ids=ligand_ids, metal_ids=metal_ids)
         self._validate_mcpb_refinement_geometry()
-        if any(ligand.charge_method == "qmmesp_pyscf" for ligand in self.ligands):
+        if any(ligand.charge_method == "qmmesp_pyscf" for ligand in self.ligands) or any(
+            block.parameters == "qmmesp_pyscf" for block in self.noncanonical_residues
+        ):
             missing = [
                 site.id
                 for site in self.metals

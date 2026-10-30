@@ -83,6 +83,14 @@ modified residue lacked is built whether or not `add_missing_heavy_atoms` is
 set, and a chain's terminal `OXT` is left to tleap, as it is when nothing is
 repaired.
 
+A modified residue deposited with a metal inside it -- a cysteine and the zinc
+it binds written as one residue -- is read as a heme is
+([metals.md](metals.md#a-metal-inside-a-cofactor-hemes)): the metal is
+moved into a residue of its own, written after the chain, and the residue is
+what remains. One whose metal is bonded to more than the amino acid, such as
+S-(methylmercury)cysteine, stays whole and can only be replaced by its parent;
+see [noncanonical_residues.md](noncanonical_residues.md#metals-and-kept-residues).
+
 A pyroglutamate (`PCA`), the N-terminus of many secreted proteins, is a
 glutamine whose side chain has closed onto its own nitrogen as a lactam. The
 two share atom names but not their places -- kept where they are, the

@@ -131,3 +131,61 @@ def constrain_to_backbone(
         shifted_atoms=tuple(free),
         warnings=tuple(warnings),
     )
+
+
+# What a fit that held the backbone and the caps may leave of the residue's
+# charge: the six decimals RESP writes, a few dozen times over.
+FIT_ROUNDING_E = 1.0e-4
+
+
+def held_backbone_charges(
+    fitted: Sequence[tuple[str, str, float]], net_charge: int
+) -> ResidueCharges:
+    """The residue's charges from a fit that held its backbone in place.
+
+    A RESP fit of the capped residue (``qmmesp.py``) holds N, H, C and O at
+    the backbone set and makes each cap sum to zero, so the residue's own
+    atoms already carry its integer charge, but for the rounding of RESP's
+    output; that microelectron goes to CA, as above. Anything more is a fit
+    that did not hold, and is refused.
+    """
+
+    residue = [(name, charge) for role, name, charge in fitted if role == "RES"]
+    names = [name for name, _ in residue]
+    if len(set(names)) != len(names):
+        raise ResidueChargeError(f"the residue's atom names are not unique: {names}")
+    which = backbone_set(net_charge)
+    backbone = BACKBONE_CHARGES[which]
+    by_name = dict(residue)
+    absent = [name for name in (*backbone, "CA") if name not in by_name]
+    if absent:
+        raise ResidueChargeError(f"the residue has no {', '.join(absent)}")
+    moved = [
+        f"{name} {by_name[name]:+.6f} (held at {value:+.6f})"
+        for name, value in backbone.items()
+        if abs(by_name[name] - value) > 1.0e-6
+    ]
+    if moved:
+        raise ResidueChargeError(
+            f"the fit did not hold the backbone at the {which} charges: " + "; ".join(moved)
+        )
+    fitted_sum = sum(by_name.values())
+    if abs(fitted_sum - net_charge) > FIT_ROUNDING_E:
+        raise ResidueChargeError(
+            f"the residue's fitted charges sum to {fitted_sum:+.6f} e, not its "
+            f"{net_charge:+d}: the caps did not keep to zero"
+        )
+    micro = {name: round(charge * _MICRO) for name, charge in residue}
+    micro["CA"] += net_charge * _MICRO - sum(micro.values())
+    return ResidueCharges(
+        charges={name: micro[name] / _MICRO for name in names},
+        net_charge=net_charge,
+        backbone_set=which,
+        fitted_residue_sum=fitted_sum,
+        cap_sums={
+            cap: sum(charge for role, _, charge in fitted if role == cap)
+            for cap in ("ACE", "NME")
+        },
+        shift_per_atom=0.0,
+        shifted_atoms=(),
+    )

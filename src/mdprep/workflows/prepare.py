@@ -43,6 +43,7 @@ from mdprep.refinement.workflow import (
     run_refinement_stage,
 )
 from mdprep.reports.structure_report import write_structure_reports
+from mdprep.residues.qmmesp import run_residue_qmmesp_stage
 from mdprep.residues.workflow import (
     ResidueStageError,
     ResidueStageResult,
@@ -340,6 +341,34 @@ def prepare_system(
             csv_path=reports_dir / "ligand_report.csv",
             markdown_path=reports_dir / "ligand_report.md",
         )
+        if any(
+            block.parameters == "qmmesp_pyscf" for block in manifest.noncanonical_residues
+        ):
+            # Fitted in the provisional system the ligand stage built, which
+            # holds every ligand and this residue with AM1-BCC charges.
+            assert residue_result is not None
+            provisional = ligand_result.qmmesp_provisional_system
+            if provisional is None:
+                raise PrepareWorkflowError(
+                    "The ligand stage built no provisional system for the QMMESP fit of "
+                    "the noncanonical residues."
+                )
+            try:
+                residue_result = run_residue_qmmesp_stage(
+                    protonation_result.structure,
+                    manifest,
+                    residue_result,
+                    output_dir=output_dir,
+                    prmtop=provisional.prmtop_path,
+                    inpcrd=provisional.inpcrd_path,
+                )
+            except ResidueStageError as exc:
+                raise PrepareWorkflowError(str(exc)) from exc
+            write_residue_reports(
+                residue_result,
+                json_path=reports_dir / "residue_report.json",
+                markdown_path=reports_dir / "residue_report.md",
+            )
         _write_manifest_lock(
             manifest=manifest,
             structure_report=report,

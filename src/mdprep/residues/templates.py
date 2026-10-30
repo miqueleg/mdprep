@@ -314,6 +314,19 @@ KNOWN_RESIDUE_CHEMISTRY: dict[str, KnownResidueChemistry] = {
             ),
         ),
         KnownResidueChemistry(
+            resname="CGU",
+            smiles="CC(=O)NC(CC(C(=O)[O-])C(=O)[O-])C(=O)NC",
+            net_charge=-2,
+            heavy_atoms=(("C", 6), ("N", 1), ("O", 5)),
+            explanation=(
+                "CGU is gamma-carboxyglutamate (Gla), the malonate the vitamin "
+                "K-dependent carboxylase makes of a glutamate, which binds calcium "
+                "in osteocalcin and the Gla domains of the coagulation factors. "
+                "Proposed with both carboxylates ionised, net charge -2: their pKa "
+                "values are well below 7."
+            ),
+        ),
+        KnownResidueChemistry(
             resname="CSO",
             smiles="CC(=O)NC(CSO)C(=O)NC",
             net_charge=0,

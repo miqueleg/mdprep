@@ -50,6 +50,23 @@ the MM polarization of the QM wavefunction used for ESP fitting.
 Multiple QMMESP ligands are handled one target at a time. Other ligands can be
 included as MM point charges according to the manifest environment settings.
 
+## Noncanonical residues
+
+A modified residue kept in its chain can be fitted the same way
+(`noncanonical_residues[].parameters: qmmesp_pyscf`, with the same `qmmesp`
+block; see [noncanonical_residues.md](noncanonical_residues.md#qmmesp-charges)).
+It is fitted in the same provisional system, which the ligand stage builds
+whenever a ligand or a residue asks for QMMESP, with the residue there under
+its provisional AM1-BCC library. What differs is the boundary: a residue of a
+chain is bonded to its neighbours, so its QM region is the residue between an
+acetyl and a methylamide built from those neighbours' atoms, the two
+neighbours are left out of the MM charges whole, and so are the peptide bonds
+joining them to the chain beyond. The RESP fit holds the residue's backbone N,
+H, C and O at the protein force field's charges and each cap at a sum of zero,
+through respgen's predefined charges and charge groups; only the residue's
+own atoms' charges are kept, in a library built with the provisional one's
+types and frcmod.
+
 `embedding_cutoff_angstrom: null` includes the complete selected non-target
 environment and matches the reference workflow. A finite cutoff is supported
 only as an explicit user-selected approximation and is recorded in the
@@ -92,8 +109,9 @@ solvent shell for this single point.
   retained crystallographic solvent/ions only. Manifest-requested bulk
   solvent and salt are added later and cannot polarize this fit.
 - MM atoms are fixed point charges. Polarizable MM, Lennard-Jones coupling in
-  the SCF Hamiltonian, covalent QM/MM boundaries, and covalent ligands are
-  outside v0.2 scope. Configured metals enter through their explicit
+  the SCF Hamiltonian, link-atom QM/MM boundaries, and covalent ligands are
+  outside v0.2 scope; the one covalent boundary handled is a residue of the
+  chain, capped as above. Configured metals enter through their explicit
   provisional nonbonded charge model. A QMMESP target cannot also be a
   residue whose charges MCPB.py step 3 will refit.
 - Every independent ligand/cofactor must be representable by

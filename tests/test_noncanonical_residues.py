@@ -21,6 +21,7 @@ from mdprep.config.decisions import (
     DecisionPlan,
     Decision,
     Choice,
+    answer_conflicts,
     build_manifest,
     plan_decisions,
     proposal_explanations,
@@ -47,7 +48,7 @@ from mdprep.structure.normalize import StructureNormalizationError, normalize_st
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.writer import render_pdb
 from tests.test_config_validation import base_manifest
-from tests.test_heterogen_groups import walk
+from tests.test_heterogen_groups import unknown_methionine_like, walk
 
 ROOT = Path(__file__).resolve().parents[1]
 HETEROGENS = ROOT / "tests" / "data" / "heterogens"
@@ -157,7 +158,7 @@ def _with_kept_residue(example: str) -> dict:
 
 
 def test_a_bonded_metal_site_and_a_kept_residue_are_refused_together():
-    with pytest.raises(ValidationError, match="MCPB.py builds its own tleap system"):
+    with pytest.raises(ValidationError, match="not supported yet: neither the QM/MM refinement"):
         ManifestConfig.model_validate(_with_kept_residue("17_syrb2_bound_water_mcpb.yaml"))
 
 
@@ -597,10 +598,15 @@ def phosphoserine():
     return plan_decisions(PHOSPHOSERINE)
 
 
-def test_a_phosphoserine_is_one_question_with_three_answers(phosphoserine):
+def test_a_phosphoserine_is_one_question_with_four_answers(phosphoserine):
     decision = phosphoserine.by_id("residue.SEP.treatment")
 
-    assert [choice.value for choice in decision.choices] == ["replace", "amber_library", "am1bcc"]
+    assert [choice.value for choice in decision.choices] == [
+        "replace",
+        "amber_library",
+        "am1bcc",
+        "qmmesp_pyscf",
+    ]
     assert decision.default is None and decision.requires_user_input
     assert [target.resid for target in decision.targets] == [57]
     assert phosphoserine.findings["ligands"] == []
@@ -626,6 +632,17 @@ def _answers(plan, treatment, **given):
                 "smiles": KNOWN_RESIDUE_CHEMISTRY["SEP"].smiles,
                 "net_charge": -2,
                 "parent": "SER",
+            },
+        ),
+        (
+            "qmmesp_pyscf",
+            {
+                "resname": "SEP",
+                "parameters": "qmmesp_pyscf",
+                "smiles": KNOWN_RESIDUE_CHEMISTRY["SEP"].smiles,
+                "net_charge": -2,
+                "parent": "SER",
+                "qmmesp": {"method": "HF", "basis": "6-31G*"},
             },
         ),
     ],
@@ -661,7 +678,7 @@ def test_the_template_and_the_chemistry_are_proposed_and_explained(phosphoserine
 
 def test_a_residue_with_no_parent_cannot_take_ff19sbs_cmap(tmp_path):
     text = "".join(
-        line.replace("MSE", "XYZ") + "\n"
+        unknown_methionine_like(line) + "\n"
         for line in SELENOMETHIONINE.read_text().splitlines()
         if not line.startswith("MODRES")
     )
@@ -673,7 +690,7 @@ def test_a_residue_with_no_parent_cannot_take_ff19sbs_cmap(tmp_path):
         {
             "residue.XYZ.treatment": "am1bcc",
             "residue.XYZ.net_charge": "0",
-            "residue.XYZ.smiles": "CC(=O)NC(CC[Se]C)C(=O)NC",
+            "residue.XYZ.smiles": "CC(=O)NC(CCSC)C(=O)NC",
             "protein.forcefield": "ff19SB",
             "protein.water_model": "OPC",
             "structure.repair.add_missing_heavy_atoms": "false",
@@ -728,11 +745,12 @@ def test_a_kept_residue_and_a_bonded_metal_are_refused_at_the_question():
         findings={"noncanonical_residues": {"SEP": {"parent": "SER"}}},
     )
 
-    with pytest.raises(DecisionError, match="MCPB.py builds its own tleap system") as raised:
+    with pytest.raises(DecisionError, match="cannot be built together yet") as raised:
         _require_buildable_residues(
             plan, {"residue.SEP.treatment": "am1bcc", "metal.a_zn_1.model": "bonded_mcpb"}
         )
-    assert raised.value.decision_id == "residue.SEP.treatment"
+    # Not on the metal: the question to go back to is the metal's.
+    assert raised.value.decision_id == "metal.a_zn_1.model"
 
 
 def test_the_example_is_what_the_planner_writes():
@@ -753,3 +771,45 @@ def test_the_example_is_what_the_planner_writes():
     manifest["project"]["input_structure"] = example["project"]["input_structure"]
 
     assert manifest == example
+
+
+def test_the_calcium_example_is_what_the_planner_writes():
+    example = yaml.safe_load((ROOT / "examples" / "23_osteocalcin_gla_calcium.yaml").read_text())
+    plan = plan_decisions(ROOT / "examples" / "tutorials" / "osteocalcin_1q8h" / "1Q8H.pdb")
+    manifest = build_manifest(
+        plan,
+        walk(
+            plan,
+            {
+                "residue.CGU.treatment": "am1bcc",
+                "project.name": "osteocalcin_1q8h",
+                "project.output_dir": "prepared/osteocalcin_1q8h",
+            },
+        ),
+    )
+    manifest["project"]["input_structure"] = example["project"]["input_structure"]
+
+    assert manifest == example
+    # Gla24 is on all three calcium ions, and is asked about once, as CGU.
+    assert [site["model"] for site in manifest["metals"]] == ["nonbonded"] * 3
+    for site in ("a_ca_71_site", "a_ca_72_site", "a_ca_73_site"):
+        donors = plan.by_id(f"metal.{site}.confirm_donors")
+        assert "A:CGU24" in [choice.value for choice in donors.choices]
+
+
+def test_keeping_gla_and_bonding_its_calcium_is_refused_at_the_residue():
+    plan = plan_decisions(ROOT / "examples" / "tutorials" / "osteocalcin_1q8h" / "1Q8H.pdb")
+    answers = walk(
+        plan,
+        {
+            "residue.CGU.treatment": "am1bcc",
+            "metal.a_ca_71_site.model": "bonded_mcpb",
+            "project.name": "osteocalcin_1q8h",
+            "project.output_dir": "prepared/osteocalcin_1q8h",
+        },
+    )
+
+    conflict = answer_conflicts(plan, answers)
+
+    assert conflict is not None and "CGU coordinates the metal" in str(conflict)
+    assert conflict.decision_id == "residue.CGU.treatment"

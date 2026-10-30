@@ -30,10 +30,12 @@ recorded in the output reports.
   of halogenating enzymes is in [docs/enzyme_families.md](docs/enzyme_families.md).
 - Noncanonical residues kept in their chain -- a phosphoserine, an
   acetyl-lysine, a p-azido-phenylalanine -- built from AmberTools' templates
-  where they exist, or parameterised from their SMILES: AM1-BCC charges on the
-  capped residue with the backbone's fixed to the force field's, GAFF2 on the
-  side chain, the protein's types on the backbone, bonded into the chain by
-  tleap ([docs/noncanonical_residues.md](docs/noncanonical_residues.md)).
+  where they exist, or parameterised from their SMILES: AM1-BCC or QMMESP
+  charges on the capped residue with the backbone's held at the force field's,
+  GAFF2 on the side chain, the protein's types on the backbone, bonded into the
+  chain by tleap. A kept residue may coordinate a nonbonded metal, as
+  osteocalcin's Gla residues do its calcium
+  ([docs/noncanonical_residues.md](docs/noncanonical_residues.md)).
 - Dimers, trimers, tetramers: every protein chain in one system. Copies of one
   protein can share parameters -- asked about once, matched residue for
   residue by sequence and position rather than number, and a bonded metal site
@@ -238,6 +240,7 @@ specified in steps in the manifest.
 | Glycans, additives, modified residues: a peroxygenase | [Heterogens](docs/heterogens.md) | `examples/20_upo_5oxu_heme_glycans.yaml` |
 | A flavin-dependent halogenase | [Enzyme families](docs/enzyme_families.md) | `examples/21_prna_fad_halogenase.yaml` |
 | A phosphoserine kept in its chain | [Noncanonical residues](docs/noncanonical_residues.md) | `examples/22_spoiiaa_phosphoserine.yaml` |
+| Gla residues on calcium ions | [Metals and kept residues](docs/noncanonical_residues.md#metals-and-kept-residues) | `examples/23_osteocalcin_gla_calcium.yaml` |
 | Preparing, running and investigating in Colab | [Colab example notes](examples/README.md) | `examples/mdprep_colab.ipynb` |
 | Guided Colab builder (legacy) | [Colab example notes](examples/README.md) | `examples/mdprep_interactive_colab.ipynb` |
 | Complete Fe(III) workflow | [7E07 tutorial](examples/tutorials/7E07_bonded_fe3/README.md) | `examples/tutorials/7E07_bonded_fe3/system.yaml` |
@@ -264,8 +267,9 @@ charge model, protonation, force field, QM method, or metal model.
 
 mdprep does not support a noncanonical residue at a chain terminus, one
 parameterised from its SMILES whose backbone nitrogen has no hydrogen (a
-proline analogue, an N-methyl amino acid), or one kept in the same build as a
-bonded MCPB site or a QM/MM refinement; covalent
+proline analogue, an N-methyl amino acid) or that holds an element GAFF2 does
+not type (a metal, a selenium), or one kept in the same build as a bonded MCPB
+site or a QM/MM refinement; covalent
 ligands (heme c and the bonded hemes of peroxidases among them; glycans and
 other bonded heterogens can only be removed), metal clusters, oxoanions such
 as vanadate, automatic loop modeling (a missing loop is left as two

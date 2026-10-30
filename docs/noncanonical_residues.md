@@ -36,9 +36,12 @@ noncanonical_residues:
 ```
 
 `parameters` says where the template comes from: `amber_library`, a template
-AmberTools ships for the protein force field, or `am1bcc`, one mdprep
-parameterises from the SMILES you give. Where AmberTools has one, use it: its
-charges were fitted with the protein force field's own protocol.
+AmberTools ships for the protein force field, or one mdprep parameterises
+from the SMILES you give -- `am1bcc`, with AM1-BCC charges, or
+`qmmesp_pyscf`, with charges fitted to the residue's quantum-mechanical
+electrostatic potential where it sits in the protein. Where AmberTools has
+one, use it: its charges were fitted with the protein force field's own
+protocol.
 
 A kept residue must sit inside its chain, bonded by a peptide bond to a
 residue on each side, and have every heavy atom; mdprep makes no terminal
@@ -157,6 +160,101 @@ output -- and every tleap build of the system loads them.
 When several residues share the name, the library is made from the first one
 listed and all of them must have the same atoms.
 
+A residue parameterised from its SMILES may hold only what GAFF2 types and
+AM1-BCC charges: H, C, N, O, F, P, S, Cl, Br and I. Anything else is refused
+with the atom named. antechamber would not refuse a selenium: it types it as
+GAFF2's thioether sulfur, and the residue would be built with sulfur's mass
+and van der Waals radius under a selenium's name. A selenomethionine is built
+from AmberTools' MSE template, or replaced by methionine. A metal is
+[a site of its own](#metals-and-kept-residues).
+
+## QMMESP charges
+
+```yaml
+noncanonical_residues:
+- resname: SEP
+  residues:
+  - {chain: B, resname: SEP, resid: 57}
+  parameters: qmmesp_pyscf
+  smiles: CC(=O)NC(COP(=O)([O-])[O-])C(=O)NC
+  net_charge: -2
+  parent: SER
+  qmmesp:
+    method: HF
+    basis: 6-31G*
+```
+
+The parameterisation of the previous section, with its charges fitted instead
+to the electrostatic potential of the residue polarised by the protein around
+it: the QMMESP method mdprep uses for ligands
+([qmmesp_pyscf.md](qmmesp_pyscf.md)), applied to a residue of the chain.
+
+1. **Provisional parameters.** The residue is parameterised with AM1-BCC as
+   the structure is read, as above, into `residues/<NAME>/provisional_am1bcc/`.
+   That is the residue the histidine embedding and the provisional system see.
+2. **The provisional system.** After protonation, the ligand stage builds the
+   dry provisional Amber system QMMESP ligands are fitted in -- protein,
+   crystal waters and ions, every ligand with AM1-BCC charges, every metal with
+   its provisional nonbonded model, this residue with its provisional library
+   -- whether or not any ligand is fitted with QMMESP. One system serves every
+   QMMESP fit of the preparation.
+3. **The QM region** is the capped residue, the caps built from the
+   neighbours' atoms as in the AM1-BCC route. PySCF runs a single point on it
+   at `qmmesp.method`/`qmmesp.basis` (HF/6-31G*, the level Amber's protein
+   charges were fitted at, is what the planner writes) with the closed-shell
+   charge `net_charge`.
+4. **The embedding** is every atom of the provisional system as a fixed MM
+   point charge in the SCF Hamiltonian (`pyscf.qmmm.mm_charge`), but for
+   - the residue itself;
+   - the two residues the caps stand in for, whole: a cap's methyl carbon is
+     where a neighbour's CA is, and its hydrogens almost where that
+     neighbour's N, HA and CB are;
+   - the peptide bonds that join those two to the chain beyond -- the C and O
+     of the residue before the one before, the N and H of the residue after
+     the one after -- a bond's length from the caps' hydrogens, and so as good
+     as bonded to the QM region.
+
+   `qmmesp.environment` and `qmmesp.embedding_cutoff_angstrom` select the
+   rest as they do for a ligand; a kept residue elsewhere counts as protein.
+   An MM atom closer than 1.0 A to a QM atom stops the fit: that is a clash,
+   not an environment.
+5. **The fit** is Amber's two-stage RESP (`respgen` and `resp`) on the
+   polarised ESP, under the constraints of Amber's protocol for a new residue,
+   given to respgen as predefined charges and charge groups: the residue's
+   backbone N, H, C and O held at the backbone set of its sign (the table
+   above) in both stages, and each cap summing to zero. The residue's own
+   atoms then carry its integer charge; only theirs are kept. The MM charges
+   are not fitted and reach no file but the fit's record of them.
+6. **The final library** is built from the provisional one's atom types and
+   frcmod, with the fitted charges: charges are all the fit changes. It is
+   written to `residues/<NAME>/`, where the final build looks; the provisional
+   library is never loaded by the final build, and a build without the fitted
+   one stops rather than fall back on it.
+
+Everything is kept under `residues/<NAME>/qm/qmmesp_pyscf/`: the SCF input and
+result, the checkpoint, the MM charges and their summary, the ESP grid and
+values, and the RESP inputs, outputs and constraints. The residue report
+lists both sets of charges side by side, the embedding's size and charge, and
+the fit's RMS.
+
+On the stretch of 1H4X's chain B the tests use (residues 52-62), the whole
+preparation with SEP57 fitted at HF/6-31G* in 115 MM charges takes half a
+minute on four threads, and no charge of the residue moves more than 0.11 e
+from the AM1-BCC set. Two things to know:
+
+- **One environment.** tleap has one template per residue name, so the
+  charges are fitted in the environment of the first residue a block lists
+  and shared by all of them. List first the one whose environment matters
+  most.
+- **Buried atoms.** RESP fits charges to the potential outside the molecule,
+  which an atom buried among its neighbours barely shapes, and a fit to one
+  conformation can let such an atom trade charge with the atoms around it.
+  On osteocalcin's Gla (PDB 1Q8H) the methine carbon between the two
+  carboxylates comes out at +1.2 e and its hydrogen at -0.5 -- in the gas
+  phase as well, if less so. Any atom more than 0.5 e from its AM1-BCC charge
+  is reported as a warning; compare the two sets before simulating, and keep
+  the residue with `am1bcc` if the fitted set does not look like chemistry.
+
 ## Protonation
 
 PropKa does not titrate a modified residue, and mdprep does not guess one's
@@ -165,7 +263,48 @@ name a kept residue. The xTB comparison of a histidine's tautomers embeds the
 side chain in the surroundings' MM charges; a kept residue contributes its
 own -- the template's, each hydrogen's charge given to its heavy atom until
 tleap builds them, or those mdprep fitted for it, which is why kept residues
-are parameterised right after the structure is normalised.
+are parameterised right after the structure is normalised. A residue whose
+charges QMMESP fits contributes its provisional AM1-BCC ones: its fit needs
+the protonated system around it, which comes later.
+
+## Metals and kept residues
+
+**A metal on a kept residue.** A phosphoserine holding a magnesium, a Gla
+residue a calcium, a carbamylated lysine the nickel ions of a urease: the
+metal is a metal site like any other ([metals.md](metals.md)), and the planner
+lists the kept residue among its donors. Modelled nonbonded, it builds: the
+residue's charges are its template's or its fitted ones, and the ion's are
+its Li/Merz model's. QMMESP is where a metal on the residue matters most --
+the ion's formal charge is among the MM charges that polarise the fit -- and
+osteocalcin, three Gla residues on three calcium ions, is the reference case:
+[examples/23_osteocalcin_gla_calcium.yaml](../examples/23_osteocalcin_gla_calcium.yaml)
+and [its tutorial](../examples/tutorials/osteocalcin_1q8h/README.md).
+Modelled bonded, it is refused for now, with the residue's question to go
+back to: neither the QM/MM refinement a bonded site takes its geometry from
+nor MCPB.py's models of the site handle a kept residue yet. So is a bonded
+site elsewhere in a build that keeps a residue.
+
+**A metal deposited inside a residue.** Some depositions write a metal and the
+residue that binds it as one residue: CSB, a cysteine bound to a lead ion,
+or CMH, S-(methylmercury)cysteine. The PDB's chemical component dictionary
+now marks both obsolete, but older files and models built by hand still
+hold them. mdprep reads one as it reads a heme
+([metals.md](metals.md#a-metal-inside-a-cofactor-hemes)): a single metal of
+the kinds it builds sites for is moved into a residue of its own, named after
+its element with the residue's number, and what is left is the modified
+residue, to be replaced or kept like any other. Replaced, it is its parent on a metal: with the site
+bonded, the parent's protonation is asked, as a cysteine's on a zinc is. The
+metal is written after its chain, not after the residue: a one-atom residue
+between two residues of a chain is where tleap would end the chain.
+
+A metal bonded to atoms beyond the amino acid -- CMH's mercury holds a methyl
+as well as the sulfur -- is an organometallic group: taking the metal out
+would leave the residue in pieces, so the residue stays whole, and holding a
+metal it cannot be parameterised from a SMILES. Replacing it by its parent,
+which drops the metal and what it carried, is all that is offered; that is
+also what a heavy-atom derivative made to solve the phases usually calls for.
+A residue holding a metal mdprep builds no sites for, such as CSB's lead,
+stays whole for the same outcome.
 
 ## What is checked
 
@@ -182,14 +321,16 @@ are parameterised right after the structure is normalised.
 ## In the planner and the web builder
 
 Each modified residue name is one question -- replace it by its parent, keep
-it with AmberTools' template, or keep it parameterised from its SMILES --
-offering what applies to it, and nothing is proposed, except replacing a
-selenomethionine, which is a label, not chemistry. Kept with a template that
-has protonation states, which one is the next question; parameterised, its
-net charge and SMILES are. For the common modifications -- phosphorylated
+it with AmberTools' template, or keep it parameterised from its SMILES with
+AM1-BCC or with QMMESP charges -- offering what applies to it, and nothing is
+proposed, except replacing a selenomethionine, which is a label, not
+chemistry. Kept with a template that has protonation states, which one is the
+next question; parameterised, its net charge and SMILES are, and QMMESP is
+written with HF/6-31G*. For the common modifications -- phosphorylated
 serine, threonine and tyrosine, methylated and acetylated lysines, oxidised
-cysteines, carboxylysine -- the template, SMILES and charge are proposed,
-with the reason for the protonation chosen, and can be changed.
+cysteines, carboxylysine, gamma-carboxyglutamate -- the template, SMILES and
+charge are proposed, with the reason for the protonation chosen, and can be
+changed. Choosing QMMESP adds PySCF to what the Colab setup installs.
 
 ## Not supported
 
@@ -201,7 +342,9 @@ with the reason for the protonation chosen, and can be changed.
   field's own template.
 - Residues of one name with different chemistry: tleap holds one template
   per name. Rename one of them in the input.
-- A kept residue in the same build as a bonded MCPB metal site (MCPB.py
-  builds its own tleap system, which does not load the residue's template), or
-  as a QM/MM refinement.
-- RESP charges for a parameterised residue; AM1-BCC is the method.
+- A kept residue in the same build as a bonded MCPB metal site, whether or
+  not the residue is on the metal, or as a QM/MM refinement.
+- A residue holding a metal, a selenium or any element GAFF2 does not type,
+  from its SMILES; an organometallic residue at all.
+- Gas-phase RESP for a residue, and a QMMESP fit averaged over several
+  residues or conformations: one residue's environment is fitted.

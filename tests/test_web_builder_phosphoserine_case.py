@@ -3,8 +3,9 @@
 SpoIIAA's SEP57 (PDB 1H4X, chain B residues 52-62). A student is asked what
 to do with it -- replace it by serine, or keep it -- and nothing is proposed.
 Kept from its SMILES, the SMILES and charge are offered rather than typed;
-kept with AmberTools' template, the dianion's template is. Either way the
-manifest the page writes is one mdprep accepts.
+kept with AmberTools' template, the dianion's template is; kept with QMMESP
+charges, the QM level is written for the student and the setup cell installs
+PySCF. Every way, the manifest the page writes is one mdprep accepts.
 
 Slow, like the other reference cases: a real deposition through Pyodide.
 """
@@ -42,6 +43,18 @@ def templated(tmp_path_factory):
         {
             "structure.repair.add_missing_heavy_atoms": "false",
             "residue.SEP.treatment": "amber_library",
+        },
+    )
+
+
+@pytest.fixture(scope="module")
+def fitted(tmp_path_factory):
+    return _drive(
+        tmp_path_factory,
+        PHOSPHOSERINE,
+        {
+            "structure.repair.add_missing_heavy_atoms": "false",
+            "residue.SEP.treatment": "qmmesp_pyscf",
         },
     )
 
@@ -91,3 +104,18 @@ def test_the_dianions_template_is_offered(templated, tmp_path):
     assert "choose S1P then" in steps["residue.SEP.template"]["note"]
     (block,) = _accepted(templated, tmp_path)["noncanonical_residues"]
     assert (block["parameters"], block["template"]) == ("amber_library", "SEP")
+
+
+def test_qmmesp_charges_are_one_choice_away(fitted, tmp_path):
+    assert fitted["errors"] == []
+    assert fitted["unanswered"] == []
+    steps = _steps(fitted)
+
+    # The SMILES and charge are the same questions, proposed the same way.
+    assert steps["residue.SEP.smiles"]["prefilled"] == KNOWN_RESIDUE_CHEMISTRY["SEP"].smiles
+    (block,) = _accepted(fitted, tmp_path)["noncanonical_residues"]
+    assert (block["parameters"], block["qmmesp"]) == (
+        "qmmesp_pyscf", {"method": "HF", "basis": "6-31G*"},
+    )
+    # What the fit runs is what the Colab cell installs.
+    assert "pyscf" in fitted["setup"] and "rdkit" in fitted["setup"]

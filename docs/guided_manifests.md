@@ -68,7 +68,7 @@ and asks about each group once, with every member listed:
 
 - **Modified residues** in a chain, one question per residue name -- replace
   them by their standard parent, keep them with AmberTools' template, or keep
-  them parameterised from their SMILES
+  them parameterised from their SMILES with AM1-BCC or QMMESP charges
   ([noncanonical_residues.md](noncanonical_residues.md))? Replacing is
   proposed for selenomethionine; nothing is proposed otherwise.
 - **Glycans** bonded to the protein -- remove them? Proposed yes.

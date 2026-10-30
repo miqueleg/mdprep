@@ -92,7 +92,9 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 f"AmberTools template {item['template']}"
                 + (f", renamed {item['final_resname']}" if item["renamed"] else "")
                 if item["parameters"] == "amber_library"
-                else f"parameterised from its SMILES, {item['hydrogens_placed']} hydrogens placed"
+                else "parameterised from its SMILES"
+                + (" with QMMESP charges" if item["parameters"] == "qmmesp_pyscf" else "")
+                + f", {item['hydrogens_placed']} hydrogens placed"
             )
             for item in kept
         ]

@@ -9,6 +9,12 @@ template per residue name -- so they must have the same atoms.
 The stage runs before any tleap build that needs it. Its files sit at fixed
 paths under the output directory, ``residues/<NAME>/``, so every build of the
 system loads the same ones (``residue_leap_inputs``).
+
+A block whose charges are fitted with QMMESP is parameterised here with
+AM1-BCC, under ``residues/<NAME>/provisional_am1bcc/``: that is the residue
+the provisional system holds while it polarises the fit, which runs after
+protonation (``qmmesp.py``). Only the fitted library is written where the
+final build looks, so a build can never take the provisional one for it.
 """
 
 from __future__ import annotations
@@ -16,7 +22,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Sequence
+from typing import TYPE_CHECKING, Sequence
 
 from mdprep.ambertools.commands import AmberToolsError
 from mdprep.config.models import ManifestConfig, NoncanonicalResidueConfig
@@ -32,6 +38,9 @@ from mdprep.residues.parameterise import (
 from mdprep.residues.templates import AMBER_RESIDUE_TEMPLATES
 from mdprep.structure.models import PdbStructure, ResidueRecord
 from mdprep.structure.selectors import SelectorError, resolve_residue_selector
+
+if TYPE_CHECKING:
+    from mdprep.residues.qmmesp import ResidueQmmespResult
 
 
 class ResidueStageError(ValueError):
@@ -57,7 +66,10 @@ class ResidueBlockResult:
     template: str | None = None
     library: str | None = None
     leaprc: str | None = None
+    # For a QMMESP block, the AM1-BCC parameterisation the provisional
+    # system is built with; the fit that replaces its charges is ``qmmesp``.
     parameterised: ParameterisedResidue | None = None
+    qmmesp: "ResidueQmmespResult | None" = None
     warnings: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, object]:
@@ -73,6 +85,7 @@ class ResidueBlockResult:
             "parameterisation": (
                 self.parameterised.to_dict() if self.parameterised is not None else None
             ),
+            "qmmesp": self.qmmesp.to_dict() if self.qmmesp is not None else None,
             "warnings": list(self.warnings),
         }
 
@@ -101,6 +114,22 @@ def residue_directory(output_dir: str | Path, resname: str) -> Path:
     return Path(output_dir) / "residues" / resname
 
 
+def provisional_directory(output_dir: str | Path, resname: str) -> Path:
+    """Where a QMMESP block's AM1-BCC parameterisation is written."""
+
+    return residue_directory(output_dir, resname) / "provisional_am1bcc"
+
+
+def parameterisation_directory(
+    output_dir: str | Path, block: NoncanonicalResidueConfig
+) -> Path:
+    """Where the residue stage parameterises ``block`` from its SMILES."""
+
+    if block.parameters == "qmmesp_pyscf":
+        return provisional_directory(output_dir, block.resname)
+    return residue_directory(output_dir, block.resname)
+
+
 def final_resname(block: NoncanonicalResidueConfig) -> str:
     """The name the residues of ``block`` are built under."""
 
@@ -114,11 +143,16 @@ def expected_charge(block: NoncanonicalResidueConfig) -> int:
     return block.net_charge
 
 
-def residue_leap_inputs(manifest: ManifestConfig, output_dir: str | Path) -> ResidueLeapInputs:
+def residue_leap_inputs(
+    manifest: ManifestConfig, output_dir: str | Path, *, provisional: bool = False
+) -> ResidueLeapInputs:
     """The sources and libraries a tleap build of this system needs.
 
     The parameterised residues' files must exist: the residue stage writes
-    them before anything else runs tleap.
+    them before anything else runs tleap. A QMMESP block's fitted library is
+    written after protonation, from a provisional system built with its
+    AM1-BCC one, which is what ``provisional`` asks for; the final build
+    takes only the fitted one, and stops if it is not there.
     """
 
     forcefield = manifest.protein.forcefield
@@ -132,7 +166,12 @@ def residue_leap_inputs(manifest: ManifestConfig, output_dir: str | Path) -> Res
             if leaprc is not None and leaprc not in sources:
                 sources.append(leaprc)
             continue
-        directory = residue_directory(output_dir, block.resname)
+        fitted_later = block.parameters == "qmmesp_pyscf" and not provisional
+        directory = (
+            residue_directory(output_dir, block.resname)
+            if fitted_later
+            else parameterisation_directory(output_dir, block)
+        )
         item = ResidueLibraryFiles(
             resname=block.resname,
             library_path=directory / f"{block.resname}.lib",
@@ -141,9 +180,16 @@ def residue_leap_inputs(manifest: ManifestConfig, output_dir: str | Path) -> Res
         missing = [path for path in (item.library_path, item.frcmod_path) if not path.is_file()]
         if missing:
             raise ResidueStageError(
-                f"noncanonical residue {block.resname} has not been parameterised: "
-                f"{', '.join(str(path) for path in missing)} missing. The residue stage "
-                "writes them before any tleap build."
+                f"noncanonical residue {block.resname} has not been "
+                f"{'fitted' if fitted_later else 'parameterised'}: "
+                f"{', '.join(str(path) for path in missing)} missing. "
+                + (
+                    "Its QMMESP charges are fitted after protonation, before the final "
+                    "build; a build without them does not fall back on the provisional "
+                    "AM1-BCC library."
+                    if fitted_later
+                    else "The residue stage writes them before any tleap build."
+                )
             )
         files.append(item)
         if block.atom_types not in atom_types:
@@ -169,7 +215,7 @@ def run_residue_stage(
     forcefield = manifest.protein.forcefield
     try:
         for block in manifest.noncanonical_residues:
-            residues = _block_residues(structure, block)
+            residues = block_residues(structure, block)
             displays = [residue.id.display() for residue in residues]
             if block.parameters == "amber_library":
                 assert block.template is not None
@@ -198,12 +244,18 @@ def run_residue_stage(
                     f"{block.resname} and built from one library, made from "
                     f"{first.id.display()}, but their atoms differ from its {names}."
                 )
+            if block.parameters == "qmmesp_pyscf":
+                # The fitted library is this run's or nobody's.
+                stale = residue_directory(output_dir, block.resname)
+                for leftover in ("lib", "frcmod", "mol2"):
+                    (stale / f"{block.resname}.{leftover}").unlink(missing_ok=True)
+                (stale / "parameters.json").unlink(missing_ok=True)
             context = chain_context(structure.residues, first)
             parameterised = parameterise_residue(
                 block,
                 context,
                 protein_forcefield=forcefield,
-                work_dir=residue_directory(output_dir, block.resname),
+                work_dir=parameterisation_directory(output_dir, block),
             )
             own = {
                 name.strip()
@@ -226,7 +278,7 @@ def run_residue_stage(
                     warnings=list(parameterised.warnings),
                 )
             )
-        inputs = residue_leap_inputs(manifest, output_dir)
+        inputs = residue_leap_inputs(manifest, output_dir, provisional=True)
     except (
         AmberToolsError,
         ResidueCappingError,
@@ -234,12 +286,12 @@ def run_residue_stage(
         ResidueFrcmodError,
         ResidueParameterisationError,
     ) as exc:
-        _write_failure(output_dir, exc)
+        write_stage_failure(output_dir, exc)
         raise ResidueStageError(str(exc)) from exc
     return ResidueStageResult(blocks=blocks, leap_inputs=inputs)
 
 
-def _block_residues(
+def block_residues(
     structure: PdbStructure, block: NoncanonicalResidueConfig
 ) -> list[ResidueRecord]:
     residues: list[ResidueRecord] = []
@@ -258,7 +310,7 @@ def _block_residues(
     return residues
 
 
-def _write_failure(output_dir: str | Path, exc: Exception) -> None:
+def write_stage_failure(output_dir: str | Path, exc: Exception) -> None:
     path = Path(output_dir) / "reports" / "residue_failure.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -301,24 +353,64 @@ def render_residue_markdown(blocks: Sequence[ResidueBlockResult]) -> str:
         else:
             item = block.parameterised
             assert item is not None
-            lines.append(
-                f"- Parameters: AM1-BCC on the capped residue ({item.parameterised_from}), "
-                f"{item.charges.backbone_set} backbone charges of {item.protein_forcefield}, "
-                "GAFF2 side chain"
-            )
+            fit = block.qmmesp
+            if block.parameters == "qmmesp_pyscf":
+                lines.append(
+                    f"- Parameters: QMMESP charges for the capped residue "
+                    f"({item.parameterised_from}), fitted by RESP to its "
+                    + (
+                        f"{fit.method}/{fit.basis} ESP in {fit.point_charge_count} MM "
+                        "point charges"
+                        if fit is not None
+                        else "PySCF ESP (not fitted yet)"
+                    )
+                    + f", {item.charges.backbone_set} backbone charges of "
+                    f"{item.protein_forcefield} held; GAFF2 side chain"
+                )
+            else:
+                lines.append(
+                    f"- Parameters: AM1-BCC on the capped residue ({item.parameterised_from}), "
+                    f"{item.charges.backbone_set} backbone charges of {item.protein_forcefield}, "
+                    "GAFF2 side chain"
+                )
             lines.append(f"- SMILES ({item.smiles_form}): `{item.smiles}`")
             if item.cmap:
                 lines.append(f"- CMAP: {item.cmap}")
-            lines.append(f"- Library: `{item.files.library_path}`")
-            lines.append(f"- frcmod: `{item.files.frcmod_path}`")
-            lines.append("")
-            lines.append("| Atom | Type | AM1-BCC | Final |")
-            lines.append("| --- | --- | ---: | ---: |")
-            for name, charge in item.charges.charges.items():
+            files = fit.files if fit is not None else item.files
+            lines.append(f"- Library: `{files.library_path}`")
+            lines.append(f"- frcmod: `{files.frcmod_path}`")
+            if fit is not None:
                 lines.append(
-                    f"| {name} | {item.atom_types[name]} | "
-                    f"{item.am1bcc_charges[name]:+.4f} | {charge:+.4f} |"
+                    f"- Embedding: {fit.point_charge_count} point charges, net "
+                    f"{round(fit.net_embedding_charge, 3) or 0.0:+.3f} e; left out with "
+                    f"the residue: {', '.join(fit.excluded_residues)}"
                 )
+                lines.append(
+                    f"- RESP fit: RMS {fit.rms_error:.5f} au "
+                    f"(relative {fit.relative_rms_error:.3f})"
+                    if fit.relative_rms_error is not None
+                    else f"- RESP fit: RMS {fit.rms_error:.5f} au"
+                )
+            lines.append("")
+            if fit is not None:
+                lines.append("| Atom | Type | AM1-BCC (provisional) | QMMESP (final) |")
+                lines.append("| --- | --- | ---: | ---: |")
+                for name, charge in fit.charges.charges.items():
+                    lines.append(
+                        f"| {name} | {item.atom_types[name]} | "
+                        f"{item.charges.charges[name]:+.4f} | {charge:+.4f} |"
+                    )
+            else:
+                heading = (
+                    "Provisional" if block.parameters == "qmmesp_pyscf" else "Final"
+                )
+                lines.append(f"| Atom | Type | AM1-BCC | {heading} |")
+                lines.append("| --- | --- | ---: | ---: |")
+                for name, charge in item.charges.charges.items():
+                    lines.append(
+                        f"| {name} | {item.atom_types[name]} | "
+                        f"{item.am1bcc_charges[name]:+.4f} | {charge:+.4f} |"
+                    )
         if block.warnings:
             lines.append("")
             lines.extend(f"- Warning: {warning}" for warning in block.warnings)

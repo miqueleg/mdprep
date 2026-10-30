@@ -6,6 +6,9 @@ templates. A kept noncanonical residue has none there -- a phosphoserine's
 -2 beside the histidine being decided would simply be missing -- so its own
 are supplied: the AmberTools template's, or the charges mdprep fitted for it
 from its SMILES, which the residue stage has written before protonation runs.
+A residue whose charges are fitted with QMMESP has only its provisional
+AM1-BCC ones by then -- the fit needs the protonated system around it -- so
+those are the ones used.
 
 A template's residue has no hydrogens yet (tleap builds them), so each
 hydrogen's charge is given to the atom it is bonded to: the residue keeps
@@ -20,7 +23,7 @@ import json
 from mdprep.config.models import ManifestConfig, NoncanonicalResidueConfig
 from mdprep.residues.offlib import OffLibraryError, read_off_unit
 from mdprep.residues.templates import AMBER_RESIDUE_TEMPLATES
-from mdprep.residues.workflow import final_resname, residue_directory
+from mdprep.residues.workflow import final_resname, parameterisation_directory
 from mdprep.structure.models import PdbStructure, ResidueRecord
 from mdprep.structure.selectors import SelectorError, resolve_residue_selector
 
@@ -65,8 +68,10 @@ def _block_charges(
 ) -> tuple[dict[str, float], dict[str, set[str]]]:
     """Charge by atom name, and each atom's bonded neighbours by name."""
 
-    if block.parameters == "am1bcc":
-        path = residue_directory(manifest.project.output_dir, block.resname) / "parameters.json"
+    if block.parameters != "amber_library":
+        path = (
+            parameterisation_directory(manifest.project.output_dir, block) / "parameters.json"
+        )
         data = json.loads(path.read_text(encoding="utf-8"))
         return {name: float(value) for name, value in data["charges"]["charges"].items()}, {}
     assert block.template is not None

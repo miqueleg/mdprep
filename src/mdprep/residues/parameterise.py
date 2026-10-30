@@ -90,6 +90,9 @@ class ParameterisedResidue:
     protein_forcefield: str
     files: ResidueLibraryFiles
     capped_input_mol2_path: Path
+    # antechamber's typing of the capped molecule, GAFF2 throughout: what a
+    # RESP fit of it reads the topology from.
+    antechamber_mol2_path: Path
     capped_mol2_path: Path
     residue_mol2_path: Path
     raw_frcmod_path: Path
@@ -116,6 +119,7 @@ class ParameterisedResidue:
             "library_path": str(self.files.library_path),
             "frcmod_path": str(self.files.frcmod_path),
             "capped_input_mol2_path": str(self.capped_input_mol2_path),
+            "antechamber_mol2_path": str(self.antechamber_mol2_path),
             "capped_mol2_path": str(self.capped_mol2_path),
             "residue_mol2_path": str(self.residue_mol2_path),
             "raw_frcmod_path": str(self.raw_frcmod_path),
@@ -203,16 +207,6 @@ def parameterise_residue(
     write_tripos_mol2(
         capped_mol2, capped, resname=name, types=parmchk2_types, charges=final_charges
     )
-    residue_mol2 = work / f"{name}.mol2"
-    write_tripos_mol2(
-        residue_mol2,
-        capped,
-        resname=name,
-        types=types,
-        charges=final_charges,
-        roles=("RES",),
-    )
-
     raw_frcmod = work / f"{name}.parmchk2.frcmod"
     parmchk2 = _run_tool(
         "parmchk2",
@@ -239,45 +233,16 @@ def parameterise_residue(
     frcmod = work / f"{name}.frcmod"
     frcmod.write_text(junction, encoding="utf-8")
     attention = attention_lines(junction)
-
-    library = work / f"{name}.lib"
-    script = work / "tleap.library.in"
-    elements = {
-        atom.name: atom.element
-        for index, atom in enumerate(capped.atoms)
-        if atom.role == "RES" and not is_gaff_type(types[index])
-    }
-    script.write_text(
-        library_script(
-            resname=name,
-            protein_forcefield=protein_forcefield,
-            atom_types=block.atom_types,
-            mol2_name=residue_mol2.name,
-            frcmod_name=frcmod.name,
-            library_name=library.name,
-            elements=elements,
-        ),
-        encoding="utf-8",
+    library, residue_mol2, tleap = build_residue_library(
+        capped,
+        resname=name,
+        types=types,
+        charges=final_charges,
+        protein_forcefield=protein_forcefield,
+        atom_types=block.atom_types,
+        frcmod=frcmod,
+        label=label,
     )
-    try:
-        tleap = run_tleap(script, work_dir=work)
-        assert_tleap_success(tleap.summary, fail_on_warnings=False, context=f"{name} library")
-    except (TLeapRunError, LeapLogError) as exc:
-        raise ResidueParameterisationError(f"{label}: {exc}") from exc
-    if not library.is_file() or library.stat().st_size == 0:
-        raise ResidueParameterisationError(f"{label}: tleap did not write {library}.")
-    written = library_elements(library.read_text(encoding="utf-8"), name)
-    wrong = sorted(
-        atom.name
-        for atom in capped.atoms
-        if atom.role == "RES"
-        and written.get(atom.name) != ATOMIC_NUMBERS.get(atom.element.capitalize())
-    )
-    if wrong:
-        raise ResidueParameterisationError(
-            f"{label}: tleap's library gives {', '.join(wrong)} the wrong element: "
-            f"{ {atom: written.get(atom) for atom in wrong} }."
-        )
 
     residue_types = {
         atom.name: types[index] for index, atom in enumerate(capped.atoms) if atom.role == "RES"
@@ -292,6 +257,7 @@ def parameterise_residue(
         protein_forcefield=protein_forcefield,
         files=ResidueLibraryFiles(resname=name, library_path=library, frcmod_path=frcmod),
         capped_input_mol2_path=capped_input,
+        antechamber_mol2_path=antechamber_mol2,
         capped_mol2_path=capped_mol2,
         residue_mol2_path=residue_mol2,
         raw_frcmod_path=raw_frcmod,
@@ -310,6 +276,70 @@ def parameterise_residue(
         json.dumps(result.to_dict(), indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     return result
+
+
+def build_residue_library(
+    capped: CappedResidue,
+    *,
+    resname: str,
+    types: list[str],
+    charges: list[float],
+    protein_forcefield: str,
+    atom_types: str,
+    frcmod: Path,
+    label: str,
+) -> tuple[Path, Path, TLeapRun]:
+    """The residue's mol2 and its tleap library, beside ``frcmod``.
+
+    ``types`` and ``charges`` are per atom of ``capped``; only the residue's
+    own reach the files. The library is read back to check that every atom
+    has its element: tleap takes one from the type, and has none for some.
+    """
+
+    work = frcmod.parent
+    residue_mol2 = work / f"{resname}.mol2"
+    write_tripos_mol2(
+        residue_mol2, capped, resname=resname, types=types, charges=charges, roles=("RES",)
+    )
+    library = work / f"{resname}.lib"
+    script = work / "tleap.library.in"
+    elements = {
+        atom.name: atom.element
+        for index, atom in enumerate(capped.atoms)
+        if atom.role == "RES" and not is_gaff_type(types[index])
+    }
+    script.write_text(
+        library_script(
+            resname=resname,
+            protein_forcefield=protein_forcefield,
+            atom_types=atom_types,
+            mol2_name=residue_mol2.name,
+            frcmod_name=frcmod.name,
+            library_name=library.name,
+            elements=elements,
+        ),
+        encoding="utf-8",
+    )
+    try:
+        tleap = run_tleap(script, work_dir=work)
+        assert_tleap_success(tleap.summary, fail_on_warnings=False, context=f"{resname} library")
+    except (TLeapRunError, LeapLogError) as exc:
+        raise ResidueParameterisationError(f"{label}: {exc}") from exc
+    if not library.is_file() or library.stat().st_size == 0:
+        raise ResidueParameterisationError(f"{label}: tleap did not write {library}.")
+    written = library_elements(library.read_text(encoding="utf-8"), resname)
+    wrong = sorted(
+        atom.name
+        for atom in capped.atoms
+        if atom.role == "RES"
+        and written.get(atom.name) != ATOMIC_NUMBERS.get(atom.element.capitalize())
+    )
+    if wrong:
+        raise ResidueParameterisationError(
+            f"{label}: tleap's library gives {', '.join(wrong)} the wrong element: "
+            f"{ {atom: written.get(atom) for atom in wrong} }."
+        )
+    return library, residue_mol2, tleap
 
 
 def protein_backbone_types(

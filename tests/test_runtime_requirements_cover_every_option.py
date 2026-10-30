@@ -135,18 +135,30 @@ def needs_openmm(manifest: dict[str, Any]) -> bool:
 
 
 def needs_rdkit(manifest: dict[str, Any]) -> bool:
-    """ligands/hydrogenate.py places hydrogens from a SMILES through RDKit."""
+    """ligands/hydrogenate.py places hydrogens from a SMILES through RDKit,
+    and residues/capping.py:224 caps a residue parameterised from its SMILES."""
 
-    return any(ligand.get("smiles") for ligand in (manifest.get("ligands") or []))
+    if any(ligand.get("smiles") for ligand in (manifest.get("ligands") or [])):
+        return True
+    return any(
+        block.get("parameters") in {"am1bcc", "qmmesp_pyscf"}
+        for block in (manifest.get("noncanonical_residues") or [])
+    )
 
 
 def needs_pyscf(manifest: dict[str, Any]) -> bool:
-    """qm/pyscf_runner.py:161 and :560, metals/pyscf_mcpb.py:544."""
+    """qm/pyscf_runner.py:161 and :560, metals/pyscf_mcpb.py:544, and
+    residues/qmmesp.py, which runs the same SCF for a residue."""
 
     qm_methods = {"gas_resp_pyscf", "qmmesp_pyscf", "mcpb_resp_pyscf"}
     if any(
         ligand.get("charge_method") in qm_methods
         for ligand in (manifest.get("ligands") or [])
+    ):
+        return True
+    if any(
+        block.get("parameters") == "qmmesp_pyscf"
+        for block in (manifest.get("noncanonical_residues") or [])
     ):
         return True
     return bool(_mcpb_sites(manifest))
@@ -182,6 +194,7 @@ REPAIR_BACKENDS = (None, "none", "pdbfixer")
 CHARGE_METHODS = ("am1bcc", "gas_resp_pyscf", "qmmesp_pyscf", "mcpb_resp_pyscf")
 SMILES = ("CCO", None)
 METAL_MODELS = (None, "nonbonded", "bonded_mcpb")
+RESIDUE_PARAMETERS = (None, "amber_library", "am1bcc", "qmmesp_pyscf")
 HESSIAN_BACKENDS = ("xtb", "pyscf", "gxtb")
 ESP_BACKENDS = ("xtb", "pyscf")
 XTB_MODELS = ("gfn2", "gxtb")
@@ -203,6 +216,7 @@ def build_manifest(
     refinement,
     md,
     energy_check,
+    residue_parameters=None,
 ) -> dict[str, Any]:
     manifest: dict[str, Any] = {
         "protonation": {"method": method},
@@ -215,6 +229,10 @@ def build_manifest(
     }
     if smiles:
         manifest["ligands"][0]["smiles"] = smiles
+    if residue_parameters:
+        manifest["noncanonical_residues"] = [
+            {"resname": "SEP", "parameters": residue_parameters}
+        ]
     if method == "propka_xtb_his":
         manifest["protonation"]["histidine"] = {
             "neutral_tautomer_method": "xtb",
@@ -283,6 +301,37 @@ COMBINATIONS = [
         TOGGLES,
     )
 ]
+
+
+# A kept residue's parameters gate only RDKit and PySCF, so they are walked
+# against the settings that gate those two -- ligand charges and SMILES, the
+# metal model and its backends -- rather than multiplying the whole space.
+RESIDUE_COMBINATIONS = [
+    dict(
+        options,
+        residue_parameters=residue_parameters,
+    )
+    for options in COMBINATIONS
+    if options["method"] == "manual_only"
+    and options["repair"] is None
+    and not options["refinement"]
+    and not options["md"]
+    for residue_parameters in RESIDUE_PARAMETERS[1:]
+]
+
+
+@pytest.mark.parametrize("package", ["rdkit", "pyscf"])
+def test_a_kept_residue_installs_what_parameterising_it_runs(package):
+    expects = ORACLE[package]
+    wrong: list[dict[str, Any]] = []
+    for options in RESIDUE_COMBINATIONS:
+        manifest = build_manifest(**options)
+        if expects(manifest) != (package in conda_packages_for(manifest)):
+            wrong.append(options)
+    assert not wrong, (
+        f"{package} is wrongly installed or left out for {len(wrong)} "
+        f"combination(s); first: {wrong[0]}"
+    )
 
 
 def test_the_option_space_is_actually_being_covered():
