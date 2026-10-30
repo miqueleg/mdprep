@@ -9,6 +9,15 @@
   refused the manifest, and so do a saturated ligand whose hydrogens come
   from its SMILES and a docked substrate written after the crystal waters.
 
+### Fixed
+
+- The Colab setup -- the official notebook's install section and the web
+  builder's setup cell -- printed pip's dependency-resolver complaint in
+  red, as an ERROR, after installing mdprep. Every conflict it listed was
+  among the Python tools AmberTools ships (proprep, ndfes, edgembar), which
+  ask for numpy<2 beside conda-forge's numpy 2, and none was mdprep's: pip
+  checks them because they share mdprep's PyYAML. pip no longer lists them.
+
 ## 0.5.2 - 2026-10-30
 
 ### Added

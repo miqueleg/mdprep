@@ -402,9 +402,14 @@ def micromamba_setup_commands(
         f"export MAMBA_ROOT_PREFIX={prefix}/mamba-root",
         *(cuda_pin_commands() if "openmm" in needed else []),
         with_cuda_pin(create) if "openmm" in needed else create,
+        # AmberTools ships Python tools of its own (proprep, ndfes, edgembar...)
+        # whose pip metadata asks for numpy<2 and packages conda-forge leaves
+        # out. Installing mdprep's PyYAML makes pip check them, and it lists
+        # every such conflict in red as an ERROR, though none is mdprep's.
+        # What mdprep runs, `mdprep doctor` checks.
         (
             f"{prefix}/bin/micromamba run -n {environment_name} "
-            f"pip install -q {mdprep_spec}"
+            f"pip install -q --no-warn-conflicts {mdprep_spec}"
         ),
     ]
     # A bonded metal site needs a build of xtb that conda-forge does not
