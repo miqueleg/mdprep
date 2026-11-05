@@ -10,6 +10,19 @@
 
 ### Fixed
 
+- A dimer assembled by hand pairs its copies' waters correctly. Such a file
+  can leave the second copy's waters in a chain with the first copy's
+  ligand. The water on the second copy's iron then counted as the first
+  copy's, so the two iron sites differed by a water each and could not share
+  a fit. Each water outside the protein chains now belongs to the copy it
+  sits against.
+- A copy whose residues are named apart from the first copy's (THC and
+  THC2, FE1 and FE2) is reported as such. Copies share parameters under one
+  residue name, so these are not paired. The reason, which used to say only
+  that nothing like it sat in the same place, now names the residue it sits
+  where and both names. The refusal of a second bonded fit gives that reason
+  even when nothing paired and the copies question was never asked; it used
+  to say only "Model all but one of them nonbonded".
 - A ligand whose skeleton is symmetric while its bond orders are not is no
   longer refused as the wrong tautomer. In tetrahydrocarbazole, for example,
   the saturated ring and the benzene ring are interchangeable until the bond

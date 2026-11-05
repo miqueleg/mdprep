@@ -148,7 +148,9 @@ class OligomerAnalysis:
     alignments: dict[str, ChainAlignment]
     # The protein chain -- the copy -- every residue belongs to. A heterogen
     # in a chain of its own (as a prediction writes every ligand) belongs to
-    # the protein chain it sits against; one touching no protein to none.
+    # the protein chain it sits against; one touching no protein to none. A
+    # water outside the protein chains belongs to the copy it sits against,
+    # whatever chain it was written in.
     chain_of_residue: dict[ResidueId, str | None]
     chain_of_nonprotein_chain: dict[str, str | None]
     # Residue in a copy -> the residue it corresponds to in the reference.
@@ -280,11 +282,14 @@ def analyse_oligomer(residues: Sequence[ResidueRecord]) -> OligomerAnalysis:
             groups.append([chain])
 
     chain_of_nonprotein = _assign_nonprotein_chains(residues, set(chains))
+    owner_of_water = _assign_waters(residues, set(chains))
     chain_of_residue: dict[ResidueId, str | None] = {}
     for residue in residues:
         chain = residue.id.chain_id
         chain_of_residue[residue.id] = (
-            chain if chain in by_chain else chain_of_nonprotein.get(chain)
+            chain
+            if chain in by_chain
+            else owner_of_water.get(residue.id, chain_of_nonprotein.get(chain))
         )
 
     analysis = OligomerAnalysis(
@@ -316,12 +321,7 @@ def _assign_nonprotein_chains(
     spans every copy and is never anyone's.
     """
 
-    grid = _Grid(CONTACT_ANGSTROM)
-    for residue in residues:
-        if residue.id.chain_id in protein_chains and is_standard_protein_residue(residue):
-            for atom in residue.atoms:
-                if not is_hydrogen(atom):
-                    grid.add(atom, residue.id.chain_id)
+    grid = _protein_grid(residues, protein_chains)
 
     members: dict[str, list[ResidueRecord]] = {}
     for residue in residues:
@@ -375,6 +375,51 @@ def _assign_nonprotein_chains(
             if best is not None:
                 assigned[chain] = best[1]
     return assigned
+
+
+def _assign_waters(
+    residues: Sequence[ResidueRecord], protein_chains: set[str]
+) -> dict[ResidueId, str]:
+    """The protein chain each water outside the protein chains sits against.
+
+    One water at a time, not with its chain. A dimer put together by hand
+    can leave the second copy's waters in a chain with the first copy's
+    ligand, and the water on the second copy's iron then counted as the
+    first copy's: the two iron sites differed by a water each and could not
+    share a fit. A water touching no protein is left to its chain.
+    """
+
+    grid = _protein_grid(residues, protein_chains)
+    owners: dict[ResidueId, str] = {}
+    for residue in residues:
+        if residue.id.chain_id in protein_chains or not is_water_residue(residue):
+            continue
+        contacts: dict[str, int] = {}
+        nearest: dict[str, float] = {}
+        for atom in residue.atoms:
+            if is_hydrogen(atom):
+                continue
+            for owner, distance in grid.near(atom, NEAR_ANGSTROM):
+                nearest[owner] = min(nearest.get(owner, distance), distance)
+                if distance <= CONTACT_ANGSTROM:
+                    contacts[owner] = contacts.get(owner, 0) + 1
+        if contacts:
+            owners[residue.id] = max(
+                contacts, key=lambda owner: (contacts[owner], -nearest[owner])
+            )
+        elif nearest:
+            owners[residue.id] = min(nearest, key=lambda owner: nearest[owner])
+    return owners
+
+
+def _protein_grid(residues: Sequence[ResidueRecord], protein_chains: set[str]) -> "_Grid":
+    grid = _Grid(CONTACT_ANGSTROM)
+    for residue in residues:
+        if residue.id.chain_id in protein_chains and is_standard_protein_residue(residue):
+            for atom in residue.atoms:
+                if not is_hydrogen(atom):
+                    grid.add(atom, residue.id.chain_id)
+    return grid
 
 
 # --------------------------------------------------------------------------
@@ -454,10 +499,49 @@ def _pair_copies(analysis: OligomerAnalysis, residues: Sequence[ResidueRecord]) 
                 continue
             if residue.id in analysis.counterparts or residue.id in analysis.unmatched:
                 continue
-            analysis.unmatched[residue.id] = (
-                f"no {residue.id.resname} with the same atoms sits in the same place "
-                f"in chain {reference}"
+            twin = _same_place_other_name(
+                residue,
+                items_by_chain.get(reference, []),
+                analysis.alignments[chain],
+                residue_by_id,
             )
+            analysis.unmatched[residue.id] = (
+                f"it sits where {twin.id.display()} does, with the same atoms, but is "
+                f"called {residue.id.resname} rather than {twin.id.resname} -- copies "
+                "share parameters under one residue name, so give both the same one "
+                "in the input"
+                if twin is not None
+                else f"no {residue.id.resname} with the same atoms sits in the same "
+                f"place in chain {reference}"
+            )
+
+
+def _same_place_other_name(
+    residue: ResidueRecord,
+    reference_items: Sequence[ResidueRecord],
+    alignment: ChainAlignment,
+    residue_by_id: dict[ResidueId, ResidueRecord],
+) -> ResidueRecord | None:
+    """The reference copy's heterogen in ``residue``'s place, under another name.
+
+    A dimer assembled by hand often names the second copy's ligands apart
+    (THC and THC2, FE1 and FE2). Pairing is by name, since tleap builds every
+    residue of one name from one template, so these are not copies -- and
+    "nothing with the same atoms in the same place" said nothing of why.
+    """
+
+    found: list[tuple[float, ResidueRecord]] = []
+    for item in reference_items:
+        if item.id.resname == residue.id.resname or item.atom_names() != residue.atom_names():
+            continue
+        frame = _neighbourhood_frame(item, alignment, residue_by_id)
+        if frame is None:
+            continue
+        limit = ATOM_MATCH_ANGSTROM if len(item.atoms) == 1 else LIGAND_MATCH_ANGSTROM
+        distance = _deviation(residue, item, frame)
+        if distance <= limit:
+            found.append((distance, item))
+    return min(found, key=lambda pair: pair[0])[1] if found else None
 
 
 def _require_matching_metal_shells(

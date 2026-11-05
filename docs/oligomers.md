@@ -21,6 +21,10 @@ writes every ligand as a chain of its own, so mdprep assigns each such chain
 to the protein chain it touches most, counted in atom contacts within 4.5 A.
 Keeping chain A of a predicted dimer keeps chain A's iron and cofactor and
 leaves out chain B's. Chains that contain only waters are kept either way.
+When copies are paired, each water outside the protein chains is given to
+the copy it sits against on its own, not with its chain. A dimer assembled
+by hand can leave the second copy's waters in a chain with the first copy's
+ligand, and the water on the second copy's iron is still that copy's.
 
 ## Copies of one protein
 
@@ -113,6 +117,11 @@ real structures:
   surface, with no counterpart in A.
 - **A copy whose metal has lost a water**, or gained one. Its first shell is
   not the reference's, so it is a different site.
+- **A dimer assembled by hand**, whose second copy's residues are named apart
+  from the first's: THC and THC2, FE1 and FE2. Copies share parameters under
+  one residue name, so these are not paired. The reason says which residue
+  sits where, and under which name. Give both copies the same names in the
+  input.
 
 The reason names the atom and both distances, for example `A:FE2900 binds
 A:CL901 CL at 2.47 A, whose counterpart here is 3.30 A away`. Refusing a
