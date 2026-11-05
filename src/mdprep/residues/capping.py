@@ -389,12 +389,11 @@ def capped_residue(
         )
     try:
         from rdkit import Chem
-        from rdkit.Chem import AllChem
     except ImportError as exc:  # pragma: no cover - exercised by the skip guard
         raise ResidueCappingError(
             "Parameterising a noncanonical residue from its SMILES requires RDKit."
         ) from exc
-    from mdprep.ligands.hydrogenate import geometry_contradicts_bond_orders
+    from mdprep.ligands.hydrogenate import assign_bond_orders_by_geometry
 
     template, form = capped_template(smiles, len(heavy), label=label)
     formal = Chem.GetFormalCharge(template)
@@ -426,8 +425,18 @@ def capped_residue(
     model = Chem.MolFromPDBBlock(_pdb_block(atoms), removeHs=False, sanitize=False)
     if model is None:
         raise ResidueCappingError(f"{label}: RDKit could not read the capped residue.")
+    # The bonds to the caps are amides by construction, not something the
+    # SMILES claims; a deposited peptide bond can be short (1H4X has one at
+    # 1.23 A) without saying anything about the residue's chemistry.
+    cap_names = {name for name, _, _ in ACE_ATOMS + NME_ATOMS}
     try:
-        model = AllChem.AssignBondOrdersFromTemplate(template, model)
+        model, contradictions = assign_bond_orders_by_geometry(
+            template,
+            model,
+            residue,
+            judged=lambda complaint: not cap_names
+            & set(complaint.split(" is ", 1)[0].split("-")),
+        )
     except Exception as exc:
         raise ResidueCappingError(
             f"{label}: the SMILES {smiles!r} could not be matched onto the residue "
@@ -435,15 +444,6 @@ def capped_residue(
             "connected as they are in the structure, and that the structure puts no "
             "two atoms it does not bond at a bond's length from each other."
         ) from exc
-    # The bonds to the caps are amides by construction, not something the
-    # SMILES claims; a deposited peptide bond can be short (1H4X has one at
-    # 1.23 A) without saying anything about the residue's chemistry.
-    cap_names = {name for name, _, _ in ACE_ATOMS + NME_ATOMS}
-    contradictions = [
-        complaint
-        for complaint in geometry_contradicts_bond_orders(model, residue)
-        if not cap_names & set(complaint.split(" is ", 1)[0].split("-"))
-    ]
     if contradictions:
         raise ResidueCappingError(
             f"{label}: the bond orders the SMILES {smiles!r} implies do not match the "
