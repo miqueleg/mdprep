@@ -14,7 +14,7 @@ const WHEEL_INDEX_URL = "vendor/wheel.json";
 
 // How the generated Colab cell installs mdprep: a release from PyPI, pinned
 // so every student installs the same code. Raised once PyPI has the next one.
-const MDPREP_INSTALL = '"mdprep==0.5.4"';
+const MDPREP_INSTALL = '"mdprep==0.5.5"';
 // The official notebook: it takes the bundle this page writes, prepares and
 // equilibrates the system, and shows every step of it.
 const COLAB_NOTEBOOK_URL =
