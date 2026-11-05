@@ -539,6 +539,34 @@ On the AlphaFold site above:
   constants are positive (32-159 kcal/mol/A^2), with all 24 angles at the
   metal positive too.
 
+#### What it does not guarantee
+
+The minimised site is a minimum of the nonbonded model, not of the quantum
+method whose Hessian is fitted. On the AlphaFold site the g-xTB gradient
+there was still 0.19 Eh/bohr, against 0.20 before. The force constants came
+out positive because the bonds moved to where the curvature is, not because
+the site became a stationary point. So:
+
+- **It can still fail.** Where the nonbonded model's distances are far from
+  the quantum method's, a constant can stay negative; on the same site the
+  12-6 model left one so. Low-spin states (singlet Fe(II), doublet Fe(III))
+  have shorter bonds than the high-spin aqua ions the Li/Merz sets are
+  fitted to. Thiolates, porphyrins and Jahn-Teller ions are described poorly
+  by any nonbonded ion.
+- **It does not fix the quantum side.** A Hessian method that describes the
+  metal badly (GFN2 on BesD's iron) or an SCF with more than one state
+  (2QFK) gives negative terms at any geometry.
+- **It stops rather than reshape a site.** A minimisation that moves a
+  donor out, or another atom in, stops the run.
+
+In every case mdprep stops with the terms named; nothing negative or zero
+is written to the topology. A site that still fails needs a geometry that is
+a minimum of the method fitted. That means a quantum optimisation of the
+small model, supplied as `geometry_source: external_pdb`, or a QM/MM
+refinement that moves heavy atoms (`refinement.backend: ash`,
+`movable_atoms: all_active_region`). Other options are a different Hessian
+method, the spin state the chemistry supports, or a nonbonded model.
+
 The 12-6-4 C4 term needs a polarizability for every atom type in the system.
 Amber's table predates GAFF2's ring and protonation variants (`c6`, `n7`,
 `op`, ...), so each of those takes its GAFF parent's value, written into the
