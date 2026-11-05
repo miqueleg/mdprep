@@ -12,10 +12,12 @@ So residues are matched the way a person would match them:
 
 * protein residues by aligning the chain sequences, which survives offsets,
   gaps and unresolved termini;
-* a heterogen with the one of the same name, with the same atom names, that
-  sits in the same place relative to the protein around it once that
-  neighbourhood is superposed -- so a lid that moved between copies does not
-  break the match;
+* a heterogen with the one with the same atoms, named alike, that sits in the
+  same place relative to the protein around it once that neighbourhood is
+  superposed -- so a lid that moved between copies does not break the match.
+  Its residue name is not compared: a hand-assembled dimer calls the second
+  copy's substrate THC2, and it is still the first copy's THC, built under
+  that one name;
 * a metal only when its whole first shell matches as well, donor for donor
   and atom for atom, and a ligand on a metal only when it binds that metal's
   counterpart the same way. A donor bound in one copy only has to be near
@@ -49,7 +51,7 @@ from mdprep.structure.coordination import (
     metal_donor_atoms,
 )
 from mdprep.structure.hydrogens import is_hydrogen
-from mdprep.structure.models import ResidueId, ResidueRecord
+from mdprep.structure.models import AtomRecord, ResidueId, ResidueRecord
 
 
 # One-letter codes, with the protonation and Amber variants of a residue
@@ -148,7 +150,9 @@ class OligomerAnalysis:
     alignments: dict[str, ChainAlignment]
     # The protein chain -- the copy -- every residue belongs to. A heterogen
     # in a chain of its own (as a prediction writes every ligand) belongs to
-    # the protein chain it sits against; one touching no protein to none.
+    # the protein chain it sits against; one touching no protein to none. A
+    # water outside the protein chains belongs to the copy it sits against,
+    # whatever chain it was written in.
     chain_of_residue: dict[ResidueId, str | None]
     chain_of_nonprotein_chain: dict[str, str | None]
     # Residue in a copy -> the residue it corresponds to in the reference.
@@ -280,11 +284,14 @@ def analyse_oligomer(residues: Sequence[ResidueRecord]) -> OligomerAnalysis:
             groups.append([chain])
 
     chain_of_nonprotein = _assign_nonprotein_chains(residues, set(chains))
+    owner_of_water = _assign_waters(residues, set(chains))
     chain_of_residue: dict[ResidueId, str | None] = {}
     for residue in residues:
         chain = residue.id.chain_id
         chain_of_residue[residue.id] = (
-            chain if chain in by_chain else chain_of_nonprotein.get(chain)
+            chain
+            if chain in by_chain
+            else owner_of_water.get(residue.id, chain_of_nonprotein.get(chain))
         )
 
     analysis = OligomerAnalysis(
@@ -316,12 +323,7 @@ def _assign_nonprotein_chains(
     spans every copy and is never anyone's.
     """
 
-    grid = _Grid(CONTACT_ANGSTROM)
-    for residue in residues:
-        if residue.id.chain_id in protein_chains and is_standard_protein_residue(residue):
-            for atom in residue.atoms:
-                if not is_hydrogen(atom):
-                    grid.add(atom, residue.id.chain_id)
+    grid = _protein_grid(residues, protein_chains)
 
     members: dict[str, list[ResidueRecord]] = {}
     for residue in residues:
@@ -377,6 +379,51 @@ def _assign_nonprotein_chains(
     return assigned
 
 
+def _assign_waters(
+    residues: Sequence[ResidueRecord], protein_chains: set[str]
+) -> dict[ResidueId, str]:
+    """The protein chain each water outside the protein chains sits against.
+
+    One water at a time, not with its chain. A dimer put together by hand
+    can leave the second copy's waters in a chain with the first copy's
+    ligand, and the water on the second copy's iron then counted as the
+    first copy's: the two iron sites differed by a water each and could not
+    share a fit. A water touching no protein is left to its chain.
+    """
+
+    grid = _protein_grid(residues, protein_chains)
+    owners: dict[ResidueId, str] = {}
+    for residue in residues:
+        if residue.id.chain_id in protein_chains or not is_water_residue(residue):
+            continue
+        contacts: dict[str, int] = {}
+        nearest: dict[str, float] = {}
+        for atom in residue.atoms:
+            if is_hydrogen(atom):
+                continue
+            for owner, distance in grid.near(atom, NEAR_ANGSTROM):
+                nearest[owner] = min(nearest.get(owner, distance), distance)
+                if distance <= CONTACT_ANGSTROM:
+                    contacts[owner] = contacts.get(owner, 0) + 1
+        if contacts:
+            owners[residue.id] = max(
+                contacts, key=lambda owner: (contacts[owner], -nearest[owner])
+            )
+        elif nearest:
+            owners[residue.id] = min(nearest, key=lambda owner: nearest[owner])
+    return owners
+
+
+def _protein_grid(residues: Sequence[ResidueRecord], protein_chains: set[str]) -> "_Grid":
+    grid = _Grid(CONTACT_ANGSTROM)
+    for residue in residues:
+        if residue.id.chain_id in protein_chains and is_standard_protein_residue(residue):
+            for atom in residue.atoms:
+                if not is_hydrogen(atom):
+                    grid.add(atom, residue.id.chain_id)
+    return grid
+
+
 # --------------------------------------------------------------------------
 # Heterogen counterparts
 # --------------------------------------------------------------------------
@@ -427,9 +474,7 @@ def _pair_copies(analysis: OligomerAnalysis, residues: Sequence[ResidueRecord]) 
                 else LIGAND_MATCH_ANGSTROM
             )
             for copy_item in copy_items:
-                if copy_item.id.resname != reference_item.id.resname:
-                    continue
-                if copy_item.atom_names() != reference_item.atom_names():
+                if not _same_atoms(copy_item, reference_item):
                     continue
                 distance = _deviation(copy_item, reference_item, frame)
                 if distance <= limit:
@@ -455,9 +500,29 @@ def _pair_copies(analysis: OligomerAnalysis, residues: Sequence[ResidueRecord]) 
             if residue.id in analysis.counterparts or residue.id in analysis.unmatched:
                 continue
             analysis.unmatched[residue.id] = (
-                f"no {residue.id.resname} with the same atoms sits in the same place "
-                f"in chain {reference}"
+                f"nothing with the same atoms sits in the same place in chain {reference}"
             )
+
+
+def _same_atoms(copy: ResidueRecord, reference: ResidueRecord) -> bool:
+    """Whether a copy's heterogen is the reference's: the same atoms, named alike.
+
+    Its residue name is not compared. A dimer assembled by hand, or predicted
+    with each copy's ligands entered separately, often names the second
+    copy's apart -- THC and THC2, FE1 and FE2 -- and it is still the same
+    molecule in the same place: the manifest builds the two under one name.
+    A metal is one atom, whose name says nothing its element does not.
+    """
+
+    if len(copy.atoms) == 1 and len(reference.atoms) == 1:
+        return _element(copy.atoms[0]) == _element(reference.atoms[0])
+    return [(atom.name, _element(atom)) for atom in copy.atoms] == [
+        (atom.name, _element(atom)) for atom in reference.atoms
+    ]
+
+
+def _element(atom: AtomRecord) -> str:
+    return (atom.element or "").strip().upper()
 
 
 def _require_matching_metal_shells(
@@ -508,7 +573,12 @@ def _require_matching_metal_shells(
 
         if metal == reference:
             return atom
-        return (analysis.counterparts.get(atom[0]), atom[1])
+        counterpart = analysis.counterparts.get(atom[0])
+        if counterpart is not None and len(residue_by_id[counterpart].atoms) == 1:
+            # A lone atom pairs whatever it is called: a chloride CL here
+            # may be CL1 there.
+            return (counterpart, residue_by_id[counterpart].atoms[0].name)
+        return (counterpart, atom[1])
 
     def distance_to(residue: ResidueId | None, name: str, metal: ResidueId) -> str:
         atom = _named_atom(residue_by_id, residue, name)
@@ -731,13 +801,14 @@ def _neighbourhood_frame(
 def _deviation(copy: ResidueRecord, reference: ResidueRecord, frame: _Frame) -> float:
     """Largest atom-to-atom distance once ``copy`` is moved onto ``reference``.
 
-    Atoms are compared by name, which both residues share by construction.
+    Atoms are compared by name, which both residues share by construction --
+    except a lone atom, which is its own counterpart whatever it is called.
     """
 
     by_name = {atom.name: atom for atom in reference.atoms}
     worst = 0.0
     for atom in copy.atoms:
-        target = by_name[atom.name]
+        target = reference.atoms[0] if len(reference.atoms) == 1 else by_name[atom.name]
         moved = frame.apply((atom.x, atom.y, atom.z))
         worst = max(
             worst,

@@ -2,6 +2,55 @@
 
 ## 0.5.5 - 2026-11-05
 
+### Added
+
+- Names a structure arrives with that cannot be built are renamed rather than
+  refused, and every rename is reported:
+  - Atoms of a heterogen that share a name are named apart as the structure
+    is read: element and a count, so `C`, `C`, `C` become `C1`, `C2`, `C3`.
+    A molecule editor such as Avogadro names atoms this way, and PDBFixer and
+    tleap each kept or matched only one of them.
+  - A residue that holds several separate molecules, as an editor writes
+    everything it holds, is split into one residue per molecule.
+  - One molecule under two names is built under one name and parameterised
+    once. This covers copies of the protein whose ligands the input names
+    apart (THC and THC2), and any two ligands answered alike whose atoms are
+    named and bonded alike.
+  - Two different molecules under one name are built under two names. So are
+    two metals of one name with different charges, which used to stop the
+    builders with "rename one of them in the input".
+  - A residue whose name is one MCPB.py will give a residue of the bonded
+    site it fits is built under a free name. Otherwise it is built from that
+    site's template. MCPB.py names a site's `LIG` `LG1`, so a different ligand
+    called `LG1` used to be built as part of the site. Free names, including
+    the one the web builder offers for a ligand called like a protein
+    residue, no longer end in a digit: `LIG`, then `LGA`, `LGB`, where they
+    used to be `LG1`, `LG2`.
+- `structure.rename_residues` in the manifest lists residues built under
+  another name than the input's, each with its reason. The builders write
+  it; preparation applies it as the input is read, before anything else,
+  and lists each rename in `reports/structure_report.md`.
+- `mcpb.pyscf.geometry_source: ff_minimized_site` fits a bonded site where
+  the provisional nonbonded force field puts it:
+  - Every residue within 5 A of the metal is minimised and the rest held.
+  - Preparation stops if a donor leaves or joins the first shell, a bond to
+    the metal changes by more than 0.5 A, or the site moves too far.
+  - The Hessian and ESP are taken at the minimised site, and the parameters
+    are built onto the original geometry.
+
+  `fallback_geometry: ff_minimized_site` does this only when the fit at the
+  refined geometry leaves a bond or angle without a restoring force, keeping
+  the failed attempt's files. The builders now write that, with a 12-6-4
+  provisional ion, so a site that fits as it is is not moved. They never
+  write a QM/MM optimisation, which a manifest can still ask for.
+
+  This is for predicted sites, which are far enough from a stationary point
+  that Seminario bonds come out negative. An AlphaFold Fe(II)/alpha-KG site
+  fitted as a singlet had three negative Fe-O force constants with only its
+  hydrogens relaxed; with its site minimised, all six bonds and all 24 angles
+  at the iron are positive. No quantum optimisation is involved. The metal
+  report lists how far the site moved, bond by bond.
+
 ### Changed
 
 - The web builder and the official Colab notebook install mdprep 0.5.4, the
@@ -10,6 +59,28 @@
 
 ### Fixed
 
+- The 12-6-4 ion model works with GAFF2 ligands. ParmEd's `add12_6_4` needs
+  a polarizability for every atom type in the system, and Amber's table has
+  none for GAFF2's ring and protonation variants (`c5`, `c6`, `n7`, `op`,
+  ...), so a ligand with a ring CH2 stopped it. Each such type now takes its
+  GAFF parent's value, noted in the table ParmEd is given.
+- A dimer assembled by hand pairs its copies' waters correctly. Such a file
+  can leave the second copy's waters in a chain with the first copy's
+  ligand. The water on the second copy's iron then counted as the first
+  copy's, so the two iron sites differed by a water each and could not share
+  a fit. Each water outside the protein chains now belongs to the copy it
+  sits against.
+- A copy whose residues are named apart from the first copy's (THC and
+  THC2, FE1 and FE2) is paired with it. Heterogens are matched by atoms and
+  place rather than by name, and a metal by its element and its first shell.
+  Such copies used to go unpaired, and the two iron sites were then refused
+  as two MCPB fits. A copy's residue also takes the fit's template when the
+  first copy's was already called by the template's name. An iron FE1, which
+  MCPB.py also calls FE1, records no rename, and its copy FE2 was left to
+  tleap's own FE2 ion. The refusal of a second bonded fit, when copies really do
+  differ, now gives the reason even when nothing paired and the copies
+  question was never asked; it used to say only "Model all but one of them
+  nonbonded".
 - A ligand whose skeleton is symmetric while its bond orders are not is no
   longer refused as the wrong tautomer. In tetrahydrocarbazole, for example,
   the saturated ring and the benzene ring are interchangeable until the bond

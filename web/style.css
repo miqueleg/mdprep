@@ -164,6 +164,17 @@ input[type="number"] {
   margin: 12px 0 0;
 }
 
+/* Something mdprep did on the user's behalf, said rather than warned. */
+.note {
+  font-size: 0.9rem;
+  margin: 12px 0 0;
+}
+
+ul.note {
+  margin-top: 4px;
+  padding-left: 20px;
+}
+
 /* -------------------------------------------------------------- questions */
 
 .split {

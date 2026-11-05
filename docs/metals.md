@@ -313,7 +313,9 @@ g-xTB, whose Hessian there has seven or eight negative eigenvalues -- their
 sign hangs on which of these near-degenerate states the Hessian is taken in.
 mdprep does not prepare this site, rather than ship either; a Hessian at a
 relaxed geometry or from DFT (`hessian_backend: pyscf`, expensive at 91
-atoms) is the way to parameterise it.
+atoms) is the way to parameterise it. The builders now relax the site with
+the force field before its fit
+([Fitting the site where the force field puts it](#fitting-the-site-where-the-force-field-puts-it)).
 
 ### g-xTB is the default, and why
 
@@ -480,6 +482,109 @@ small model from that relaxed full-system structure, and the refinement PDB and
 hash are recorded as geometry provenance. Supplying
 `optimized_small_model_pdb` or `small_model_geometry_status` in this mode is an
 error.
+
+### Fitting the site where the force field puts it
+
+A Seminario fit reads force constants off the Hessian, and they mean
+something only at a stationary point. A crystal site with its hydrogens
+relaxed is usually near enough to one. A predicted site often is not.
+
+The builders write `geometry_source: qmmm_refinement` with
+`fallback_geometry: ff_minimized_site`:
+- The site is fitted where the refinement left it, hydrogens relaxed.
+- Only if that fit leaves a bond or angle without a restoring force is the
+  site minimised as below and fitted again. A site that fits as it is is
+  not moved.
+- The failed attempt's files are kept in `mcpb.refined_geometry_failed`,
+  and the metal report says why it was refitted.
+- Any other failure stops as before.
+
+`geometry_source: ff_minimized_site` minimises every time. The builders
+never write a QM/MM optimisation (`refinement.backend: ash` with
+`movable_atoms: all_active_region`). It is there for a manifest that asks
+for it, but it is too expensive for a class working in Colab.
+
+One example is an AlphaFold model of an Fe(II)/alpha-ketoglutarate site,
+fitted as a singlet with g-xTB. Its Fe-O bonds were 2.21-2.34 A, the
+distances of a high-spin iron. With only the hydrogens relaxed, the Hessian
+gave three of them a negative force constant: the water, an aspartate and
+one alpha-ketoglutarate oxygen. 95% of the gradient there was on heavy atoms,
+so no relaxation of the hydrogens could fix it.
+
+Instead, the site is minimised, with a force field rather than a quantum
+method:
+
+1. After the refinement stage has relaxed the hydrogens, the pre-MCPB system
+   (the metal as a nonbonded ion of `provisional_nonbonded_parameter_set`) is
+   minimised over every residue within `site_minimization.radius_angstrom`
+   (5 A) of the metal. Everything else is held where it is.
+   - Nonbonded interactions are cut off at 15 A
+     (`nonbonded_cutoff_angstrom`). On SyrB2 that gives the same site to
+     0.04 A RMS, seven times faster than summing every pair.
+   - Two held atoms that sit on each other (tleap rebuilding a missing atom
+     onto another, far from the site) have their interaction switched off,
+     since it only adds a constant. An overlap involving an atom that moves
+     stops the run.
+2. The minimised site has to still be the site, or its parameters describe
+   another one. Preparation stops, naming the distances, if any of these
+   happens:
+   - a donor leaves the bond cutoff, or another atom comes inside it;
+   - a bond to the metal changes by more than `max_bond_change_angstrom`
+     (0.5 A);
+   - the heavy atoms of the metal and its bonded residues move more than
+     `max_rmsd_angstrom` (0.75 A, RMS) or `max_shift_angstrom` (1.5 A, any
+     one atom).
+3. MCPB.py cuts its small and large models from the minimised structure. The
+   fixed-geometry Hessian and the embedded ESP are taken there, with the MM
+   point charges where the minimisation left them.
+4. The fitted structure gets its original coordinates back before anything
+   is built from it. The parameters, equilibrium bond lengths included, are
+   the minimised site's; the prepared system is the one that came in.
+
+`reports/metal_report.md` lists how far the site moved, bond by bond, and
+`metals/<site>/mcpb/site_minimization/site_minimization.json` holds every
+distance and energy.
+
+The nonbonded model matters here, which is why the builders write `12_6_4`.
+On the AlphaFold site above:
+- **12-6:** pulls the carboxylates in to 1.91 A and leaves the keto oxygen
+  where it was; that one is still negative at -10.5 kcal/mol/A^2.
+- **12-6-4:** the bonds come out at 2.03-2.21 A, and all six force
+  constants are positive (32-159 kcal/mol/A^2), with all 24 angles at the
+  metal positive too.
+
+#### What it does not guarantee
+
+The minimised site is a minimum of the nonbonded model, not of the quantum
+method whose Hessian is fitted. On the AlphaFold site the g-xTB gradient
+there was still 0.19 Eh/bohr, against 0.20 before. The force constants came
+out positive because the bonds moved to where the curvature is, not because
+the site became a stationary point. So:
+
+- **It can still fail.** Where the nonbonded model's distances are far from
+  the quantum method's, a constant can stay negative; on the same site the
+  12-6 model left one so. Low-spin states (singlet Fe(II), doublet Fe(III))
+  have shorter bonds than the high-spin aqua ions the Li/Merz sets are
+  fitted to. Thiolates, porphyrins and Jahn-Teller ions are described poorly
+  by any nonbonded ion.
+- **It does not fix the quantum side.** A Hessian method that describes the
+  metal badly (GFN2 on BesD's iron) or an SCF with more than one state
+  (2QFK) gives negative terms at any geometry.
+- **It stops rather than reshape a site.** A minimisation that moves a
+  donor out, or another atom in, stops the run.
+
+In every case mdprep stops with the terms named; nothing negative or zero
+is written to the topology. A site that still fails needs a geometry that is
+a minimum of the method fitted. That means a quantum optimisation of the
+small model, supplied as `geometry_source: external_pdb`, or a QM/MM
+refinement that moves heavy atoms (`refinement.backend: ash`,
+`movable_atoms: all_active_region`). Other options are a different Hessian
+method, the spin state the chemistry supports, or a nonbonded model.
+
+The 12-6-4 C4 term needs a polarizability for every atom type in the system.
+Amber's table predates GAFF2's ring and protonation variants (`c6`, `n7`,
+`op`, ...), so each of those takes its GAFF parent's value, written into the
+table ParmEd reads and noted there.
 
 ### GFN2-xTB or g-xTB small-model Hessian
 

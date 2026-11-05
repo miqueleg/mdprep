@@ -275,8 +275,11 @@ def test_extract_ligand_renames_duplicate_atom_names_deterministically(tmp_path)
     ]
     manifest = make_manifest(data)
 
-    extracted = extract_configured_ligands(read_pdb(pdb_path), manifest, output_dir=tmp_path / "out")
+    structure = read_pdb(pdb_path)
+    extracted = extract_configured_ligands(structure, manifest, output_dir=tmp_path / "out")
 
     assert [atom.name for atom in extracted[0].atoms] == ["C1", "C2", "O1", "O2"]
     assert len(set(atom.name for atom in extracted[0].atoms)) == 4
-    assert any("not unique" in warning for warning in extracted[0].warnings)
+    # Named apart as the structure was read, so every stage saw these names,
+    # and said so there.
+    assert any("named them apart" in warning for warning in structure.warnings)

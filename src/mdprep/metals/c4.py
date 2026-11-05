@@ -15,6 +15,24 @@ class C4PostprocessError(ValueError):
     """Raised when a requested 12-6-4 topology cannot be produced."""
 
 
+# GAFF2 atom types Amber's 12-6-4 polarizability table (lj_1264_pol.dat) does
+# not list, each with the GAFF type whose polarizability it takes. The table
+# predates GAFF2's ring and protonation variants, and ParmEd stops on the
+# first type it cannot find -- c6, a ring CH2, is enough. Each variant is the
+# same element in the same hybridisation as its GAFF parent, which is what a
+# polarizability depends on.
+GAFF2_POLARIZABILITY_ANALOGS = {
+    "c5": "c3", "c6": "c3", "cs": "c",
+    "n5": "n3", "n6": "n3", "n7": "n3", "n8": "n3", "n9": "n3",
+    "np": "n3", "nq": "n3",
+    "nu": "nh", "nv": "nh", "nm": "nh", "nn": "nh",
+    "ns": "n", "nt": "n", "ni": "n", "nj": "n1",
+    "nx": "n4", "ny": "n4", "nz": "n4", "n+": "n4", "nk": "n4", "nl": "n4",
+    "op": "os", "oq": "os",
+    "sp": "ss", "sq": "ss",
+}
+
+
 @dataclass(frozen=True)
 class C4PostprocessRun:
     input_prmtop_backup: Path
@@ -75,6 +93,11 @@ def apply_12_6_4_c4(
     backup = work / f"{topology.name}.pre1264"
     generated = work / f"{topology.name}.with1264"
     shutil.copyfile(topology, backup)
+    polfile = complete_polarizability_table(
+        polfile,
+        _prmtop_flag_strings(topology.read_text(encoding="utf-8", errors="replace"), "AMBER_ATOM_TYPE"),
+        work / "lj_1264_pol.dat",
+    )
     mask = _atom_type_mask(atom_types)
     script = work / "parmed.add1264.in"
     script.write_text(
@@ -126,6 +149,52 @@ def apply_12_6_4_c4(
         nonzero_c4_coefficients=nonzero_c4,
         result=result,
     )
+
+
+def complete_polarizability_table(
+    source: Path, atom_types: list[str], destination: Path
+) -> Path:
+    """Amber's polarizability table, with any GAFF2 type it lacks added.
+
+    Returns ``source`` itself when it already lists every type, so a topology
+    of protein and GAFF types runs against the table as distributed.
+    """
+
+    lines = source.read_text(encoding="utf-8").splitlines()
+    values = {
+        line.split()[0]: line.split()[1]
+        for line in lines
+        if line.strip() and len(line.split()) >= 2
+    }
+    added = [
+        f"{atom_type:<5} {values[GAFF2_POLARIZABILITY_ANALOGS[atom_type]]}    "
+        f"Taken from GAFF type {GAFF2_POLARIZABILITY_ANALOGS[atom_type]} by mdprep"
+        for atom_type in sorted(set(atom_types))
+        if atom_type not in values
+        and GAFF2_POLARIZABILITY_ANALOGS.get(atom_type) in values
+    ]
+    if not added:
+        return source
+    destination.write_text("\n".join([*lines, *added]) + "\n", encoding="utf-8")
+    return destination
+
+
+def _prmtop_flag_strings(contents: str, flag: str) -> list[str]:
+    lines = contents.splitlines()
+    marker = f"%FLAG {flag}"
+    # tleap pads every line to 80 columns, flags included.
+    starts = [index for index, line in enumerate(lines) if line.rstrip() == marker]
+    if not starts:
+        return []
+    values: list[str] = []
+    for line in lines[starts[0] + 1 :]:
+        if line.startswith("%FLAG "):
+            break
+        if line.startswith("%"):
+            continue
+        # Fixed 4-character fields (20a4), a type may contain no spaces.
+        values.extend(line[index : index + 4].strip() for index in range(0, len(line), 4))
+    return [value for value in values if value]
 
 
 def _atom_type_mask(atom_types: list[str]) -> str:

@@ -51,6 +51,25 @@ class RemovedResidueConfig(StrictModel):
     reason: str = Field(min_length=1)
 
 
+class ResidueRenameConfig(StrictModel):
+    """One residue built under another name than the input gives it, and why.
+
+    tleap builds every residue of one name from the one template of that
+    name, so the name decides which parameters a residue gets. Two copies of
+    one molecule the input names apart (THC and THC2) are built under one
+    name and parameterised once; two different molecules the input names
+    alike are built under two. The builder writes these. Preparation applies
+    them as it reads the input, before anything else looks at the structure,
+    so every other selector in the manifest uses the new name, and the
+    structure report lists each one.
+    """
+
+    # The residue as the input names it.
+    selector: ResidueSelector
+    resname: str = Field(pattern=r"^[A-Za-z0-9]{1,3}$")
+    reason: str = Field(min_length=1)
+
+
 class ModifiedResidueReplacement(StrictModel):
     """A modified residue of a chain, and the standard one it becomes."""
 
@@ -172,7 +191,35 @@ class StructureConfig(StrictModel):
     # anything else looks at the structure, so a removed residue is never
     # an unknown heterogen, a ligand or a donor.
     remove_residues: list[RemovedResidueConfig] = Field(default_factory=list)
+    # Residues built under another name, each with its reason. Applied first
+    # of all, as the input is read: every other selector, remove_residues'
+    # included, names the residue the new way.
+    rename_residues: list[ResidueRenameConfig] = Field(default_factory=list)
     repair: StructureRepairConfig = Field(default_factory=StructureRepairConfig)
+
+    @model_validator(mode="after")
+    def validate_renamed_residues(self) -> "StructureConfig":
+        keys = [
+            (item.selector.chain, item.selector.resname, item.selector.resid, item.selector.icode)
+            for item in self.rename_residues
+        ]
+        duplicates = sorted({key for key in keys if keys.count(key) > 1}, key=str)
+        if duplicates:
+            raise ValueError(
+                "structure.rename_residues names a residue more than once: "
+                + ", ".join(f"{c}:{n}{r}{i or ''}" for c, n, r, i in duplicates)
+            )
+        unchanged = [
+            f"{item.selector.chain}:{item.selector.resname}{item.selector.resid}"
+            for item in self.rename_residues
+            if item.resname == item.selector.resname
+        ]
+        if unchanged:
+            raise ValueError(
+                "structure.rename_residues renames a residue to the name it already "
+                "has: " + ", ".join(unchanged)
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_removed_residues(self) -> "StructureConfig":
@@ -727,6 +774,37 @@ class McpbParameterComparisonConfig(StrictModel):
     fail_on_thresholds: bool = True
 
 
+class McpbSiteMinimizationConfig(StrictModel):
+    """The force-field relaxation a bonded site gets before it is fitted.
+
+    ``geometry_source: ff_minimized_site`` fits the site where the provisional
+    nonbonded model puts it: every residue within ``radius_angstrom`` of the
+    metal is minimised, everything else held, and the fixed-geometry Hessian
+    and ESP are taken there. A Seminario fit assumes a stationary point, and a
+    predicted or strained site is far enough from one that bonds come out
+    with negative force constants. The parameters are then built onto the
+    original geometry.
+
+    The minimised site has to still be the site: preparation stops when a
+    donor leaves or another atom joins the first shell, when a bond to the
+    metal changes by more than ``max_bond_change_angstrom``, or when the
+    site's heavy atoms move by more than ``max_rmsd_angstrom`` (RMS) or
+    ``max_shift_angstrom`` (any one).
+    """
+
+    radius_angstrom: float = Field(default=5.0, gt=0, le=12)
+    max_rmsd_angstrom: float = Field(default=0.75, gt=0)
+    max_shift_angstrom: float = Field(default=1.5, gt=0)
+    max_bond_change_angstrom: float = Field(default=0.5, gt=0)
+    tolerance_kj_mol_per_nm: float = Field(default=1.0, gt=0)
+    max_iterations: int = Field(default=0, ge=0)  # 0 means until converged
+    # Nonbonded interactions beyond this are left out (reaction field). On
+    # SyrB2 the site comes out within 0.04 A RMS of the no-cutoff minimum,
+    # seven times faster: every pair of 11,000 atoms is a minute per
+    # thousand steps on the one thread a repeatable minimisation runs on.
+    nonbonded_cutoff_angstrom: float = Field(default=15.0, gt=0)
+
+
 class McpbPySCFConfig(StrictModel):
     """Fixed-geometry calculations that complete the MCPB.py QM stages.
 
@@ -739,7 +817,17 @@ class McpbPySCFConfig(StrictModel):
     MACE-POLAR-1.
     """
 
-    geometry_source: Literal["external_pdb", "qmmm_refinement"] = "external_pdb"
+    geometry_source: Literal["external_pdb", "qmmm_refinement", "ff_minimized_site"] = (
+        "external_pdb"
+    )
+    # What to do when the fit at the geometry above leaves a bond or angle
+    # without a restoring force: stop (null), or minimise the site with the
+    # provisional force field and fit it there (ff_minimized_site). Only with
+    # geometry_source: qmmm_refinement.
+    fallback_geometry: Literal["ff_minimized_site"] | None = None
+    # With geometry_source or fallback_geometry ff_minimized_site, where it
+    # defaults.
+    site_minimization: McpbSiteMinimizationConfig | None = None
     optimized_small_model_pdb: str | None = Field(default=None, min_length=1)
     small_model_geometry_status: Literal[
         "user_optimized",
@@ -859,14 +947,27 @@ class McpbPySCFConfig(StrictModel):
             if self.optimized_small_model_pdb is not None:
                 raise ValueError(
                     "mcpb.pyscf.optimized_small_model_pdb may not be supplied when "
-                    "geometry_source: qmmm_refinement"
+                    f"geometry_source: {self.geometry_source}"
                 )
             if self.small_model_geometry_status is not None:
                 raise ValueError(
                     "mcpb.pyscf.small_model_geometry_status may not be supplied when "
-                    "geometry_source: qmmm_refinement; completion is verified from the "
-                    "refinement stage"
+                    f"geometry_source: {self.geometry_source}; completion is verified "
+                    "from the refinement stage"
                 )
+        if self.fallback_geometry is not None and self.geometry_source != "qmmm_refinement":
+            raise ValueError(
+                "mcpb.pyscf.fallback_geometry is a second attempt after a fit at the "
+                "refined geometry, so it requires geometry_source: qmmm_refinement"
+            )
+        if "ff_minimized_site" in {self.geometry_source, self.fallback_geometry}:
+            if self.site_minimization is None:
+                object.__setattr__(self, "site_minimization", McpbSiteMinimizationConfig())
+        elif self.site_minimization is not None:
+            raise ValueError(
+                "mcpb.pyscf.site_minimization may only be supplied when the site is "
+                "minimised: geometry_source or fallback_geometry ff_minimized_site"
+            )
         if self.hessian_backend == "xtb" and self.xtb is None:
             # Filled in rather than demanded: the backend is the default, so
             # requiring a block to restate the defaults would be noise.
@@ -1622,16 +1723,19 @@ class ManifestConfig(StrictModel):
             if site.parameters_from is not None:
                 continue
             pyscf = site.mcpb.pyscf
-            if pyscf is None or pyscf.geometry_source != "qmmm_refinement":
+            if pyscf is None or pyscf.geometry_source == "external_pdb":
                 continue
+            # Both start from the refined hydrogens: the minimised site moves
+            # its heavy atoms from where the refinement left the protons.
+            source = pyscf.geometry_source
             if not self.refinement.enabled:
                 raise ValueError(
-                    f"Metal site {site.id!r} uses geometry_source: qmmm_refinement, "
+                    f"Metal site {site.id!r} uses geometry_source: {source}, "
                     "which requires refinement.enabled: true"
                 )
             if site.id not in self.refinement.qm_components.metal_sites:
                 raise ValueError(
-                    f"Metal site {site.id!r} uses geometry_source: qmmm_refinement but "
+                    f"Metal site {site.id!r} uses geometry_source: {source} but "
                     "is not listed in refinement.qm_components.metal_sites"
                 )
 

@@ -21,6 +21,10 @@ writes every ligand as a chain of its own, so mdprep assigns each such chain
 to the protein chain it touches most, counted in atom contacts within 4.5 A.
 Keeping chain A of a predicted dimer keeps chain A's iron and cofactor and
 leaves out chain B's. Chains that contain only waters are kept either way.
+When copies are paired, each water outside the protein chains is given to
+the copy it sits against on its own, not with its chain. A dimer assembled
+by hand can leave the second copy's waters in a chain with the first copy's
+ligand, and the water on the second copy's iron is still that copy's.
 
 ## Copies of one protein
 
@@ -97,6 +101,29 @@ the other.
 
 The [web input builder](https://miqueleg.github.io/mdprep/) and `mdprep init
 --interactive` both ask the question.
+
+## Copies named apart
+
+A dimer assembled by hand, or predicted with each copy's ligands entered
+separately, often names the second copy's heterogens apart from the first's:
+THC and THC2, akG and akg2, FE1 and FE2. They are paired all the same. A
+heterogen is matched by its atoms, named alike, and its place, never by its
+residue name, and a metal by its element and its first shell.
+
+tleap builds every residue of one name from the one template of that name,
+so copies that share parameters must share a name. When you answer yes to
+sharing, each copy's ligand is built under its reference's name and with its
+parameters (`parameters_from`). The question's evidence says so, for example
+`F:T011 would share B:THC1's parameters, built as THC`. The manifest records
+each rename under `structure.rename_residues`, with its reason. Preparation
+applies them as it reads the input and lists them in
+`reports/structure_report.md`; see
+[manifest_reference.md](manifest_reference.md#structure). A metal's name
+decides nothing a copy shares, so it keeps its own. Answer no and each copy
+keeps its name and is parameterised on its own.
+
+A name longer than three characters, THC2 here, is shortened as the file is
+read (to T01, since THC is taken), and the manifest then builds it as THC.
 
 ## When copies differ
 
