@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+### Added
+
+- The builders leave out every crystal water sitting on another atom: an
+  oxygen closer than 2.2 A, shorter than any hydrogen bond, to an atom the
+  build keeps. Each goes into `structure.remove_residues` with the atom it
+  overlaps, and the web builder says how many beside the manifest.
+  - A predicted model, or a dimer assembled by hand, can carry waters
+    superposed from another structure inside its side chains. One user's
+    dimer had 85, and its refinement could not place a lysine's hydrogens
+    until they were removed by hand.
+  - A high-resolution crystal has a few as well, for the side-chain conformer
+    the build does not use. 2FCT's A:HOH1034 sits 2.14 A from a carbonyl
+    oxygen; SpoIIAA (1H4X) has seven in chain B.
+  - A water on a metal is never left out. Neither is one whose only close
+    neighbour is itself left out, such as a removed additive.
+
 ### Changed
 
 - The web builder and the official Colab notebook install mdprep 0.5.5, the

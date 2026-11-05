@@ -68,7 +68,7 @@ from mdprep.structure.heterogens import (
 )
 from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
-from mdprep.structure.models import PdbStructure, ResidueId, ResidueRecord
+from mdprep.structure.models import AtomRecord, PdbStructure, ResidueId, ResidueRecord
 from mdprep.structure.oligomer import (
     CopiedDonor,
     OligomerAnalysis,
@@ -789,6 +789,101 @@ def plan_decisions(
         oligomer=oligomer,
         structure=summary.structure,
     )
+
+
+# A water oxygen closer than this to another heavy atom is on top of it: the
+# shortest hydrogen bond is about 2.5 A, and nothing else comes closer.
+WATER_OVERLAP_ANGSTROM = 2.2
+
+
+def overlapping_waters(
+    residues: Sequence[ResidueRecord], metals: Sequence[ResidueRecord]
+) -> list[dict[str, Any]]:
+    """Crystal waters that sit on another atom, each with the atom it overlaps.
+
+    A water in a predicted model, or in a dimer assembled by hand, was placed
+    for other coordinates: superposed from a crystal structure of another
+    copy or homologue, it can land inside a side chain. Built as it is, the
+    refinement and tleap place hydrogens around a lysine with a water oxygen
+    in it. Such a water is left out -- the solvent box fills the space --
+    and the manifest says which and why.
+
+    Overlap is a water oxygen within ``WATER_OVERLAP_ANGSTROM`` of a heavy
+    atom of anything else, or of a water already kept, which loses the later
+    of the two. Metals are not counted, and a water bound to a metal is
+    never left out: it is part of the site.
+    """
+
+    bound = {residue.id for residue in metal_bound_waters(residues, metals)}
+    others: list[tuple[AtomRecord, tuple[float, float, float]]] = [
+        (atom, (atom.x, atom.y, atom.z))
+        for residue in residues
+        if not is_water_residue(residue) and not is_metal_ion_residue(residue)
+        for atom in residue.atoms
+        if not is_hydrogen(atom)
+    ]
+    cell = WATER_OVERLAP_ANGSTROM
+    grid: dict[tuple[int, int, int], list[tuple[AtomRecord, tuple[float, float, float]]]] = {}
+
+    def key(xyz: tuple[float, float, float]) -> tuple[int, int, int]:
+        return (int(math.floor(xyz[0] / cell)), int(math.floor(xyz[1] / cell)), int(math.floor(xyz[2] / cell)))
+
+    def nearest(xyz: tuple[float, float, float]) -> tuple[AtomRecord, float] | None:
+        cx, cy, cz = key(xyz)
+        best: tuple[AtomRecord, float] | None = None
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for dz in (-1, 0, 1):
+                    for atom, position in grid.get((cx + dx, cy + dy, cz + dz), ()):
+                        distance = math.dist(xyz, position)
+                        if distance < WATER_OVERLAP_ANGSTROM and (best is None or distance < best[1]):
+                            best = (atom, distance)
+        return best
+
+    def oxygen_of(residue: ResidueRecord) -> AtomRecord | None:
+        return next(
+            (atom for atom in residue.atoms if (atom.element or "").strip().upper() == "O"),
+            None,
+        )
+
+    for item in others:
+        grid.setdefault(key(item[1]), []).append(item)
+    # The metals' waters stay whatever is near them, so they are in place
+    # before any other water is looked at.
+    for residue in residues:
+        if residue.id in bound and (oxygen := oxygen_of(residue)) is not None:
+            grid.setdefault(key((oxygen.x, oxygen.y, oxygen.z)), []).append(
+                (oxygen, (oxygen.x, oxygen.y, oxygen.z))
+            )
+    found: list[dict[str, Any]] = []
+    for residue in residues:
+        if not is_water_residue(residue) or residue.id in bound:
+            continue
+        oxygen = oxygen_of(residue)
+        if oxygen is None:
+            continue
+        xyz = (oxygen.x, oxygen.y, oxygen.z)
+        hit = nearest(xyz)
+        if hit is None:
+            grid.setdefault(key(xyz), []).append((oxygen, xyz))
+            continue
+        atom, distance = hit
+        found.append(
+            {
+                "selector": {
+                    "chain": residue.id.chain_id,
+                    "resname": residue.id.resname,
+                    "resid": residue.id.resid,
+                    "icode": residue.id.icode,
+                },
+                "display": residue.id.display(),
+                "overlaps": f"{atom.chain_id or '<blank>'}:{atom.resname}{atom.resid}"
+                f"{atom.icode or ''}@{atom.name.strip()}",
+
+                "distance_angstrom": round(distance, 2),
+            }
+        )
+    return found
 
 
 def _named_bonds(residue: ResidueRecord) -> list[list[str]]:
@@ -3216,6 +3311,10 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
     _keep_clear_of_mcpb_names(plan, ligand_blocks, metal_blocks, renames)
     keep_chains = _kept_chains(plan, resolved.get("structure.chains", "all"))
     removed = _in_chains(_removed_residues(plan, resolved), keep_chains)
+    # A declined ligand goes as an unconfigured heterogen, not by name.
+    removed += _overlapping_water_removals(
+        plan, resolved, removed + [{"selector": item} for item in declined], keep_chains
+    )
     replacements = _in_chains(_modified_residue_replacements(plan, resolved), keep_chains)
     residue_blocks = _noncanonical_residue_blocks(plan, resolved, keep_chains)
     repair: dict[str, Any] = {}
@@ -3483,6 +3582,55 @@ def _removed_residues(
                 }
             )
     return removed
+
+
+def _overlapping_water_removals(
+    plan: DecisionPlan,
+    resolved: Mapping[str, Any],
+    removed: list[dict[str, Any]],
+    keep_chains: list[str],
+) -> list[dict[str, Any]]:
+    """Crystal waters on top of something the build keeps, each with the reason.
+
+    Not a question: a water inside a side chain is never meant, and the
+    solvent box fills its place. Found among what the answers keep -- the
+    chains, without the residues already left out -- so a water standing in
+    for a Tris the build removes, or for a side chain's other conformer in
+    another copy, stays. When the crystal waters go anyway, nothing is said.
+    """
+
+    if resolved.get("structure.keep_crystal_waters", True) is False or plan.structure is None:
+        return []
+    gone = {
+        (
+            item["selector"]["chain"],
+            item["selector"]["resname"],
+            item["selector"]["resid"],
+            item["selector"].get("icode"),
+        )
+        for item in removed
+    }
+    chains = set(keep_chains)
+    residues = [
+        residue
+        for residue in plan.structure.residues
+        if (not chains or residue.id.chain_id in chains)
+        and (residue.id.chain_id, residue.id.resname, residue.id.resid, residue.id.icode)
+        not in gone
+    ]
+    metals = [residue for residue in residues if is_metal_ion_residue(residue)]
+    return [
+        {
+            "selector": item["selector"],
+            "reason": (
+                f"crystal water overlapping {item['overlaps']} "
+                f"({item['distance_angstrom']:.2f} A away), closer than any hydrogen "
+                "bond: placed for other coordinates, as in a predicted model or a "
+                "dimer assembled by hand, or for a conformer the build does not use"
+            ),
+        }
+        for item in overlapping_waters(residues, metals)
+    ]
 
 
 def _modified_residue_replacements(

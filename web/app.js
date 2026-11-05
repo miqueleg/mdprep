@@ -219,6 +219,11 @@ def mdprep_build(answers_json, mdprep_spec):
         # Residues the manifest builds under another name than the file's:
         # copies named apart, different molecules named alike.
         "renames": manifest["structure"].get("rename_residues", []),
+        # Crystal waters left out for sitting on another atom.
+        "overlapping_waters": [
+            item for item in manifest["structure"].get("remove_residues", [])
+            if item["reason"].startswith("crystal water overlapping")
+        ],
         # Only the packages this particular run will actually invoke.
         "packages": conda_packages_for(manifest),
         "setup": micromamba_setup_commands(manifest, mdprep_spec=mdprep_spec),
@@ -1008,6 +1013,16 @@ function buildManifest() {
             )} &rarr; ${escapeHtml(item.resname)}: ${escapeHtml(item.reason)}</li>`,
         )
         .join("")}</ul>`);
+  }
+  if ((result.overlapping_waters || []).length) {
+    const first = result.overlapping_waters[0];
+    warnings.push(`<p class="note">${result.overlapping_waters.length} crystal
+      water${result.overlapping_waters.length === 1 ? "" : "s"} left out for sitting
+      on another atom, closer than any hydrogen bond -- for example
+      ${escapeHtml(`${first.selector.chain}:${first.selector.resname}${first.selector.resid}`)}:
+      ${escapeHtml(first.reason.replace(/^crystal water /, ""))}. Each is listed in the
+      manifest under <code>structure.remove_residues</code>; the solvent box fills
+      their place.</p>`);
   }
   el("result-warnings").innerHTML = warnings.join("");
   window.mdprepLastResultForTest = result;

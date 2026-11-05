@@ -55,6 +55,48 @@ structure:
       resid: 1113
       icode: null
     reason: crystallisation additive (Tris)
+  - selector:
+      chain: B
+      resname: HOH
+      resid: 2026
+      icode: null
+    reason: 'crystal water overlapping B:HOH2015@O (1.56 A away), closer than any hydrogen bond: placed for other coordinates, as in a predicted model or a dimer assembled by hand, or for a conformer the build does not use'
+  - selector:
+      chain: B
+      resname: HOH
+      resid: 2040
+      icode: null
+    reason: 'crystal water overlapping B:HOH2039@O (2.14 A away), closer than any hydrogen bond: placed for other coordinates, as in a predicted model or a dimer assembled by hand, or for a conformer the build does not use'
+  - selector:
+      chain: B
+      resname: HOH
+      resid: 2047
+      icode: null
+    reason: 'crystal water overlapping B:GLU20@OE2 (1.61 A away), closer than any hydrogen bond: placed for other coordinates, as in a predicted model or a dimer assembled by hand, or for a conformer the build does not use'
+  - selector:
+      chain: B
+      resname: HOH
+      resid: 2098
+      icode: null
+    reason: 'crystal water overlapping B:HOH2044@O (1.87 A away), closer than any hydrogen bond: placed for other coordinates, as in a predicted model or a dimer assembled by hand, or for a conformer the build does not use'
+  - selector:
+      chain: B
+      resname: HOH
+      resid: 2141
+      icode: null
+    reason: 'crystal water overlapping B:HOH2060@O (2.20 A away), closer than any hydrogen bond: placed for other coordinates, as in a predicted model or a dimer assembled by hand, or for a conformer the build does not use'
+  - selector:
+      chain: B
+      resname: HOH
+      resid: 2209
+      icode: null
+    reason: 'crystal water overlapping B:HOH2015@O (1.69 A away), closer than any hydrogen bond: placed for other coordinates, as in a predicted model or a dimer assembled by hand, or for a conformer the build does not use'
+  - selector:
+      chain: B
+      resname: HOH
+      resid: 2210
+      icode: null
+    reason: 'crystal water overlapping B:HOH2208@O (1.97 A away), closer than any hydrogen bond: placed for other coordinates, as in a predicted model or a dimer assembled by hand, or for a conformer the build does not use'
 protein:
   forcefield: ff14SB
   water_model: TIP3P
