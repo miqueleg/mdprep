@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The web builder and the official Colab notebook install mdprep 0.5.6, the
+  release that leaves out crystal waters sitting on another atom, so a
+  predicted or hand-assembled dimer needs no hand edits.
+
 ## 0.5.6 - 2026-11-05
 
 ### Added
