@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from functools import partial
 from math import dist
 from pathlib import Path
 import os
@@ -49,6 +50,10 @@ if TYPE_CHECKING:
 
 class McpbWorkflowError(ValueError):
     """Raised when a bonded MCPB.py workflow cannot be completed safely."""
+
+
+class McpbNegativeForceConstantError(McpbWorkflowError):
+    """MCPB.py's Seminario fit left a bond or angle without a restoring force."""
 
 
 @dataclass(frozen=True)
@@ -173,6 +178,10 @@ class McpbSiteResult:
     # How the site moved when the force field minimised it before the fit
     # (geometry_source: ff_minimized_site), bond by bond.
     site_minimization: dict[str, object] | None = None
+    # Set when the fit at the refined geometry failed and the site was
+    # minimised and fitted again (fallback_geometry): why, and where the
+    # failed attempt's files are.
+    geometry_fallback: dict[str, object] | None = None
 
     @property
     def all_refitted_ligands(self) -> tuple[McpbRefittedLigand, ...]:
@@ -232,6 +241,7 @@ class McpbSiteResult:
             "copies": [copy.to_dict() for copy in self.copies],
             "final_pdb_path": str(self.final_pdb_path) if self.final_pdb_path else None,
             "site_minimization": self.site_minimization,
+            "geometry_fallback": self.geometry_fallback,
         }
 
 
@@ -277,7 +287,79 @@ def run_mcpb_site(
         _validate_site_in_one_chain(item, protein_names=kept)
     _validate_nonstandard_site_residues(site, manifest)
 
+    pyscf = mcpb.pyscf if mcpb.workflow == "pyscf" else None
+    minimize_first = pyscf is not None and pyscf.geometry_source == "ff_minimized_site"
+    fallback = pyscf is not None and pyscf.fallback_geometry == "ff_minimized_site"
     work = Path(output_dir)
+    fit = partial(
+        _fit_mcpb_site,
+        site,
+        structure=structure,
+        manifest=manifest,
+        ligand_result=ligand_result,
+        provisional_prmtop=provisional_prmtop,
+        provisional_inpcrd=provisional_inpcrd,
+        refinement_result=refinement_result,
+        copies=copies,
+        provisional_c4_types=provisional_c4_types,
+        executable=executable,
+        environment=mcpb_environment,
+        amberhome=amberhome,
+        kept=kept,
+    )
+    try:
+        return fit(work=work, minimize=minimize_first)
+    except McpbNegativeForceConstantError as exc:
+        if not fallback:
+            raise
+        first_attempt = exc
+    # The fit at the refined geometry left a bond or angle without a
+    # restoring force. Its files are kept beside the second attempt's, which
+    # minimises the site with the provisional force field and fits it there.
+    failed = work.with_name(work.name + ".refined_geometry_failed")
+    if failed.exists():
+        shutil.rmtree(failed)
+    work.rename(failed)
+    try:
+        result = fit(work=work, minimize=True)
+    except McpbWorkflowError as exc:
+        raise McpbWorkflowError(
+            f"{first_attempt} mdprep then minimised the site with the provisional "
+            f"force field to fit it there, and that failed too: {exc}"
+        ) from exc
+    return replace(
+        result,
+        geometry_fallback={
+            # Its paths, to where its files now are.
+            "reason": str(first_attempt).replace(str(work), str(failed)),
+            "failed_attempt_dir": str(failed),
+        },
+    )
+
+
+def _fit_mcpb_site(
+    site: ResolvedMetalSite,
+    *,
+    structure: PdbStructure,
+    manifest: ManifestConfig,
+    ligand_result: "LigandStageResult",
+    provisional_prmtop: str | Path | None,
+    provisional_inpcrd: str | Path | None,
+    refinement_result: "RefinementResult | None",
+    copies: Sequence[ResolvedMetalSite],
+    provisional_c4_types: Sequence[str],
+    executable: str,
+    environment: dict[str, str],
+    amberhome: Path,
+    kept: Collection[str],
+    work: Path,
+    minimize: bool,
+) -> McpbSiteResult:
+    """One MCPB.py fit of ``site``: at its own geometry, or at the minimised site."""
+
+    assert site.config.mcpb is not None
+    mcpb = site.config.mcpb
+    mcpb_environment = environment
     work.mkdir(parents=True, exist_ok=True)
     group_name = _safe_group_name(site.config.id)
     # The structure MCPB.py cuts its models from, and the coordinates the
@@ -285,15 +367,11 @@ def run_mcpb_site(
     fit_structure = structure
     fit_inpcrd = provisional_inpcrd
     site_minimization: SiteMinimizationResult | None = None
-    if (
-        mcpb.workflow == "pyscf"
-        and mcpb.pyscf is not None
-        and mcpb.pyscf.geometry_source == "ff_minimized_site"
-    ):
-        if provisional_prmtop is None or provisional_inpcrd is None:
+    if minimize:
+        if provisional_prmtop is None or provisional_inpcrd is None or mcpb.pyscf is None:
             raise McpbWorkflowError(
-                "geometry_source: ff_minimized_site minimises the site in the pre-MCPB "
-                "Amber system, and none reached the MCPB step."
+                "Minimising the site before its fit needs the pre-MCPB Amber system, "
+                "and none reached the MCPB step."
             )
         assert mcpb.pyscf.site_minimization is not None
         try:
@@ -464,7 +542,7 @@ def run_mcpb_site(
         except McpbParameterComparisonError as exc:
             (seminario_run,) = [run for run in runs if run.step == step_2]
             negative = negative_seminario_terms(seminario_run.result.stdout, numbering)
-            raise McpbWorkflowError(
+            raise McpbNegativeForceConstantError(
                 "MCPB.py produced invalid Seminario bonded parameters for metal site "
                 f"{site.config.id!r}: {exc}"
                 + (

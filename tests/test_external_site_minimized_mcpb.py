@@ -1,9 +1,11 @@
 """SyrB2's iron fitted where the provisional force field puts it, built where it was.
 
-The dimer of examples/18, prepared through the real toolchain with the
-builders' geometry source: chain A's site minimised with a 12-6-4 iron before
-MCPB.py fits it with a g-xTB Hessian, the fit's parameters then built onto
-the original coordinates, and chain B built from the fit.
+The dimer of examples/18, prepared through the real toolchain twice. Once
+with geometry_source: ff_minimized_site: chain A's site minimised with a
+12-6-4 iron before MCPB.py fits it with a g-xTB Hessian, the fit's
+parameters then built onto the original coordinates, and chain B built from
+the fit. And once as the builders write it, with the minimisation only as a
+fallback, which a crystal site that fits as it is never reaches.
 
 Skips cleanly without the tools; a few minutes with them.
 """
@@ -33,8 +35,7 @@ pytestmark = [
 EXAMPLE = Path("examples/18_syrb2_dimer_shared_mcpb.yaml")
 
 
-@pytest.fixture(scope="module")
-def prepared(tmp_path_factory) -> Path:
+def prepare(tmp_path_factory, name: str, pyscf: dict) -> Path:
     missing = [
         name
         for name in ("tleap", "MCPB.py", "antechamber", "parmchk2", "propka3", "xtb", "parmed")
@@ -51,7 +52,7 @@ def prepared(tmp_path_factory) -> Path:
 
     from mdprep.workflows.prepare import prepare_system
 
-    work = tmp_path_factory.mktemp("site_minimized")
+    work = tmp_path_factory.mktemp(name)
     data = yaml.safe_load(EXAMPLE.read_text(encoding="utf-8"))
     data["project"]["input_structure"] = str(
         (EXAMPLE.parent / data["project"]["input_structure"]).resolve()
@@ -61,11 +62,37 @@ def prepared(tmp_path_factory) -> Path:
         if site["model"] == "bonded_mcpb":
             site["mcpb"]["provisional_nonbonded_parameter_set"] = "12_6_4"
             if "pyscf" in site["mcpb"]:
-                site["mcpb"]["pyscf"]["geometry_source"] = "ff_minimized_site"
+                site["mcpb"]["pyscf"].update(pyscf)
     manifest = work / "system.yaml"
     manifest.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
     prepare_system(manifest, stop_after="tleap")
     return work / "prepared"
+
+
+@pytest.fixture(scope="module")
+def prepared(tmp_path_factory) -> Path:
+    return prepare(tmp_path_factory, "site_minimized", {"geometry_source": "ff_minimized_site"})
+
+
+@pytest.fixture(scope="module")
+def as_the_builders_write_it(tmp_path_factory) -> dict:
+    prepared = prepare(
+        tmp_path_factory,
+        "fallback",
+        {"geometry_source": "qmmm_refinement", "fallback_geometry": "ff_minimized_site"},
+    )
+    report = json.loads((prepared / "reports" / "metal_report.json").read_text())
+    return report["bonded_mcpb_site"]
+
+
+def test_a_crystal_site_that_fits_as_it_is_is_not_minimised(as_the_builders_write_it):
+    """What the builders write: the minimisation only when the fit at the
+    refined geometry fails, and SyrB2's crystal site does not."""
+
+    assert as_the_builders_write_it["complete"]
+    assert as_the_builders_write_it["geometry_fallback"] is None
+    assert as_the_builders_write_it["site_minimization"] is None
+    assert as_the_builders_write_it["pyscf"]["small_model"]["geometry_status"] == "qmmm_refined"
 
 
 @pytest.fixture(scope="module")

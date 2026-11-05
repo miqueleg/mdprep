@@ -485,10 +485,24 @@ error.
 
 ### Fitting the site where the force field puts it
 
-`geometry_source: ff_minimized_site` is what the builders write for a bonded
-site. A Seminario fit reads force constants off the Hessian, and they mean
+A Seminario fit reads force constants off the Hessian, and they mean
 something only at a stationary point. A crystal site with its hydrogens
 relaxed is usually near enough to one. A predicted site often is not.
+
+The builders write `geometry_source: qmmm_refinement` with
+`fallback_geometry: ff_minimized_site`:
+- The site is fitted where the refinement left it, hydrogens relaxed.
+- Only if that fit leaves a bond or angle without a restoring force is the
+  site minimised as below and fitted again. A site that fits as it is is
+  not moved.
+- The failed attempt's files are kept in `mcpb.refined_geometry_failed`,
+  and the metal report says why it was refitted.
+- Any other failure stops as before.
+
+`geometry_source: ff_minimized_site` minimises every time. The builders
+never write a QM/MM optimisation (`refinement.backend: ash` with
+`movable_atoms: all_active_region`). It is there for a manifest that asks
+for it, but it is too expensive for a class working in Colab.
 
 One example is an AlphaFold model of an Fe(II)/alpha-ketoglutarate site,
 fitted as a singlet with g-xTB. Its Fe-O bonds were 2.21-2.34 A, the
@@ -497,8 +511,8 @@ gave three of them a negative force constant: the water, an aspartate and
 one alpha-ketoglutarate oxygen. 95% of the gradient there was on heavy atoms,
 so no relaxation of the hydrogens could fix it.
 
-Instead, the site is minimised first, with a force field rather than a
-quantum method:
+Instead, the site is minimised, with a force field rather than a quantum
+method:
 
 1. After the refinement stage has relaxed the hydrogens, the pre-MCPB system
    (the metal as a nonbonded ion of `provisional_nonbonded_parameter_set`) is

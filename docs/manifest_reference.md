@@ -291,10 +291,13 @@ For `model: bonded_mcpb`, the `mcpb` block contains:
   mdprep validates an exact coordinate-only atom-identity/order replacement.
   `qmmm_refinement` and `ff_minimized_site` require a completed refinement in
   the same preparation and the bonded site listed in
-  `refinement.qm_components.metal_sites`. `ff_minimized_site`, which the
-  builders write, minimises the site with the provisional nonbonded model
-  before the fit, then builds the parameters onto the original geometry.
-  Its limits go in `site_minimization`: `radius_angstrom` (5.0),
+  `refinement.qm_components.metal_sites`. `ff_minimized_site` minimises the
+  site with the provisional nonbonded model before the fit, then builds the
+  parameters onto the original geometry. `fallback_geometry:
+  ff_minimized_site`, with `geometry_source: qmmm_refinement`, does that only
+  when the fit at the refined geometry leaves a bond or angle without a
+  restoring force; it is what the builders write. The limits go in
+  `site_minimization`: `radius_angstrom` (5.0),
   `max_bond_change_angstrom` (0.5), `max_rmsd_angstrom` (0.75),
   `max_shift_angstrom` (1.5), `tolerance_kj_mol_per_nm` (1.0),
   `max_iterations` (0, until converged) and `nonbonded_cutoff_angstrom` (15);

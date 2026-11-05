@@ -168,12 +168,20 @@ def test_the_minimised_site_comes_with_its_limits():
     assert config.site_minimization.radius_angstrom == 5.0
 
 
+def test_the_fallback_follows_a_fit_at_the_refined_geometry():
+    config = pyscf(geometry_source="qmmm_refinement", fallback_geometry="ff_minimized_site")
+
+    assert config.site_minimization == McpbSiteMinimizationConfig()
+    with pytest.raises(ValueError, match="requires geometry_source: qmmm_refinement"):
+        pyscf(geometry_source="ff_minimized_site", fallback_geometry="ff_minimized_site")
+
+
 def test_limits_are_only_for_the_minimised_site():
     with pytest.raises(ValueError, match="site_minimization may only be supplied when"):
         pyscf(geometry_source="qmmm_refinement", site_minimization={"radius_angstrom": 4.0})
 
 
-def test_the_builder_fits_a_bonded_site_where_the_force_field_puts_it():
+def test_the_builder_minimises_the_site_only_when_the_refined_fit_fails():
     from mdprep.config.decisions import build_manifest, plan_decisions
     from tests.test_oligomers import DEPOSITION, SHARED
 
@@ -184,8 +192,13 @@ def test_the_builder_fits_a_bonded_site_where_the_force_field_puts_it():
     )
 
     (site,) = [block for block in data["metals"] if block["model"] == "bonded_mcpb"]
-    assert site["mcpb"]["pyscf"]["geometry_source"] == "ff_minimized_site"
+    # Fitted where the refinement left it; minimised only if that fails.
+    # Never a QM/MM optimisation: a class in Colab cannot afford one.
+    assert site["mcpb"]["pyscf"]["geometry_source"] == "qmmm_refinement"
+    assert site["mcpb"]["pyscf"]["fallback_geometry"] == "ff_minimized_site"
     assert site["mcpb"]["provisional_nonbonded_parameter_set"] == "12_6_4"
+    assert data["refinement"]["backend"] == "openmm"
+    assert data["refinement"]["movable_atoms"] == "active_region_hydrogens"
     ManifestConfig.model_validate(data)
 
 
@@ -292,3 +305,95 @@ def test_an_atom_on_top_of_another_inside_the_site_stops_it(tmp_path):
             movable=list(range(8, 16)),
             platform="CPU",
         )
+
+
+# --------------------------------------------------------------------------
+# Minimised only when the refined fit fails
+# --------------------------------------------------------------------------
+
+
+def fitting(monkeypatch, tmp_path, outcomes, fallback="ff_minimized_site"):
+    """run_mcpb_site with its fit replaced: each call takes the next outcome."""
+
+    from types import SimpleNamespace
+
+    import mdprep.metals.mcpb as mcpb_module
+
+    calls: list[bool] = []
+
+    def fake_fit(site, *, work, minimize, **_):
+        calls.append(minimize)
+        work.mkdir(parents=True, exist_ok=True)
+        (work / "attempt.txt").write_text(str(len(calls)), encoding="utf-8")
+        outcome = outcomes[len(calls) - 1]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return mcpb_module.McpbSiteResult(
+            site_id="site", workflow="pyscf", complete=True, work_dir=work,
+            input_path=work / "mcpb.in", mcpb_input_pdb_path=work / "in.pdb",
+            restored_final_pdb_path=None, final_frcmod_path=None, generated_tleap_path=None,
+            leap_setup_commands=(), leap_bond_commands=(), residue_renames=(), runs=(),
+            expected_qm_artifacts=(), generated_files=(), amberhome=tmp_path,
+        )
+
+    monkeypatch.setattr(mcpb_module, "_fit_mcpb_site", fake_fit)
+    monkeypatch.setattr(mcpb_module, "which_executable", lambda name: "/bin/MCPB.py")
+    monkeypatch.setattr(mcpb_module, "resolve_amberhome", lambda path: tmp_path)
+    monkeypatch.setattr(mcpb_module, "kept_residue_names", lambda manifest: set())
+    monkeypatch.setattr(mcpb_module, "_validate_site_in_one_chain", lambda *a, **k: None)
+    monkeypatch.setattr(mcpb_module, "_validate_nonstandard_site_residues", lambda *a, **k: None)
+    site = SimpleNamespace(
+        config=SimpleNamespace(
+            id="site",
+            model="bonded_mcpb",
+            mcpb=SimpleNamespace(
+                executable="MCPB.py",
+                workflow="pyscf",
+                pyscf=SimpleNamespace(
+                    geometry_source="qmmm_refinement", fallback_geometry=fallback
+                ),
+            ),
+        )
+    )
+    result = mcpb_module.run_mcpb_site(
+        site, structure=None, manifest=None, ligand_result=None, output_dir=tmp_path / "mcpb"
+    )
+    return result, calls
+
+
+def test_a_site_whose_refined_fit_works_is_not_minimised(monkeypatch, tmp_path):
+    result, calls = fitting(monkeypatch, tmp_path, [None])
+
+    assert calls == [False]
+    assert result.geometry_fallback is None
+
+
+def test_a_site_whose_refined_fit_fails_is_minimised_and_fitted_again(monkeypatch, tmp_path):
+    from mdprep.metals.mcpb import McpbNegativeForceConstantError
+
+    result, calls = fitting(
+        monkeypatch, tmp_path, [McpbNegativeForceConstantError("Fe-O is -3.0"), None]
+    )
+
+    assert calls == [False, True]
+    assert result.geometry_fallback["reason"] == "Fe-O is -3.0"
+    failed = Path(result.geometry_fallback["failed_attempt_dir"])
+    # The failed attempt's files are kept, beside the second attempt's.
+    assert (failed / "attempt.txt").read_text() == "1"
+    assert (tmp_path / "mcpb" / "attempt.txt").read_text() == "2"
+
+
+def test_without_a_fallback_a_failed_fit_stops(monkeypatch, tmp_path):
+    from mdprep.metals.mcpb import McpbNegativeForceConstantError
+
+    with pytest.raises(McpbNegativeForceConstantError, match="Fe-O is -3.0"):
+        fitting(
+            monkeypatch, tmp_path, [McpbNegativeForceConstantError("Fe-O is -3.0")], fallback=None
+        )
+
+
+def test_other_failures_are_not_retried(monkeypatch, tmp_path):
+    from mdprep.metals.mcpb import McpbWorkflowError
+
+    with pytest.raises(McpbWorkflowError, match="no Hessian"):
+        fitting(monkeypatch, tmp_path, [McpbWorkflowError("no Hessian")])

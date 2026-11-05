@@ -820,7 +820,13 @@ class McpbPySCFConfig(StrictModel):
     geometry_source: Literal["external_pdb", "qmmm_refinement", "ff_minimized_site"] = (
         "external_pdb"
     )
-    # Only with geometry_source: ff_minimized_site, where it defaults.
+    # What to do when the fit at the geometry above leaves a bond or angle
+    # without a restoring force: stop (null), or minimise the site with the
+    # provisional force field and fit it there (ff_minimized_site). Only with
+    # geometry_source: qmmm_refinement.
+    fallback_geometry: Literal["ff_minimized_site"] | None = None
+    # With geometry_source or fallback_geometry ff_minimized_site, where it
+    # defaults.
     site_minimization: McpbSiteMinimizationConfig | None = None
     optimized_small_model_pdb: str | None = Field(default=None, min_length=1)
     small_model_geometry_status: Literal[
@@ -949,13 +955,18 @@ class McpbPySCFConfig(StrictModel):
                     f"geometry_source: {self.geometry_source}; completion is verified "
                     "from the refinement stage"
                 )
-        if self.geometry_source == "ff_minimized_site":
+        if self.fallback_geometry is not None and self.geometry_source != "qmmm_refinement":
+            raise ValueError(
+                "mcpb.pyscf.fallback_geometry is a second attempt after a fit at the "
+                "refined geometry, so it requires geometry_source: qmmm_refinement"
+            )
+        if "ff_minimized_site" in {self.geometry_source, self.fallback_geometry}:
             if self.site_minimization is None:
                 object.__setattr__(self, "site_minimization", McpbSiteMinimizationConfig())
         elif self.site_minimization is not None:
             raise ValueError(
-                "mcpb.pyscf.site_minimization may only be supplied when "
-                "geometry_source: ff_minimized_site"
+                "mcpb.pyscf.site_minimization may only be supplied when the site is "
+                "minimised: geometry_source or fallback_geometry ff_minimized_site"
             )
         if self.hessian_backend == "xtb" and self.xtb is None:
             # Filled in rather than demanded: the backend is the default, so

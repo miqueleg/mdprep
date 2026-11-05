@@ -137,9 +137,12 @@ and is what makes a bonded site tractable outside a cluster; GFN2 and PySCF
 DFT are offered too. Nothing has to be optimised by hand first:
 - The refinement stage, enabled automatically for a bonded site, relaxes the
   hydrogens.
-- The site is then minimised with the provisional 12-6-4 nonbonded model and
-  fitted there, unless that moves it too far.
-- The parameters are built onto the original geometry.
+- The site is fitted there.
+- Only if that fit leaves a bond without a restoring force is the site
+  minimised with the provisional 12-6-4 nonbonded model and fitted again,
+  unless the minimisation moves it too far. The parameters are then built
+  onto the original geometry.
+- A QM/MM optimisation is never written: it is too expensive for Colab.
 
 See [metals.md](metals.md#fitting-the-site-where-the-force-field-puts-it).
 

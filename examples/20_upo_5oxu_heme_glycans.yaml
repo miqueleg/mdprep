@@ -286,7 +286,8 @@ metals:
     large_model_charge: -2
     large_model_spin: 2
     pyscf:
-      geometry_source: ff_minimized_site
+      geometry_source: qmmm_refinement
+      fallback_geometry: ff_minimized_site
       hessian_backend: xtb
       esp_backend: xtb
       method: B3LYP

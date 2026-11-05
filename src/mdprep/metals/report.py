@@ -68,6 +68,19 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 "- Required QM artifacts for a `complete` rerun: "
                 + ", ".join(f"`{name}`" for name in bonded["expected_qm_artifacts"])
             )
+        fallback = bonded.get("geometry_fallback")
+        if fallback is not None:
+            lines.extend(
+                [
+                    "",
+                    "### Refitted at the minimized site",
+                    "",
+                    "- The fit at the refined geometry failed, so the site was minimized "
+                    "and fitted again:",
+                    f"  {fallback['reason']}",
+                    f"- Files of the failed attempt: `{fallback['failed_attempt_dir']}`",
+                ]
+            )
         minimized = bonded.get("site_minimization")
         if minimized is not None:
             # Fitted where the force field put the site, built where it was.

@@ -31,13 +31,18 @@
   it; preparation applies it as the input is read, before anything else,
   and lists each rename in `reports/structure_report.md`.
 - `mcpb.pyscf.geometry_source: ff_minimized_site` fits a bonded site where
-  the provisional nonbonded force field puts it, and the builders now write
-  it, with a 12-6-4 provisional ion:
+  the provisional nonbonded force field puts it:
   - Every residue within 5 A of the metal is minimised and the rest held.
   - Preparation stops if a donor leaves or joins the first shell, a bond to
     the metal changes by more than 0.5 A, or the site moves too far.
   - The Hessian and ESP are taken at the minimised site, and the parameters
     are built onto the original geometry.
+
+  `fallback_geometry: ff_minimized_site` does this only when the fit at the
+  refined geometry leaves a bond or angle without a restoring force, keeping
+  the failed attempt's files. The builders now write that, with a 12-6-4
+  provisional ion, so a site that fits as it is is not moved. They never
+  write a QM/MM optimisation, which a manifest can still ask for.
 
   This is for predicted sites, which are far enough from a stationary point
   that Seminario bonds come out negative. An AlphaFold Fe(II)/alpha-KG site
