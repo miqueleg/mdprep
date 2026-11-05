@@ -12,8 +12,57 @@ Supported charge methods:
 - `qmmesp_pyscf`
 
 For all methods, mdprep validates atom count, atom names, element order,
-coordinates, residue identity, and total charge. Multiple ligands are processed
-independently, even if they share a residue name.
+coordinates, residue identity, and total charge. One molecule configured more
+than once, such as the copies of a cofactor in a dimer, is parameterised once
+and built under one name; two different molecules are built under two. See
+[Names](#names).
+
+## Names
+
+tleap matches a residue to the template of its name, and each atom to the
+template atom of its name. So a structure whose names do not say which atom
+is which, or which molecule is which, cannot be built as it is. mdprep
+renames rather than stopping, and says where each rename happens:
+
+- **Atoms sharing a name.** A molecule editor names atoms by element: Avogadro
+  writes every carbon as `C` and every hydrogen as `H`. As the structure is
+  read, every atom of a heterogen whose name another atom of it also has gets
+  its element and a count (`C1`, `C2`, ... `C9`, `CA`, `CB`), skipping names
+  the residue already uses. Atoms whose names were their own keep them.
+  Residues with a force-field name (amino acids, nucleotides, water, ions)
+  are matched to templates by name, so theirs are not changed. Neither is a
+  residue whose like-named atoms sit on one spot: that is one atom written
+  twice, and naming the copies apart would build both. The structure
+  report's warnings list every rename, and the questions and the manifest
+  use the new names.
+- **Several molecules under one residue number**, as an editor writes
+  everything it holds: a ligand and the water drawn beside it arrive as one
+  residue with two of everything. A residue whose atoms fall into separate
+  molecules is split, each molecule taking the next free number in its chain,
+  before its atoms are named apart.
+- **One molecule under two names**, such as a hand-assembled dimer's THC and
+  THC2. It is built under one name and parameterised once (`parameters_from`)
+  when its answers are the first one's (SMILES, charge, multiplicity, atom
+  types and charge method) and its atoms are named and bonded alike. A copy
+  of the protein shares its reference's answers when you say the copies are
+  alike; see [oligomers.md](oligomers.md#copies-named-apart). Atoms named
+  alike but bonded to other neighbours are not one template, whatever the
+  SMILES: built from one, the second molecule's atoms would be bonded as the
+  first's. Those are parameterised separately.
+- **Two different molecules under one name**, or one name answered two ways.
+  The second is built under a free name (`LIG`, then `LG1`, `LG2`, ...), or a
+  metal under its element and a number.
+
+Residue renames are made by the builders, `mdprep init --interactive` and the
+web builder, and recorded in the manifest under `structure.rename_residues`,
+each with its reason ([manifest_reference.md](manifest_reference.md#structure)).
+Preparation applies them first, as it reads the input, so a residue has one
+name from there to the prepared system. The structure report lists them
+under "Residues built under another name".
+
+A ligand named like a force-field residue, such as 6NIE's free lysine `LYS`,
+is the one rename the web builder still asks about, with a button; see
+[tleap_and_validation.md](tleap_and_validation.md).
 
 ## Why a SMILES, and what it can and cannot be checked against
 

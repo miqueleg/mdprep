@@ -216,6 +216,9 @@ def mdprep_build(answers_json, mdprep_spec):
         "yaml": text,
         "mcpb_sites": sites,
         "ligands_needing_hydrogens": hydrogenless,
+        # Residues the manifest builds under another name than the file's:
+        # copies named apart, different molecules named alike.
+        "renames": manifest["structure"].get("rename_residues", []),
         # Only the packages this particular run will actually invoke.
         "packages": conda_packages_for(manifest),
         "setup": micromamba_setup_commands(manifest, mdprep_spec=mdprep_spec),
@@ -991,6 +994,20 @@ function buildManifest() {
       will not guess a ligand's protonation, so add a <code>smiles:</code> to
       each of those blocks &mdash; or hydrogens to the input &mdash; before
       running. See docs/ligands.md.</p>`);
+  }
+  if ((result.renames || []).length) {
+    // Said here rather than only in the YAML: the names in the questions
+    // were the file's, and the build uses these.
+    warnings.push(`<p class="note">Built under another name than the file gives
+      them, so that each molecule has one template and is parameterised once:</p>
+      <ul class="note">${result.renames
+        .map(
+          (item) =>
+            `<li>${escapeHtml(
+              `${item.selector.chain}:${item.selector.resname}${item.selector.resid}`,
+            )} &rarr; ${escapeHtml(item.resname)}: ${escapeHtml(item.reason)}</li>`,
+        )
+        .join("")}</ul>`);
   }
   el("result-warnings").innerHTML = warnings.join("");
   window.mdprepLastResultForTest = result;

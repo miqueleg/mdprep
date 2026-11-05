@@ -7,7 +7,7 @@ from dataclasses import dataclass, replace
 from importlib.metadata import PackageNotFoundError, version
 from math import dist
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Sequence
 
 import numpy as np
 
@@ -26,7 +26,8 @@ from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord, bui
 from mdprep.structure.pdb import read_pdb
 from mdprep.structure.pdb_fields import expected_split_metal_numbering
 from mdprep.structure.reader import is_mmcif_path, read_structure
-from mdprep.structure.writer import write_pdb
+from mdprep.structure.rename import ResidueRenameError, apply_residue_renames
+from mdprep.structure.writer import format_atom_record, write_pdb
 
 
 # PDBFixer round-trips coordinates through OpenMM in nanometres, and a PDB
@@ -137,6 +138,7 @@ def repair_structure(
         chains=selected_chains,
         altloc_policy=manifest.structure.altloc_policy,
         keep_hydrogens=input_hydrogen_keeper(manifest),
+        renames=manifest.structure.rename_residues,
     )
 
     try:
@@ -425,6 +427,7 @@ def _write_repair_input(
     chains: list[str],
     altloc_policy: str,
     keep_hydrogens: Callable[[ResidueRecord], bool] | None = None,
+    renames: Sequence[object] = (),
 ) -> dict[tuple[str, str, int, str | None], list[AtomRecord]]:
     """Prepare the file PDBFixer reads: chosen chains, chosen conformers.
 
@@ -450,9 +453,17 @@ def _write_repair_input(
     with its SMILES -- are returned by residue instead of written. PDBFixer
     has nothing to do with them, and keeps only one of several atoms that
     share a name, which is how a format converter names hydrogens.
+
+    The residues ``renames`` (``structure.rename_residues``) names are
+    renamed first, so PDBFixer repairs them under the names the rest of
+    preparation uses.
     """
 
     structure = read_structure(source, altloc_policy=altloc_policy)  # type: ignore[arg-type]
+    try:
+        structure, _ = apply_residue_renames(structure, renames)
+    except ResidueRenameError as exc:
+        raise StructureRepairError(str(exc)) from exc
     held: dict[tuple[str, str, int, str | None], list[AtomRecord]] = {}
     if keep_hydrogens is not None:
         structure, _ = strip_input_hydrogens(structure, keep=keep_hydrogens)
@@ -486,14 +497,15 @@ def _write_repair_input(
     # Each atom the structure kept, by the line it was read from. Serials
     # would do if they were unique, but reduce writes every hydrogen it adds
     # with serial 0, the reader renumbers a file like that, and its lines no
-    # longer carry the serials the structure does. An atom the reader
-    # rewrote -- a residue name too wide for its column -- has no line of
-    # its own any more, and is found by its serial instead.
+    # longer carry the serials the structure does. An atom the reader or a
+    # rename rewrote -- a residue name too wide for its column, atoms a
+    # molecule editor named alike -- has no line of its own any more: it is
+    # found by its serial, and written as it now is.
     kept_lines = Counter(
         atom.original_line for atom in structure.atoms if atom.original_line
     )
-    rewritten_serials = {
-        atom.serial
+    rewritten = {
+        atom.serial: atom
         for atom in structure.atoms
         if not atom.original_line and atom.serial is not None
     }
@@ -505,7 +517,9 @@ def _write_repair_input(
                 continue
             if kept_lines[line] > 0:
                 kept_lines[line] -= 1
-            elif _parse_serial_for_filter(line) not in rewritten_serials:
+            elif (atom := rewritten.get(_parse_serial_for_filter(line))) is not None:
+                line = format_atom_record(atom).rstrip("\n")
+            else:
                 continue
             # The chosen conformer loses its altloc marker, so nothing
             # downstream has a choice left to make.

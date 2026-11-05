@@ -27,10 +27,11 @@ from mdprep.structure.hydrogens import (
     is_hydrogen,
     remove_input_hydrogens,
 )
-from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
+from mdprep.structure.inspect import InspectionSummary, inspect_structure
 from mdprep.structure.models import AtomRecord, PdbStructure, ResidueRecord
 from mdprep.structure.pdb import ATOMIC_NUMBER, read_pdb
 from mdprep.structure.reader import read_structure
+from mdprep.structure.rename import ResidueRenameError, apply_residue_renames
 from mdprep.structure.repair import (
     StructureRepairError,
     StructureRepairResult,
@@ -82,6 +83,8 @@ class StructureNormalizationResult:
     # Each residue noncanonical_residues keeps: its name in the build, and
     # the hydrogens it was given or left to tleap.
     noncanonical_residues_kept: list[dict[str, object]] = field(default_factory=list)
+    # Each residue structure.rename_residues built under another name, and why.
+    residue_renames: list[dict[str, object]] = field(default_factory=list)
 
     def to_report_dict(self) -> dict[str, object]:
         normalized_summary = inspect_pdb_structure_from_structure(self.normalized_structure)
@@ -116,6 +119,7 @@ class StructureNormalizationResult:
             "input_hydrogens": self.input_hydrogens.to_dict(),
             "ligand_hydrogens": self.ligand_hydrogens,
             "noncanonical_residues_kept": self.noncanonical_residues_kept,
+            "residue_renames": self.residue_renames,
             "histidines": _residue_dicts(self.input_summary.histidines),
             "titratable_residues": _residue_dicts(self.input_summary.titratable_residues),
             "possible_disulfides": [
@@ -136,9 +140,9 @@ def normalize_structure_stage(
     output_path: str | Path | None = None,
 ) -> StructureNormalizationResult:
     input_path = Path(manifest.project.input_structure)
-    input_summary = inspect_pdb_structure(
-        input_path,
-        altloc_policy=manifest.structure.altloc_policy,
+    input_structure, residue_renames = read_input_structure(manifest)
+    input_summary = inspect_structure(
+        input_structure,
         disulfide_cutoff_angstrom=manifest.disulfides.detection_cutoff_angstrom,
     )
     # Hydrogens the input arrived with go before anything looks at the
@@ -162,10 +166,7 @@ def normalize_structure_stage(
         assert repair_result is not None
         structure = repair_result.structure
     else:
-        structure, _ = remove_input_hydrogens(
-            read_structure(input_path, altloc_policy=manifest.structure.altloc_policy),
-            manifest,
-        )
+        structure, _ = remove_input_hydrogens(input_structure, manifest)
 
     # Residues the manifest leaves out on purpose go first, so none of them
     # is mistaken below for an unknown heterogen, a ligand or a donor.
@@ -416,7 +417,29 @@ def normalize_structure_stage(
         input_hydrogens=input_hydrogens,
         ligand_hydrogens=hydrogenations,
         noncanonical_residues_kept=[item.to_dict() for item in kept_noncanonical],
+        residue_renames=residue_renames,
     )
+
+
+def read_input_structure(
+    manifest: ManifestConfig,
+) -> tuple[PdbStructure, list[dict[str, object]]]:
+    """The input as the rest of preparation sees it: read, then renamed.
+
+    ``structure.rename_residues`` is applied here, before anything else looks
+    at the structure, so a residue has one name from here to the prepared
+    system -- the name every other selector in the manifest uses -- and
+    never one name in one stage and another in the next.
+    """
+
+    structure = read_structure(
+        Path(manifest.project.input_structure),
+        altloc_policy=manifest.structure.altloc_policy,
+    )
+    try:
+        return apply_residue_renames(structure, manifest.structure.rename_residues)
+    except ResidueRenameError as exc:
+        raise StructureNormalizationError(str(exc)) from exc
 
 
 def inspect_pdb_structure_from_structure(structure: PdbStructure) -> InspectionSummary:

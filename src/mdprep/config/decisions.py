@@ -76,6 +76,7 @@ from mdprep.structure.oligomer import (
     site_donor_atoms,
 )
 from mdprep.structure.pdb import AltlocPolicy
+from mdprep.structure.pdb_fields import COVALENT_RADII, free_ion_resname
 
 
 # A "multichoice" is a checklist: its answer is the values ticked, in the
@@ -763,6 +764,9 @@ def plan_decisions(
         "ligand_atom_names": {
             ligand_id_for(residue): residue.atom_names() for residue in ligands
         },
+        # And how those atoms are bonded, by name: the same names on two
+        # different graphs are two molecules, not one template.
+        "ligand_bonds": {ligand_id_for(residue): _named_bonds(residue) for residue in ligands},
         # Cofactors whose metal mdprep moved into a residue of its own and
         # whose metal-free form it knows, so their SMILES can be proposed.
         "known_cofactors": {
@@ -785,6 +789,35 @@ def plan_decisions(
         oligomer=oligomer,
         structure=summary.structure,
     )
+
+
+def _named_bonds(residue: ResidueRecord) -> list[list[str]]:
+    """A residue's bonds between heavy atoms, by atom name, read from distances.
+
+    Two residues with the same atom names are one template only when the
+    names are bonded alike. A molecule editor numbering each copy's carbons
+    in its own order gives two lists of the same names on two different
+    graphs, and one template built on both would bond the second one's atoms
+    to the wrong neighbours.
+    """
+
+    atoms = [atom for atom in residue.atoms if not is_hydrogen(atom)]
+    pairs: list[list[str]] = []
+    for index, first in enumerate(atoms):
+        for second in atoms[index + 1 :]:
+            limit = (
+                COVALENT_RADII.get((first.element or "").strip().upper(), 0.76)
+                + COVALENT_RADII.get((second.element or "").strip().upper(), 0.76)
+                + 0.45
+            )
+            distance_squared = (
+                (first.x - second.x) ** 2
+                + (first.y - second.y) ** 2
+                + (first.z - second.z) ** 2
+            )
+            if distance_squared <= limit * limit:
+                pairs.append(sorted((first.name, second.name)))
+    return sorted(pairs)
 
 
 # Cofactors that are bonded to the protein, so that mdprep would build them
@@ -1027,7 +1060,7 @@ def _chain_decision(summary: InspectionSummary) -> list[Decision]:
 
 def _share_between_copies(
     decisions: list[Decision], oligomer: OligomerAnalysis
-) -> tuple[list[Decision], list[tuple[ResidueId, ResidueId]]]:
+) -> tuple[list[Decision], list[tuple[ResidueId, ResidueId, str]]]:
     """Mark each copy's questions as copies of the reference copy's.
 
     A ligand or metal in a copy with a counterpart in the reference copy has
@@ -1041,7 +1074,7 @@ def _share_between_copies(
     in the other is asked for a SMILES in one only. It is reported and asked
     about on its own.
 
-    Returns the decisions and the (copy, reference) residues now shared.
+    Returns the decisions and the (copy, reference, kind) residues now shared.
     """
 
     if not oligomer.homomeric:
@@ -1058,7 +1091,7 @@ def _share_between_copies(
         if key not in subjects and decision.targets:
             subjects[key] = _residue_id_of(decision.subject)
 
-    shared: list[tuple[ResidueId, ResidueId]] = []
+    shared: list[tuple[ResidueId, ResidueId, str]] = []
     for (kind, item), indices in items.items():
         subject = subjects.get((kind, item))
         if subject is None:
@@ -1095,12 +1128,12 @@ def _share_between_copies(
                     Condition("structure.same_parametrization", ("false",)),
                 ),
             )
-        shared.append((subject, reference))
+        shared.append((subject, reference, kind))
     return decisions, shared
 
 
 def _same_parametrization_decision(
-    oligomer: OligomerAnalysis, shared: list[tuple[ResidueId, ResidueId]]
+    oligomer: OligomerAnalysis, shared: list[tuple[ResidueId, ResidueId, str]]
 ) -> Decision:
     evidence: list[str] = []
     for group in oligomer.groups:
@@ -1114,8 +1147,17 @@ def _same_parametrization_decision(
                 f"{alignment.reference} over {len(alignment.pairs)} residues"
                 + (", numbered differently" if alignment.renumbered else "")
             )
-    for copy, reference in shared:
-        evidence.append(f"{copy.display()} would share {reference.display()}'s parameters")
+    for copy, reference, kind in shared:
+        evidence.append(
+            f"{copy.display()} would share {reference.display()}'s parameters"
+            # A ligand is built under its template's name; a metal's name
+            # decides nothing a copy shares.
+            + (
+                f", built as {reference.resname}"
+                if kind == "ligand" and copy.resname != reference.resname
+                else ""
+            )
+        )
     for residue, reason in oligomer.unmatched.items():
         evidence.append(f"Asked about on its own either way: {residue.display()}, as {reason}")
     return Decision(
@@ -1134,7 +1176,8 @@ def _same_parametrization_decision(
             "to answer for every copy separately, as for copies in different "
             "states -- a substrate bound in one and not in another. Anything "
             "listed as asked on its own has no counterpart, and is asked "
-            "about either way."
+            "about either way. A copy of a ligand the input names differently "
+            "is built under its first copy's name, so one template serves both."
         ),
         default="true",
         when=(Condition("structure.chains", ("all",)),),
@@ -1146,8 +1189,8 @@ def _same_parametrization_decision(
                 resid=residue.resid,
                 icode=residue.icode,
             )
-            for pair in shared
-            for residue in pair
+            for copy, reference, _ in shared
+            for residue in (copy, reference)
         ),
         # Both copies at once, each its own colour: the question is whether
         # they are alike, which a view of one of them cannot show.
@@ -3164,9 +3207,12 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
                 decision_id="protein.water_model",
             )
 
-    ligand_blocks = _link_ligand_copies(plan, resolved, _ligand_blocks(plan, resolved))
+    renames: Renames = {}
+    ligand_blocks = _link_ligand_copies(
+        plan, resolved, _ligand_blocks(plan, resolved), renames
+    )
     metal_blocks = _link_metal_copies(plan, resolved, _metal_blocks(plan, resolved))
-    _require_one_template_per_metal_name(metal_blocks)
+    _name_metals_apart(plan, metal_blocks, renames)
     keep_chains = _kept_chains(plan, resolved.get("structure.chains", "all"))
     removed = _in_chains(_removed_residues(plan, resolved), keep_chains)
     replacements = _in_chains(_modified_residue_replacements(plan, resolved), keep_chains)
@@ -3229,6 +3275,9 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
     manifest["refinement"] = _refinement_block(
         plan, resolved, manifest["metals"], manifest["ligands"]
     )
+    if renames:
+        _rename_selectors(manifest, renames)
+        manifest["structure"]["rename_residues"] = _rename_entries(renames)
     return manifest
 
 
@@ -3647,21 +3696,33 @@ LIGAND_PARAMETER_FIELDS = (
     "smiles",
 )
 
+# Residues to build under another name than the structure gives them: the
+# residue as the plan names it -> the name to build it under, and why.
+Renames = dict[ResidueId, tuple[str, str]]
+
 
 def _link_ligand_copies(
     plan: DecisionPlan,
     resolved: Mapping[str, Any],
     blocks: list[dict[str, Any]],
+    renames: Renames,
 ) -> list[dict[str, Any]]:
-    """Mark ligands that take another ligand's parameters.
+    """Mark ligands that take another ligand's parameters, and name them alike.
 
     A copy whose answers were shared takes its reference's parameters. So,
-    too, does any other ligand with the same residue name and the same
-    answers: tleap builds every residue called AKG from the one AKG template,
-    so two of them cannot carry different charges -- and two that were
-    answered alike would otherwise be fitted twice, from two conformations,
-    into two templates that collide. Two with the same name and different
-    answers cannot be built at all; that is refused here, with the fix.
+    too, does any other ligand that is the same molecule written the same
+    way -- answered alike, with the same atoms, named alike and bonded alike
+    -- whatever the input calls it. tleap builds every residue of one name
+    from the one template of that name, so the two are built under the first
+    one's name, and the molecule is parameterised once rather than twice
+    from two conformations into two templates that collide. A copy the input
+    calls something else, as a hand-assembled dimer calls its second
+    substrate THC2, is renamed to match.
+
+    Two ligands that are not the same molecule cannot share a name, for the
+    same reason, so the second of two under one name is built under a free
+    name of its own. Each rename goes into ``renames`` with its reason; the
+    manifest lists them, and preparation applies them as it reads the input.
     """
 
     by_id = {block["id"]: block for block in blocks}
@@ -3672,35 +3733,77 @@ def _link_ligand_copies(
             block["parameters_from"] = source
 
     atom_names = plan.findings.get("ligand_atom_names", {})
-    first_by_name: dict[str, dict[str, Any]] = {}
+    bonds = plan.findings.get("ligand_bonds", {})
+
+    def template(block: Mapping[str, Any]) -> tuple[Any, ...]:
+        key: tuple[Any, ...] = (
+            tuple(repr(block.get(field_name)) for field_name in LIGAND_PARAMETER_FIELDS),
+            tuple(atom_names.get(block["id"], ())),
+            tuple(tuple(pair) for pair in bonds.get(block["id"], ())),
+        )
+        # Charges fitted with a bonded site belong to that site's fit: they
+        # are shared only between copies of the site, never across names.
+        if block["charge_method"] == "mcpb_resp_pyscf":
+            key += (block["selector"]["resname"],)
+        return key
+
+    first_by_template: dict[tuple[Any, ...], dict[str, Any]] = {}
     for block in blocks:
-        name = block["selector"]["resname"]
         if "parameters_from" in block:
             continue
-        first = first_by_name.get(name)
-        if first is None:
-            first_by_name[name] = block
+        first = first_by_template.setdefault(template(block), block)
+        if first is not block:
+            block["parameters_from"] = first["id"]
+    # A copy's reference may itself have joined an earlier, identical
+    # ligand: everything takes its parameters from one that has its own.
+    for block in blocks:
+        source = block.get("parameters_from")
+        while source is not None and "parameters_from" in by_id[source]:
+            source = by_id[source]["parameters_from"]
+        if source is not None:
+            block["parameters_from"] = source
+
+    taken = {
+        residue.id.resname for residue in (plan.structure.residues if plan.structure else ())
+    }
+    built_as: dict[str, str] = {}
+    holder: dict[str, dict[str, Any]] = {}
+    for block in blocks:
+        if "parameters_from" in block:
             continue
-        differing = [
-            field_name
-            for field_name in LIGAND_PARAMETER_FIELDS
-            if block.get(field_name) != first.get(field_name)
-        ]
-        if atom_names.get(block["id"]) != atom_names.get(first["id"]):
-            differing.append("atom names")
-        if differing:
-            asked = f"ligand.{block['id']}.{differing[0]}"
-            raise DecisionError(
-                f"{_selector_label(block['selector'])} and "
-                f"{_selector_label(first['selector'])} are both called {name} but "
-                f"differ in {', '.join(differing)}. tleap builds every residue of one "
-                "name from one template, so they cannot both be built as they are. "
-                "Give them the same answers, or rename one of them in the input.",
-                decision_id=asked
-                if any(decision.id == asked for decision in plan.decisions)
-                else f"ligand.{block['id']}.include",
+        name = block["selector"]["resname"]
+        other = holder.get(name)
+        if other is not None:
+            new = free_residue_name(taken)
+            taken.add(new)
+            renames[_selector_residue_id(block["selector"])] = (
+                new,
+                f"another molecule than {_selector_label(other['selector'])}, which is "
+                f"also called {name}: tleap builds every residue of one name from one "
+                f"template, so this one is built as {new}",
             )
-        block["parameters_from"] = first["id"]
+            name = new
+        holder[name] = block
+        built_as[block["id"]] = name
+    for block in blocks:
+        source = block.get("parameters_from")
+        if source is None:
+            continue
+        name = built_as[source]
+        built_as[block["id"]] = name
+        if name == block["selector"]["resname"]:
+            continue
+        reference = _selector_label(by_id[source]["selector"])
+        include = plan.by_id(f"ligand.{block['id']}.include")
+        renames[_selector_residue_id(block["selector"])] = (
+            name,
+            (
+                f"the counterpart of {reference} in another copy of the protein"
+                if _shared_from(include, resolved) is not None
+                else f"the same molecule as {reference}, answered alike"
+            )
+            + f", built with its parameters under one name, {name}",
+        )
     return blocks
 
 
@@ -3916,15 +4019,23 @@ def _require_a_fit_for_fitted_cofactors(
             )
 
 
-def _require_one_template_per_metal_name(blocks: list[dict[str, Any]]) -> None:
-    """Two metals with one residue name must be one Amber ion.
+def _name_metals_apart(
+    plan: DecisionPlan, blocks: list[dict[str, Any]], renames: Renames
+) -> None:
+    """Two metals with one residue name must be one Amber ion, or two names.
 
     tleap builds a residue from the template of its name, so an FE2 that is
     Fe(II) in one site and Fe(III) in another, or carries two different
-    Li/Merz sets, cannot be built. A bonded site's metal counts with the set
-    it is built with before MCPB.py replaces it.
+    Li/Merz sets, cannot be built under one name. The second is built under
+    a name of its own -- its element and a number, so it is still read as
+    that element -- and the rename goes into ``renames``. A bonded site's
+    metal counts with the set it is built with before MCPB.py replaces it.
     """
 
+    taken = {
+        residue.id.resname for residue in (plan.structure.residues if plan.structure else ())
+    }
+    taken |= {new for new, _ in renames.values()}
     seen: dict[str, tuple[tuple[object, ...], str]] = {}
     for block in blocks:
         family = (
@@ -3937,14 +4048,60 @@ def _require_one_template_per_metal_name(blocks: list[dict[str, Any]]) -> None:
             signature = (ion["element"], ion["charge"], family)
             previous = seen.get(name)
             if previous is not None and previous[0] != signature:
-                raise DecisionError(
-                    f"{_selector_label(ion['selector'])} and {previous[1]} are both "
-                    f"called {name} but differ in charge or ion parameter set, and "
-                    "tleap builds every residue of one name from one template. "
-                    "Give them the same answers, or rename one of them in the input.",
-                    decision_id=f"metal.{block['id']}.charge",
+                new = free_ion_resname(ion["element"], taken)
+                taken.add(new)
+                renames[_selector_residue_id(ion["selector"])] = (
+                    new,
+                    f"called {name} like {previous[1]}, which differs from it in "
+                    "charge or ion parameter set: tleap builds every residue of one "
+                    f"name from one template, so this one is built as {new}",
                 )
-            seen[name] = (signature, _selector_label(ion["selector"]))
+                name = new
+                previous = seen.get(name)
+            if previous is None:
+                seen[name] = (signature, _selector_label(ion["selector"]))
+
+
+def _rename_selectors(node: Any, renames: Renames) -> None:
+    """Write every selector of a renamed residue with the name it is built under.
+
+    Preparation renames residues as it reads the input, so every other
+    selector in the manifest -- a ligand's, a metal's, a bond's coordinator
+    -- names a residue the way the build will.
+    """
+
+    if isinstance(node, list):
+        for item in node:
+            _rename_selectors(item, renames)
+        return
+    if not isinstance(node, dict):
+        return
+    if {"chain", "resname", "resid"} <= node.keys() and node["resid"] is not None:
+        new = renames.get(
+            ResidueId(node["chain"], node["resname"], node["resid"], node.get("icode"))
+        )
+        if new is not None:
+            node["resname"] = new[0]
+    for value in node.values():
+        _rename_selectors(value, renames)
+
+
+def _rename_entries(renames: Renames) -> list[dict[str, Any]]:
+    """``structure.rename_residues``: each residue as the input names it."""
+
+    return [
+        {
+            "selector": {
+                "chain": residue.chain_id,
+                "resname": residue.resname,
+                "resid": residue.resid,
+                **({"icode": residue.icode} if residue.icode else {}),
+            },
+            "resname": new,
+            "reason": reason,
+        }
+        for residue, (new, reason) in renames.items()
+    ]
 
 
 def _selector_residue_id(selector: Mapping[str, Any]) -> ResidueId:

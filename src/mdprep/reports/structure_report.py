@@ -34,6 +34,16 @@ def _render_markdown(report: dict[str, Any]) -> str:
         f"- Atoms: {report['atom_count_before']} -> {report['atom_count_after']}",
         f"- Residues: {report['residue_count_before']} -> {report['residue_count_after']}",
         "",
+        "## Residues Built Under Another Name",
+        "",
+        *(
+            [
+                f"- {item['display']} -> {item['new_resname']}: {item['reason']}"
+                for item in report.get("residue_renames") or []
+            ]
+            or ["- None"]
+        ),
+        "",
         "## Input Hydrogens",
         "",
         *_input_hydrogen_lines(report.get("input_hydrogens") or {}),

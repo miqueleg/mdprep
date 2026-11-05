@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Added
+
+- Names a structure arrives with that cannot be built are renamed rather than
+  refused, and every rename is reported:
+  - Atoms of a heterogen that share a name are named apart as the structure
+    is read: element and a count, so `C`, `C`, `C` become `C1`, `C2`, `C3`.
+    A molecule editor such as Avogadro names atoms this way, and PDBFixer and
+    tleap each kept or matched only one of them.
+  - A residue that holds several separate molecules, as an editor writes
+    everything it holds, is split into one residue per molecule.
+  - One molecule under two names is built under one name and parameterised
+    once. This covers copies of the protein whose ligands the input names
+    apart (THC and THC2), and any two ligands answered alike whose atoms are
+    named and bonded alike.
+  - Two different molecules under one name are built under two names. So are
+    two metals of one name with different charges, which used to stop the
+    builders with "rename one of them in the input".
+- `structure.rename_residues` in the manifest lists residues built under
+  another name than the input's, each with its reason. The builders write
+  it; preparation applies it as the input is read, before anything else,
+  and lists each rename in `reports/structure_report.md`.
+
 ### Changed
 
 - The web builder and the official Colab notebook install mdprep 0.5.4, the
@@ -17,12 +39,13 @@
   a fit. Each water outside the protein chains now belongs to the copy it
   sits against.
 - A copy whose residues are named apart from the first copy's (THC and
-  THC2, FE1 and FE2) is reported as such. Copies share parameters under one
-  residue name, so these are not paired. The reason, which used to say only
-  that nothing like it sat in the same place, now names the residue it sits
-  where and both names. The refusal of a second bonded fit gives that reason
-  even when nothing paired and the copies question was never asked; it used
-  to say only "Model all but one of them nonbonded".
+  THC2, FE1 and FE2) is paired with it. Heterogens are matched by atoms and
+  place rather than by name, and a metal by its element and its first shell.
+  Such copies used to go unpaired, and the two iron sites were then refused
+  as two MCPB fits. The refusal of a second bonded fit, when copies really do
+  differ, now gives the reason even when nothing paired and the copies
+  question was never asked; it used to say only "Model all but one of them
+  nonbonded".
 - A ligand whose skeleton is symmetric while its bond orders are not is no
   longer refused as the wrong tautomer. In tetrahydrocarbazole, for example,
   the saturated ring and the benzene ring are interchangeable until the bond

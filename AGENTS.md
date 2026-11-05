@@ -24,7 +24,11 @@ preparation.
 - Temporary xTB tautomer hydrogens must never be written to the final prepared
   PDB.
 - Ligand atom names, atom order, coordinates, residue identity, and total
-  charge must be preserved or failures must be explicit.
+  charge must be preserved or failures must be explicit. The exception is a
+  name that cannot be built: atoms of a residue sharing a name are named apart
+  as the input is read, and residues are renamed through
+  `structure.rename_residues` (see `docs/ligands.md#names`). Each rename is
+  recorded in the reports.
 - Do not add molecule-conversion fallback paths.
 - Final topology generation must go through `tleap`.
 - Every `tleap` build loads the kept noncanonical residues' templates; a
