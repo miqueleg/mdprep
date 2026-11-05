@@ -214,6 +214,184 @@ def run_openmm_refinement(
     return run
 
 
+@dataclass(frozen=True)
+class OpenmmSiteMinimizationRun:
+    """Coordinates after minimizing some atoms with every other one held."""
+
+    coordinates_angstrom: tuple[tuple[float, float, float], ...]
+    initial_energy_kj_mol: float
+    final_energy_kj_mol: float
+    movable_atoms: int
+    held_atoms: int
+    platform: str
+    seconds: float
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "initial_energy_kj_mol": self.initial_energy_kj_mol,
+            "final_energy_kj_mol": self.final_energy_kj_mol,
+            "movable_atoms": self.movable_atoms,
+            "held_atoms": self.held_atoms,
+            "platform": self.platform,
+            "seconds": self.seconds,
+        }
+
+
+def run_openmm_site_minimization(
+    *,
+    prmtop_path: str | Path,
+    inpcrd_path: str | Path,
+    movable: Sequence[int],
+    tolerance_kj_mol_per_nm: float = 1.0,
+    max_iterations: int = 0,
+    platform: str = "auto",
+    nonbonded_cutoff_angstrom: float = 15.0,
+) -> OpenmmSiteMinimizationRun:
+    """Minimise the ``movable`` atoms against a force field, holding the rest.
+
+    The same pinning as the hydrogen refinement -- zero mass, which OpenMM's
+    minimizer honours exactly -- on every atom outside the set, heavy or not.
+    What it is for is a metal site's heavy atoms: a fit at a stationary point
+    of the provisional nonbonded model rather than at the input geometry.
+    """
+
+    try:
+        import numpy as np
+        import openmm as mm
+        from openmm import unit
+        from openmm.app import (
+            PME,
+            AmberInpcrdFile,
+            AmberPrmtopFile,
+            CutoffNonPeriodic,
+            Simulation,
+        )
+    except ImportError as exc:
+        raise OpenmmRefinementError(
+            "Minimising a metal site with the force field requires OpenMM."
+        ) from exc
+
+    config = OpenmmRefinementConfig(
+        platform=platform,  # type: ignore[arg-type]
+        tolerance_kj_mol_per_nm=tolerance_kj_mol_per_nm,
+        max_iterations=max_iterations,
+        nonbonded_cutoff_nanometer=nonbonded_cutoff_angstrom / 10.0,
+    )
+    prmtop = AmberPrmtopFile(str(prmtop_path))
+    inpcrd = AmberInpcrdFile(str(inpcrd_path))
+    periodic = inpcrd.boxVectors is not None
+    system = prmtop.createSystem(
+        nonbondedMethod=PME if periodic else CutoffNonPeriodic,
+        nonbondedCutoff=config.nonbonded_cutoff_nanometer * unit.nanometer,
+        constraints=None,
+        rigidWater=False,
+    )
+    free = set(movable)
+    if not free:
+        raise OpenmmRefinementError("No atoms were selected to minimise.")
+    for index in range(system.getNumParticles()):
+        if index not in free:
+            system.setParticleMass(index, 0.0)
+    _drop_held_overlaps(
+        system,
+        np.asarray(inpcrd.positions.value_in_unit(unit.angstrom)),
+        free,
+        [f"{atom.residue.name}{atom.residue.id}@{atom.name}" for atom in prmtop.topology.atoms()],
+    )
+    simulation, chosen = _build_simulation(
+        mm, unit, Simulation, topology=prmtop.topology, system=system, config=config
+    )
+    simulation.context.setPositions(inpcrd.positions)
+    if periodic:
+        simulation.context.setPeriodicBoxVectors(*inpcrd.boxVectors)
+    before = simulation.context.getState(getEnergy=True)
+    started = time.perf_counter()
+    mm.LocalEnergyMinimizer.minimize(
+        simulation.context,
+        tolerance=config.tolerance_kj_mol_per_nm * unit.kilojoules_per_mole / unit.nanometer,
+        maxIterations=config.max_iterations,
+    )
+    elapsed = time.perf_counter() - started
+    after = simulation.context.getState(getPositions=True, getEnergy=True)
+    final_energy = after.getPotentialEnergy().value_in_unit(unit.kilojoules_per_mole)
+    if not _is_finite(final_energy):
+        raise OpenmmRefinementError(
+            "Minimising the metal site produced a non-finite energy; the provisional "
+            "parameters or the coordinates are unusable."
+        )
+    positions = np.asarray(after.getPositions(asNumpy=True).value_in_unit(unit.angstrom))
+    return OpenmmSiteMinimizationRun(
+        coordinates_angstrom=tuple((float(x), float(y), float(z)) for x, y, z in positions),
+        initial_energy_kj_mol=float(
+            before.getPotentialEnergy().value_in_unit(unit.kilojoules_per_mole)
+        ),
+        final_energy_kj_mol=float(final_energy),
+        movable_atoms=len(free),
+        held_atoms=system.getNumParticles() - len(free),
+        platform=chosen.getName(),
+        seconds=elapsed,
+    )
+
+
+# Two atoms closer than this are one on top of the other: tleap building a
+# missing atom where another already is.
+OVERLAP_ANGSTROM = 0.5
+
+
+def _drop_held_overlaps(system: Any, positions: Any, free: set[int], labels: Sequence[str]) -> None:
+    """Switch off the interaction of two held atoms that sit on each other.
+
+    With no cutoff every pair counts, and one pair at zero distance -- a
+    lysine NZ tleap rebuilt onto a water's hydrogen, far from the site --
+    makes the whole energy NaN, and the minimiser with it. Both are held, so
+    what they do to each other is a constant that no movable atom feels.
+    An overlap involving an atom that moves is a broken site, and stops.
+    """
+
+    import numpy as np
+
+    cells: dict[tuple[int, int, int], list[int]] = {}
+    for index, (x, y, z) in enumerate(positions):
+        cells.setdefault((int(x // 1.0), int(y // 1.0), int(z // 1.0)), []).append(index)
+    pairs: list[tuple[int, int]] = []
+    for (cx, cy, cz), members in cells.items():
+        nearby = [
+            other
+            for dx in (-1, 0, 1)
+            for dy in (-1, 0, 1)
+            for dz in (-1, 0, 1)
+            for other in cells.get((cx + dx, cy + dy, cz + dz), ())
+        ]
+        for i in members:
+            for j in nearby:
+                if j > i and np.linalg.norm(positions[i] - positions[j]) < OVERLAP_ANGSTROM:
+                    pairs.append((i, j))
+    if not pairs:
+        return
+    moving = [(i, j) for i, j in pairs if i in free or j in free]
+    if moving:
+        i, j = moving[0]
+        raise OpenmmRefinementError(
+            f"{labels[i]} and {labels[j]} sit {np.linalg.norm(positions[i] - positions[j]):.2f} A "
+            "apart inside the region being minimised; the structure has an atom on top "
+            "of another there."
+        )
+    import openmm as mm
+
+    for force in system.getForces():
+        if isinstance(force, mm.NonbondedForce):
+            for i, j in pairs:
+                force.addException(i, j, 0.0, 1.0, 0.0, True)
+        elif isinstance(force, mm.CustomNonbondedForce):
+            excluded = {
+                tuple(sorted(force.getExclusionParticles(k)))
+                for k in range(force.getNumExclusions())
+            }
+            for i, j in pairs:
+                if (i, j) not in excluded:
+                    force.addExclusion(i, j)
+
+
 # Fastest first. A platform being registered is not the same as it working:
 # OpenMM ships the CUDA plugin wherever it was built with CUDA, so a machine
 # with no GPU -- a CI runner, a cluster login node -- still lists it, and only

@@ -4394,7 +4394,12 @@ def _metal_blocks(
                 **site_block,
                 "mcpb": {
                     "workflow": "pyscf",
-                    "provisional_nonbonded_parameter_set": "12_6",
+                    # The site is minimised with this model before it is
+                    # fitted, and the 12-6-4 set is the one whose distances
+                    # to the donors come out right: the 12-6 one pulls
+                    # carboxylates in to 1.9 A and leaves a keto oxygen
+                    # where it was.
+                    "provisional_nonbonded_parameter_set": "12_6_4",
                     "cutoff_angstrom": mcpb_cutoff_for(plan, resolved, site_id),
                     "bonds": [
                         {
@@ -4523,8 +4528,13 @@ def _monatomic_ion_charge(target: ResidueTarget) -> int:
 def _mcpb_pyscf_block(hessian_backend: str, *, porphyrin: bool = False) -> dict[str, Any]:
     """QM settings for one bonded site.
 
-    The geometry comes from the QM/MM refinement stage rather than a
-    pre-optimised PDB, so that nothing has to be prepared by hand first.
+    The geometry is the site minimised with the provisional nonbonded force
+    field, after the refinement stage has relaxed the hydrogens, rather than
+    a pre-optimised PDB, so that nothing has to be prepared by hand first.
+    A Seminario fit needs a stationary point; a predicted site with only its
+    hydrogens relaxed is far enough from one that bonds come out with
+    negative force constants. The parameters are built onto the original
+    geometry.
 
     No executable is written. g-xTB is a separate build and the xtb conda
     installs is GFN-only, so naming "xtb" here would hand a g-xTB run the
@@ -4534,7 +4544,7 @@ def _mcpb_pyscf_block(hessian_backend: str, *, porphyrin: bool = False) -> dict[
     """
 
     block: dict[str, Any] = {
-        "geometry_source": "qmmm_refinement",
+        "geometry_source": "ff_minimized_site",
         "hessian_backend": "pyscf" if hessian_backend == "pyscf" else "xtb",
         # GFN2 for the ESP regardless of the Hessian method: fitting the large
         # model is where the DFT cost actually lands, and GFN2 has no trouble

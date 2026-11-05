@@ -68,6 +68,28 @@ def _render_markdown(report: dict[str, Any]) -> str:
                 "- Required QM artifacts for a `complete` rerun: "
                 + ", ".join(f"`{name}`" for name in bonded["expected_qm_artifacts"])
             )
+        minimized = bonded.get("site_minimization")
+        if minimized is not None:
+            # Fitted where the force field put the site, built where it was.
+            lines.extend(
+                [
+                    "",
+                    "### Site minimized before the fit",
+                    "",
+                    f"- {minimized['residues_minimized']} residue(s) within "
+                    f"{minimized['radius_angstrom']} A of the metal minimized with the "
+                    "provisional nonbonded force field; the parameters were built onto "
+                    "the original geometry",
+                    f"- Site heavy atoms moved {minimized['site_heavy_atom_rmsd_angstrom']:.3f} A "
+                    f"RMS, {minimized['site_largest_shift_angstrom']:.3f} A at most "
+                    f"({minimized['site_largest_shift_atom']})",
+                ]
+            )
+            for bond in minimized["bonds"]:
+                lines.append(
+                    f"  - {bond['bond']}: {bond['before_angstrom']:.3f} -> "
+                    f"{bond['after_angstrom']:.3f} A"
+                )
         refitted_ligands = bonded.get("refitted_ligands", [])
         lines.extend(["", "### Joint RESP-fitted ligands", ""])
         if refitted_ligands:

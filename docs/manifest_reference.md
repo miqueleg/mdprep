@@ -285,12 +285,21 @@ For `model: bonded_mcpb`, the `mcpb` block contains:
   `large_mk_log` is always required. Gaussian Seminario methods require
   `small_opt_fchk`; GAMESS Seminario methods require `small_fc_log`; Z-matrix
   requires a Gaussian `small_fc_log`.
-- `pyscf`: mandatory only for `workflow: pyscf`. `geometry_source` is either
-  `external_pdb` or `qmmm_refinement`. The external form requires
-  `optimized_small_model_pdb` and `small_model_geometry_status`; mdprep
-  validates an exact coordinate-only atom-identity/order replacement.
-  `qmmm_refinement` requires a completed refinement in the same preparation and
-  the bonded site listed in `refinement.qm_components.metal_sites`.
+- `pyscf`: mandatory only for `workflow: pyscf`. `geometry_source` is
+  `external_pdb`, `qmmm_refinement` or `ff_minimized_site`. The external form
+  requires `optimized_small_model_pdb` and `small_model_geometry_status`;
+  mdprep validates an exact coordinate-only atom-identity/order replacement.
+  `qmmm_refinement` and `ff_minimized_site` require a completed refinement in
+  the same preparation and the bonded site listed in
+  `refinement.qm_components.metal_sites`. `ff_minimized_site`, which the
+  builders write, minimises the site with the provisional nonbonded model
+  before the fit, then builds the parameters onto the original geometry.
+  Its limits go in `site_minimization`: `radius_angstrom` (5.0),
+  `max_bond_change_angstrom` (0.5), `max_rmsd_angstrom` (0.75),
+  `max_shift_angstrom` (1.5), `tolerance_kj_mol_per_nm` (1.0),
+  `max_iterations` (0, until converged) and `nonbonded_cutoff_angstrom` (15);
+  see
+  [metals.md](metals.md#fitting-the-site-where-the-force-field-puts-it).
   `method`, `basis`, and the SCF/resource/embedding/grid settings configure the
   PySCF large-model ESP calculation. Open-shell SCF behavior is explicit and
   reproducible through `scf_algorithm` (`diis`, `newton`, or the explicit

@@ -132,11 +132,16 @@ asked. See [metals.md](metals.md#a-metal-inside-a-cofactor-hemes) and
 Magnesium and calcium are proposed nonbonded, and a metal that is not inside
 a cofactor can be removed instead of modelled -- a nickel from a His-tag, say.
 
-The Hessian defaults to GFN2, which is orders of magnitude cheaper than DFT and
-is what makes a bonded site tractable outside a cluster; g-xTB and PySCF DFT
-are offered too. The geometry comes from the QM/MM refinement stage, which is
-enabled automatically for a bonded site, so nothing has to be optimised by hand
-first.
+The Hessian defaults to g-xTB, which is orders of magnitude cheaper than DFT
+and is what makes a bonded site tractable outside a cluster; GFN2 and PySCF
+DFT are offered too. Nothing has to be optimised by hand first:
+- The refinement stage, enabled automatically for a bonded site, relaxes the
+  hydrogens.
+- The site is then minimised with the provisional 12-6-4 nonbonded model and
+  fitted there, unless that moves it too far.
+- The parameters are built onto the original geometry.
+
+See [metals.md](metals.md#fitting-the-site-where-the-force-field-puts-it).
 
 [examples/16_besd_halogenase_gfn2_mcpb.yaml](../examples/16_besd_halogenase_gfn2_mcpb.yaml)
 is the worked reference: BesD, an alpha-ketoglutarate-dependent halogenase with
