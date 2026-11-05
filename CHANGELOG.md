@@ -19,6 +19,13 @@
   - Two different molecules under one name are built under two names. So are
     two metals of one name with different charges, which used to stop the
     builders with "rename one of them in the input".
+  - A residue whose name is one MCPB.py will give a residue of the bonded
+    site it fits is built under a free name. Otherwise it is built from that
+    site's template. MCPB.py names a site's `LIG` `LG1`, so a different ligand
+    called `LG1` used to be built as part of the site. Free names, including
+    the one the web builder offers for a ligand called like a protein
+    residue, no longer end in a digit: `LIG`, then `LGA`, `LGB`, where they
+    used to be `LG1`, `LG2`.
 - `structure.rename_residues` in the manifest lists residues built under
   another name than the input's, each with its reason. The builders write
   it; preparation applies it as the input is read, before anything else,

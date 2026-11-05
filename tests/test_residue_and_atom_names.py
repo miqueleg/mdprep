@@ -15,6 +15,7 @@ report.
 from __future__ import annotations
 
 from dataclasses import replace
+from math import cos, radians, sin
 from pathlib import Path
 
 import pytest
@@ -365,3 +366,163 @@ END
     (residue,) = structure.residues
     assert residue.atom_names() == ["C1", "C2", "H1", "C5", "C6", "H2"]
     assert not any("separate molecules" in warning for warning in structure.warnings)
+
+
+# --------------------------------------------------------------------------
+# Every ligand called LIG, every carbon called C, five copies
+# --------------------------------------------------------------------------
+
+
+def pentamer(deposition: PdbStructure, reorder: str | None = None) -> PdbStructure:
+    """2FCT's chain A five times round a 5-fold axis, as an editor names it.
+
+    Each copy holds two molecules called LIG -- alpha-ketoglutarate on the
+    iron and an acetate where the detergent sat -- with every atom named by
+    its element. ``reorder`` writes that chain's alpha-ketoglutarate atoms in
+    reverse order.
+    """
+
+    chain_a = [a for a in deposition.atoms if a.chain_id == "A"]
+    detergent = [a for a in chain_a if a.resname == "DSU"]
+    centre = [sum(getattr(a, axis) for a in detergent) / len(detergent) for axis in "xyz"]
+    acetate = [
+        replace(
+            detergent[0], name=element, element=element, resname="LIG", original_line="",
+            x=centre[0] + dx, y=centre[1] + dy, z=centre[2],
+        )
+        for element, (dx, dy) in [
+            ("C", (-0.76, 0.0)), ("C", (0.76, 0.0)), ("O", (1.385, 1.0825)), ("O", (1.385, -1.0825)),
+        ]
+    ]
+    atoms = []
+    for a in chain_a:
+        if a.resname == "DSU":
+            atoms.extend(acetate if a is detergent[0] else [])
+        elif a.resname == "AKG":
+            atoms.append(replace(a, resname="LIG", name=a.element.strip(), original_line=""))
+        else:
+            atoms.append(a)
+    calphas = [a for a in atoms if a.name == "CA" and a.record_name == "ATOM"]
+    axis = (sum(a.x for a in calphas) / len(calphas) + 45.0, sum(a.y for a in calphas) / len(calphas))
+    copies = []
+    for index, chain in enumerate("ABCDE"):
+        c, s = cos(radians(72 * index)), sin(radians(72 * index))
+        copy = [
+            replace(
+                a, chain_id=chain, serial=None, original_line="",
+                x=axis[0] + c * (a.x - axis[0]) - s * (a.y - axis[1]),
+                y=axis[1] + s * (a.x - axis[0]) + c * (a.y - axis[1]),
+            )
+            for a in atoms
+        ]
+        if chain == reorder:
+            cofactor = [a for a in copy if (a.resname, a.resid) == ("LIG", 897)]
+            first = copy.index(cofactor[0])
+            rest = [a for a in copy if a not in cofactor]
+            copy = rest[:first] + cofactor[::-1] + rest[first:]
+        copies.extend(copy)
+    return with_atoms(deposition, [replace(a, serial=n) for n, a in enumerate(copies, start=1)])
+
+
+PENTAMER = {
+    "structure.chains": "all",
+    "structure.remove_unknown_heterogens": True,
+    "structure.repair.add_missing_heavy_atoms": True,
+    "ligand.a_lig_896.net_charge": -1,
+    "ligand.a_lig_896.smiles": "CC(=O)[O-]",
+    "ligand.a_lig_896.charge_method": "am1bcc",
+    "ligand.a_lig_897.net_charge": -2,
+    "ligand.a_lig_897.smiles": AKG_SMILES,
+    "metal.a_fe2_900_site.model": "bonded_mcpb",
+    "metal.a_fe2_900_site.confirm_donors": True,
+    "metal.a_fe2_900_site.model_charge": -1,
+    "refinement.total_qm_multiplicity": 5,
+}
+
+
+def test_a_pentamer_whose_ligands_are_all_lig_with_carbons_all_c(tmp_path, deposition):
+    plan = planned(pentamer(deposition), tmp_path)
+
+    assert plan.oligomer.groups == (("A", "B", "C", "D", "E"),)
+    assert plan.oligomer.unmatched == {}
+    data = build_manifest(plan, PENTAMER)
+
+    ManifestConfig.model_validate(data)
+    ligands = {block["id"]: block for block in data["ligands"]}
+    # Two molecules called LIG in each copy: the acetate keeps the name, the
+    # alpha-ketoglutarate is built under another, and each is parameterised
+    # once for all five copies.
+    assert {(block["selector"]["resname"], block.get("parameters_from")) for block in ligands.values()} == {
+        ("LIG", None), ("LIG", "a_lig_896"), ("LGA", None), ("LGA", "a_lig_897"),
+    }
+    sites = {site["id"]: site.get("parameters_from") for site in data["metals"]}
+    assert sites == {
+        "a_fe2_900_site": None,
+        **{f"{chain}_fe2_900_site": "a_fe2_900_site" for chain in "bcde"},
+    }
+
+
+def test_a_copy_listing_its_atoms_in_another_order_is_not_a_copy(tmp_path, deposition):
+    """Atoms an editor named alike are named apart in the order they are
+    written, so a copy written in another order gets other names -- and is
+    asked about, and refused as a second fit, on its own."""
+
+    plan = planned(pentamer(deposition, reorder="C"), tmp_path)
+
+    assert set(plan.oligomer.unmatched) >= {
+        next(r for r in plan.oligomer.unmatched if r.display() == "C:LIG897"),
+        next(r for r in plan.oligomer.unmatched if r.display() == "C:FE2900"),
+    }
+
+
+def test_a_ligand_called_what_mcpb_names_a_site_residue_is_renamed(tmp_path, deposition):
+    """MCPB.py builds the site's LIG as LG1. A different ligand the input
+    already calls LG1 would then be built from the site's template."""
+
+    structure = with_atoms(
+        deposition,
+        (
+            replace(a, resname="LIG", original_line="") if (a.chain_id, a.resid) == ("A", 897) else a
+            for a in with_a_loose_cofactor(deposition, "LG1").atoms
+        ),
+    )
+    plan = planned(structure, tmp_path)
+    answers = {
+        **ANSWERS,
+        "ligand.a_lig_897.charge_method": "mcpb_resp_pyscf",
+        "metal.a_fe2_900_site.model": "bonded_mcpb",
+        "metal.a_fe2_900_site.confirm_donors": True,
+        "metal.a_fe2_900_site.model_charge": -1,
+        "refinement.total_qm_multiplicity": 5,
+        "ligand.a_lg1_950.net_charge": -1,
+        "ligand.a_lg1_950.smiles": "OC(=O)CCC(=O)C(=O)[O-]",
+        "ligand.a_lg1_950.charge_method": "am1bcc",
+    }
+    answers.pop("ligand.a_akg_897.net_charge")
+    answers.pop("ligand.a_akg_897.smiles")
+    answers.pop("ligand.a_akg_897.charge_method")
+    answers.update(
+        {
+            "ligand.a_lig_897.net_charge": -2,
+            "ligand.a_lig_897.smiles": AKG_SMILES,
+        }
+    )
+
+    data = build_manifest(plan, answers)
+
+    renames = {item["selector"]["resname"]: item for item in data["structure"]["rename_residues"]}
+    assert renames["LG1"]["resname"] == "LGA"
+    assert "a name MCPB.py gives a residue of the bonded site" in renames["LG1"]["reason"]
+    # Chain B's cofactor is chain A's in the other copy, so it follows A's name.
+    assert renames["AKG"]["selector"]["chain"] == "B" and renames["AKG"]["resname"] == "LIG"
+    ManifestConfig.model_validate(data)
+
+
+def test_a_free_name_never_ends_in_a_digit():
+    from mdprep.structure.classify import free_residue_name
+
+    taken: set[str] = set()
+    for _ in range(40):
+        name = free_residue_name(taken)
+        assert not name[-1].isdigit()
+        taken.add(name)

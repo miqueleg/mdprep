@@ -76,7 +76,7 @@ from mdprep.structure.oligomer import (
     site_donor_atoms,
 )
 from mdprep.structure.pdb import AltlocPolicy
-from mdprep.structure.pdb_fields import COVALENT_RADII, free_ion_resname
+from mdprep.structure.pdb_fields import COVALENT_RADII, PdbFieldError, free_ion_resname
 
 
 # A "multichoice" is a checklist: its answer is the values ticked, in the
@@ -3213,6 +3213,7 @@ def build_manifest(plan: DecisionPlan, answers: Mapping[str, Any]) -> dict[str, 
     )
     metal_blocks = _link_metal_copies(plan, resolved, _metal_blocks(plan, resolved))
     _name_metals_apart(plan, metal_blocks, renames)
+    _keep_clear_of_mcpb_names(plan, ligand_blocks, metal_blocks, renames)
     keep_chains = _kept_chains(plan, resolved.get("structure.chains", "all"))
     removed = _in_chains(_removed_residues(plan, resolved), keep_chains)
     replacements = _in_chains(_modified_residue_replacements(plan, resolved), keep_chains)
@@ -4060,6 +4061,121 @@ def _name_metals_apart(
                 previous = seen.get(name)
             if previous is None:
                 seen[name] = (signature, _selector_label(ion["selector"]))
+
+
+# What protonation may call a titratable residue after this plan: MCPB.py
+# names a site's residues after the name they are built with.
+_PROTONATION_STATES = {
+    "HIS": ("HIS", "HID", "HIE", "HIP"),
+    "ASP": ("ASP", "ASH"),
+    "GLU": ("GLU", "GLH"),
+    "CYS": ("CYS", "CYM", "CYX"),
+    "LYS": ("LYS", "LYN"),
+}
+
+
+def _built_name(selector: Mapping[str, Any], renames: Renames) -> str:
+    renamed = renames.get(_selector_residue_id(selector))
+    return renamed[0] if renamed is not None else str(selector["resname"])
+
+
+def _site_selectors(block: Mapping[str, Any]) -> list[Mapping[str, Any]]:
+    """Every residue of a bonded site: its metals, donors and extra residues."""
+
+    return [
+        *(ion["selector"] for ion in block["ions"]),
+        *(item["selector"] for item in block.get("coordinating_ions", [])),
+        *(bond["coordinator"] for bond in block["mcpb"]["bonds"]),
+        *block["mcpb"].get("additional_residues", []),
+    ]
+
+
+def _keep_clear_of_mcpb_names(
+    plan: DecisionPlan,
+    ligand_blocks: list[dict[str, Any]],
+    metal_blocks: list[dict[str, Any]],
+    renames: Renames,
+) -> None:
+    """Rename a residue called what MCPB.py will call one of a site's.
+
+    MCPB.py names the residues of the site it fits after the first and third
+    letters of their names, or a shorter name whole, and a count: a LIG in
+    the site becomes LG1, a histidine HD1, an iron FE1. tleap builds every
+    residue of one name from one template, so a ligand elsewhere already
+    called LG1 would be built from the site's template. It is built under a
+    free name instead, and a free name never ends in a digit, so it cannot
+    be one of these; a metal under its element and a number MCPB.py does
+    not use.
+    """
+
+    stems: set[str] = set()
+    in_sites: set[ResidueId] = set()
+    for block in metal_blocks:
+        if block["model"] != "bonded_mcpb":
+            continue
+        for selector in _site_selectors(block):
+            in_sites.add(_selector_residue_id(selector))
+            # A copy takes its reference's templates and names nothing.
+            if "parameters_from" in block:
+                continue
+            name = _built_name(selector, renames)
+            for state in _PROTONATION_STATES.get(name, (name,)):
+                stems.add(state[0] + state[2] if len(state) == 3 else state)
+    if not stems:
+        return
+
+    def mcpb_could_name(name: str) -> bool:
+        return any(name.startswith(stem) and name[len(stem) :].isdigit() for stem in stems)
+
+    taken = {
+        residue.id.resname for residue in (plan.structure.residues if plan.structure else ())
+    }
+    taken |= {new for new, _ in renames.values()}
+    by_template: dict[str, str] = {}
+    for block in ligand_blocks:
+        residue = _selector_residue_id(block["selector"])
+        name = _built_name(block["selector"], renames)
+        if residue in in_sites or not mcpb_could_name(name):
+            continue
+        template = block.get("parameters_from", block["id"])
+        if template not in by_template:
+            by_template[template] = free_residue_name(taken)
+            taken.add(by_template[template])
+        new = by_template[template]
+        renames[residue] = (
+            new,
+            f"called {name}, a name MCPB.py gives a residue of the bonded site it "
+            "fits: tleap builds every residue of one name from one template, so "
+            f"this one is built as {new}",
+        )
+    for block in metal_blocks:
+        if block["model"] == "bonded_mcpb":
+            continue
+        for ion in block["ions"]:
+            residue = _selector_residue_id(ion["selector"])
+            name = _built_name(ion["selector"], renames)
+            if not mcpb_could_name(name):
+                continue
+            element = str(ion["element"]).upper()
+            excluded = {f"{element}{digit}" for digit in "123456789"}
+            excluded = {candidate for candidate in excluded if mcpb_could_name(candidate)}
+            try:
+                new = free_ion_resname(element, taken | excluded)
+            except PdbFieldError:
+                new = name
+            if mcpb_could_name(new):
+                raise DecisionError(
+                    f"{_selector_label(ion['selector'])} is called {name}, a name "
+                    "MCPB.py gives a residue of the bonded site it fits, and no other "
+                    f"name for a lone {ion['element']} is free. Rename it in the input."
+                )
+            taken.add(new)
+            renames[residue] = (
+                new,
+                f"called {name}, a name MCPB.py gives a residue of the bonded site it "
+                "fits: tleap builds every residue of one name from one template, so "
+                f"this one is built as {new}",
+            )
 
 
 def _rename_selectors(node: Any, renames: Renames) -> None:

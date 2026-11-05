@@ -50,8 +50,20 @@ renames rather than stopping, and says where each rename happens:
   SMILES: built from one, the second molecule's atoms would be bonded as the
   first's. Those are parameterised separately.
 - **Two different molecules under one name**, or one name answered two ways.
-  The second is built under a free name (`LIG`, then `LG1`, `LG2`, ...), or a
+  The second is built under a free name (`LIG`, then `LGA`, `LGB`, ...), or a
   metal under its element and a number.
+- **A name MCPB.py will use.** MCPB.py names the residues of the bonded site
+  it fits after the first and third letters of their names and a count: a
+  `LIG` in the site becomes `LG1`, a histidine `HD1`. A residue elsewhere
+  already called that would be built from the site's template, so it is
+  built under a free name. Free names never end in a digit, so no rename
+  mdprep makes can be one of these.
+- **Copies must list their atoms in the same order.** Atoms named alike are
+  named apart in the order the file lists them. Copies written by copying one
+  molecule, or predicted together, list their atoms alike and get the same
+  names. A copy whose atoms are listed in another order gets other names, is
+  not a copy, and is asked about on its own; on a bonded metal site, that
+  makes a second fit, which is refused.
 
 Residue renames are made by the builders, `mdprep init --interactive` and the
 web builder, and recorded in the manifest under `structure.rename_residues`,

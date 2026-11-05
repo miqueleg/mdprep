@@ -284,16 +284,25 @@ def describe_reserved_residue_names(collisions: Sequence[tuple[str, str]]) -> st
 def free_residue_name(taken: Sequence[str] | set[str]) -> str:
     """A three-character residue code no force field and no caller is using.
 
-    Offered to the user as the replacement for a name the force fields own.
-    LIG first, because it is what a reader expects an unparameterised
-    heterogen to be called.
+    Offered to the user as the replacement for a name the force fields own,
+    and given to a molecule that arrives under another's name. LIG first,
+    because it is what a reader expects an unparameterised heterogen to be
+    called; then LGA, LGB and on.
+
+    Never a name ending in a digit. MCPB.py names the residues of a bonded
+    site after the first and third letters of their names and a count -- a
+    LIG in the site becomes LG1 -- and a residue elsewhere with that name
+    would be built from the site's template.
     """
 
     unavailable = {name.strip().upper() for name in taken} | set(
         LEAP_RESERVED_RESIDUE_NAMES
     )
-    candidates = ["LIG"] + [f"LG{digit}" for digit in "123456789"]
-    candidates += [f"L{index:02d}" for index in range(100)]
+    candidates = ["LIG"] + [
+        f"L{second}{third}"
+        for second in "GHJKMNPQRSTVWXZ"
+        for third in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    ]
     for candidate in candidates:
         if candidate not in unavailable:
             return candidate
