@@ -387,7 +387,11 @@ def test_a_ligands_hydrogens_go_round_pdbfixer_rather_than_through_it(tmp_path):
     )
 
     assert not any(is_hydrogen(atom) for atom in read_pdb(prepared).atoms)
-    assert [atom.name for atom in held[("A", "AKG", 897, None)]] == ["H"] * 6
+    # Named apart as the input was read, so no two of them are one atom to
+    # anything downstream either.
+    assert [atom.name for atom in held[("A", "AKG", 897, None)]] == [
+        "H1", "H2", "H3", "H4", "H5", "H6"
+    ]
     returned = _return_held_hydrogens(read_pdb(prepared), held)
     akg = next(residue for residue in returned.residues if residue.id.resname == "AKG")
     assert sum(is_hydrogen(atom) for atom in akg.atoms) == 6

@@ -17,9 +17,11 @@ from math import cos, dist, sin
 from pathlib import Path
 
 import pytest
+import yaml
 
 from mdprep.config.decisions import (
     DecisionError,
+    answer_conflicts,
     build_manifest,
     plan_decisions,
     proposed_answers,
@@ -406,7 +408,11 @@ def test_a_copy_answered_alike_shares_the_template_anyway(plan):
     ManifestConfig.model_validate(data)
 
 
-def test_one_name_two_charges_is_refused(plan):
+def test_one_name_two_charges_is_built_under_two_names(plan):
+    """tleap builds every AKG from one template, so a second AKG that is
+    another molecule -- a monoanion here -- is built under a name of its own,
+    and the manifest says why."""
+
     answers = {
         **SHARED,
         "structure.same_parametrization": False,
@@ -419,11 +425,19 @@ def test_one_name_two_charges_is_refused(plan):
         "ligand.b_akg_898.smiles": "OC(=O)CCC(=O)C(=O)[O-]",
     }
 
-    with pytest.raises(DecisionError, match="both called AKG but differ in net_charge, smiles"):
-        build_manifest(plan, answers)
+    data = build_manifest(plan, answers)
+
+    b_akg = next(block for block in data["ligands"] if block["id"] == "b_akg_898")
+    assert "parameters_from" not in b_akg
+    assert b_akg["selector"]["resname"] == "LIG"
+    (rename,) = data["structure"]["rename_residues"]
+    assert rename["selector"] == {"chain": "B", "resname": "AKG", "resid": 898}
+    assert rename["resname"] == "LIG"
+    assert "another molecule than A:AKG897, which is also called AKG" in rename["reason"]
+    ManifestConfig.model_validate(data)
 
 
-def test_one_metal_name_two_oxidation_states_is_refused(plan):
+def test_one_metal_name_two_oxidation_states_is_built_under_two_names(plan):
     answers = {
         **SHARED,
         "structure.same_parametrization": False,
@@ -436,8 +450,16 @@ def test_one_metal_name_two_oxidation_states_is_refused(plan):
         "ligand.b_akg_898.smiles": AKG_SMILES,
     }
 
-    with pytest.raises(DecisionError, match="both called FE2 but differ in charge"):
-        build_manifest(plan, answers)
+    data = build_manifest(plan, answers)
+
+    site = next(block for block in data["metals"] if block["id"] == "b_fe2_899_site")
+    (ion,) = site["ions"]
+    # Still read as iron: the element, then a number if it is taken.
+    assert ion["selector"]["resname"] == "FE"
+    (rename,) = data["structure"]["rename_residues"]
+    assert rename["selector"]["resname"] == "FE2" and rename["resname"] == "FE"
+    assert "differs from it in charge" in rename["reason"]
+    ManifestConfig.model_validate(data)
 
 
 def test_the_region_spin_is_not_asked_when_no_site_is_bonded(plan):
@@ -877,7 +899,7 @@ def test_a_fitted_cofactor_on_a_nonbonded_metal_is_refused_where_it_happens(plan
     assert refused.value.decision_id == "metal.a_fe2_900_site.model"
 
 
-def test_a_name_conflict_points_at_the_answer_that_differs(plan):
+def test_two_charge_methods_under_one_name_are_built_apart(plan):
     answers = {
         **SHARED,
         "structure.same_parametrization": False,
@@ -890,10 +912,13 @@ def test_a_name_conflict_points_at_the_answer_that_differs(plan):
         "ligand.b_akg_898.smiles": AKG_SMILES,
     }
 
-    with pytest.raises(DecisionError) as refused:
-        build_manifest(plan, answers)
+    data = build_manifest(plan, answers)
 
-    assert refused.value.decision_id == "ligand.b_akg_898.charge_method"
+    assert [
+        (item["selector"]["resname"], item["resname"])
+        for item in data["structure"]["rename_residues"]
+    ] == [("AKG", "LIG")]
+    ManifestConfig.model_validate(data)
 
 
 def test_the_wizard_refuses_a_second_fit_at_its_question_and_asks_again(tmp_path):
@@ -916,11 +941,17 @@ def test_the_wizard_refuses_a_second_fit_at_its_question_and_asks_again(tmp_path
         queue = replies.get(decision.id)
         return queue.pop(0) if queue else ""
 
-    with pytest.raises(DecisionError, match="both called AKG but differ in charge_method"):
-        run_wizard(DEPOSITION, output_path=tmp_path / "system.yaml", prompt=prompt, notify=told.append)
+    result = run_wizard(
+        DEPOSITION, output_path=tmp_path / "system.yaml", prompt=prompt, notify=told.append
+    )
 
     assert asked.count("metal.b_fe2_899_site.model") == 2
     assert told and "A:FE2900 and B:FE2899 would each need a bonded MCPB fit" in told[0]
+    # Chain B's AKG is charged another way than chain A's, so it is built
+    # under a name of its own -- said in the header and in the manifest.
+    text = result.manifest_path.read_text()
+    assert "#   B:AKG898 -> LIG" in text
+    assert yaml.safe_load(text)["structure"]["rename_residues"][0]["resname"] == "LIG"
 
 
 # --------------------------------------------------------------------------
@@ -1152,20 +1183,45 @@ def test_a_water_belongs_to_the_copy_it_sits_against_whatever_its_chain(depositi
             analysis.heterogen_counterparts().items()}["B:FE2899"] == "A:FE2900"
 
 
-def test_a_copy_under_another_name_is_reported_as_one(deposition):
+def test_a_copy_under_another_name_is_paired_and_built_under_one(tmp_path, deposition):
+    """THC and THC2, FE1 and FE2: a hand-assembled dimer names the second
+    copy's heterogens apart. They are still the first copy's, in the same
+    place with the same atoms, so they pair -- and the copy's ligand is built
+    under the first one's name, with its parameters."""
+
     structure = relabelled(
         deposition, {("B", 898): {"resname": "AKX"}, ("B", 899): {"resname": "FE"}}
     )
 
     analysis = analyse_oligomer(structure.residues)
 
-    reasons = {residue.display(): reason for residue, reason in analysis.unmatched.items()}
-    assert reasons["B:AKX898"].startswith(
-        "it sits where A:AKG897 does, with the same atoms, but is called AKX rather than AKG"
-    )
-    assert reasons["B:FE899"].startswith(
-        "it sits where A:FE2900 does, with the same atoms, but is called FE rather than FE2"
-    )
+    assert analysis.unmatched == {}
+    pairs = {
+        copy.display(): reference.display()
+        for copy, reference in analysis.heterogen_counterparts().items()
+    }
+    assert pairs["B:AKX898"] == "A:AKG897"
+    assert pairs["B:FE899"] == "A:FE2900"
+
+    plan = plan_decisions(written(structure, tmp_path / "m.pdb"))
+    same = plan.by_id("structure.same_parametrization")
+    assert "B:AKX898 would share A:AKG897's parameters, built as AKG" in same.evidence
+    answers = {**SHARED, "metal.a_fe2_900_site.model": "bonded_mcpb"}
+    assert answer_conflicts(plan, answers) is None
+    data = build_manifest(plan, answers)
+
+    b_akg = next(block for block in data["ligands"] if block["id"] == "b_akx_898")
+    assert b_akg["parameters_from"] == "a_akg_897"
+    assert b_akg["selector"]["resname"] == "AKG"
+    site = next(block for block in data["metals"] if block["id"] == "b_fe_899_site")
+    assert site["parameters_from"] == "a_fe2_900_site"
+    # The bond to the copy's AKG names it the way the build will.
+    assert {bond["coordinator"]["resname"] for bond in site["mcpb"]["bonds"]} >= {"AKG"}
+    (rename,) = data["structure"]["rename_residues"]
+    assert rename["selector"] == {"chain": "B", "resname": "AKX", "resid": 898}
+    assert rename["resname"] == "AKG"
+    assert "counterpart of A:AKG897 in another copy of the protein" in rename["reason"]
+    ManifestConfig.model_validate(data)
 
 
 def test_the_refusal_of_two_fits_says_why_when_nothing_paired(tmp_path, deposition):
@@ -1174,18 +1230,29 @@ def test_the_refusal_of_two_fits_says_why_when_nothing_paired(tmp_path, depositi
 
     from mdprep.config.decisions import answer_conflicts
 
-    structure = relabelled(
-        deposition, {("B", 898): {"resname": "AKX"}, ("B", 899): {"resname": "FE"}}
+    # Chain B's AKG with its atoms named its own way: the same molecule,
+    # perhaps, but not one template, so not a copy.
+    structure = relabelled(deposition, {})
+    structure = with_atoms(
+        structure,
+        (
+            replace(atom, name=f"X{atom.name}"[:4])
+            if (atom.chain_id, atom.resid) == ("B", 898)
+            else atom
+            for atom in structure.atoms
+        ),
     )
     plan = plan_decisions(written(structure, tmp_path / "m.pdb"))
     assert not any(d.id == "structure.same_parametrization" for d in plan.decisions)
     answers = {
         "structure.chains": "all",
         "metal.a_fe2_900_site.model": "bonded_mcpb",
-        "metal.b_fe_899_site.model": "bonded_mcpb",
+        "metal.b_fe2_899_site.model": "bonded_mcpb",
     }
 
     conflict = answer_conflicts(plan, answers)
 
-    assert "B:FE899 is not a copy of the first site: it sits where A:FE2900 does" in str(conflict)
-    assert "give both the same one in the input" in str(conflict)
+    assert "B:FE2899 is not a copy of the first site" in str(conflict)
+    assert "A:FE2900 binds A:AKG897 O5 at 2.19 A, which has no counterpart here" in str(
+        conflict
+    )

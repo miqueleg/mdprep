@@ -12,10 +12,12 @@ So residues are matched the way a person would match them:
 
 * protein residues by aligning the chain sequences, which survives offsets,
   gaps and unresolved termini;
-* a heterogen with the one of the same name, with the same atom names, that
-  sits in the same place relative to the protein around it once that
-  neighbourhood is superposed -- so a lid that moved between copies does not
-  break the match;
+* a heterogen with the one with the same atoms, named alike, that sits in the
+  same place relative to the protein around it once that neighbourhood is
+  superposed -- so a lid that moved between copies does not break the match.
+  Its residue name is not compared: a hand-assembled dimer calls the second
+  copy's substrate THC2, and it is still the first copy's THC, built under
+  that one name;
 * a metal only when its whole first shell matches as well, donor for donor
   and atom for atom, and a ligand on a metal only when it binds that metal's
   counterpart the same way. A donor bound in one copy only has to be near
@@ -49,7 +51,7 @@ from mdprep.structure.coordination import (
     metal_donor_atoms,
 )
 from mdprep.structure.hydrogens import is_hydrogen
-from mdprep.structure.models import ResidueId, ResidueRecord
+from mdprep.structure.models import AtomRecord, ResidueId, ResidueRecord
 
 
 # One-letter codes, with the protonation and Amber variants of a residue
@@ -472,9 +474,7 @@ def _pair_copies(analysis: OligomerAnalysis, residues: Sequence[ResidueRecord]) 
                 else LIGAND_MATCH_ANGSTROM
             )
             for copy_item in copy_items:
-                if copy_item.id.resname != reference_item.id.resname:
-                    continue
-                if copy_item.atom_names() != reference_item.atom_names():
+                if not _same_atoms(copy_item, reference_item):
                     continue
                 distance = _deviation(copy_item, reference_item, frame)
                 if distance <= limit:
@@ -499,49 +499,30 @@ def _pair_copies(analysis: OligomerAnalysis, residues: Sequence[ResidueRecord]) 
                 continue
             if residue.id in analysis.counterparts or residue.id in analysis.unmatched:
                 continue
-            twin = _same_place_other_name(
-                residue,
-                items_by_chain.get(reference, []),
-                analysis.alignments[chain],
-                residue_by_id,
-            )
             analysis.unmatched[residue.id] = (
-                f"it sits where {twin.id.display()} does, with the same atoms, but is "
-                f"called {residue.id.resname} rather than {twin.id.resname} -- copies "
-                "share parameters under one residue name, so give both the same one "
-                "in the input"
-                if twin is not None
-                else f"no {residue.id.resname} with the same atoms sits in the same "
-                f"place in chain {reference}"
+                f"nothing with the same atoms sits in the same place in chain {reference}"
             )
 
 
-def _same_place_other_name(
-    residue: ResidueRecord,
-    reference_items: Sequence[ResidueRecord],
-    alignment: ChainAlignment,
-    residue_by_id: dict[ResidueId, ResidueRecord],
-) -> ResidueRecord | None:
-    """The reference copy's heterogen in ``residue``'s place, under another name.
+def _same_atoms(copy: ResidueRecord, reference: ResidueRecord) -> bool:
+    """Whether a copy's heterogen is the reference's: the same atoms, named alike.
 
-    A dimer assembled by hand often names the second copy's ligands apart
-    (THC and THC2, FE1 and FE2). Pairing is by name, since tleap builds every
-    residue of one name from one template, so these are not copies -- and
-    "nothing with the same atoms in the same place" said nothing of why.
+    Its residue name is not compared. A dimer assembled by hand, or predicted
+    with each copy's ligands entered separately, often names the second
+    copy's apart -- THC and THC2, FE1 and FE2 -- and it is still the same
+    molecule in the same place: the manifest builds the two under one name.
+    A metal is one atom, whose name says nothing its element does not.
     """
 
-    found: list[tuple[float, ResidueRecord]] = []
-    for item in reference_items:
-        if item.id.resname == residue.id.resname or item.atom_names() != residue.atom_names():
-            continue
-        frame = _neighbourhood_frame(item, alignment, residue_by_id)
-        if frame is None:
-            continue
-        limit = ATOM_MATCH_ANGSTROM if len(item.atoms) == 1 else LIGAND_MATCH_ANGSTROM
-        distance = _deviation(residue, item, frame)
-        if distance <= limit:
-            found.append((distance, item))
-    return min(found, key=lambda pair: pair[0])[1] if found else None
+    if len(copy.atoms) == 1 and len(reference.atoms) == 1:
+        return _element(copy.atoms[0]) == _element(reference.atoms[0])
+    return [(atom.name, _element(atom)) for atom in copy.atoms] == [
+        (atom.name, _element(atom)) for atom in reference.atoms
+    ]
+
+
+def _element(atom: AtomRecord) -> str:
+    return (atom.element or "").strip().upper()
 
 
 def _require_matching_metal_shells(
@@ -592,7 +573,12 @@ def _require_matching_metal_shells(
 
         if metal == reference:
             return atom
-        return (analysis.counterparts.get(atom[0]), atom[1])
+        counterpart = analysis.counterparts.get(atom[0])
+        if counterpart is not None and len(residue_by_id[counterpart].atoms) == 1:
+            # A lone atom pairs whatever it is called: a chloride CL here
+            # may be CL1 there.
+            return (counterpart, residue_by_id[counterpart].atoms[0].name)
+        return (counterpart, atom[1])
 
     def distance_to(residue: ResidueId | None, name: str, metal: ResidueId) -> str:
         atom = _named_atom(residue_by_id, residue, name)
@@ -815,13 +801,14 @@ def _neighbourhood_frame(
 def _deviation(copy: ResidueRecord, reference: ResidueRecord, frame: _Frame) -> float:
     """Largest atom-to-atom distance once ``copy`` is moved onto ``reference``.
 
-    Atoms are compared by name, which both residues share by construction.
+    Atoms are compared by name, which both residues share by construction --
+    except a lone atom, which is its own counterpart whatever it is called.
     """
 
     by_name = {atom.name: atom for atom in reference.atoms}
     worst = 0.0
     for atom in copy.atoms:
-        target = by_name[atom.name]
+        target = reference.atoms[0] if len(reference.atoms) == 1 else by_name[atom.name]
         moved = frame.apply((atom.x, atom.y, atom.z))
         worst = max(
             worst,

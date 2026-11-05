@@ -93,7 +93,21 @@ def inspect_pdb_structure(
     never sees, such as a chloride PyMOL turned into HCl.
     """
 
-    structure = read_structure(path, altloc_policy=altloc_policy)
+    return inspect_structure(
+        read_structure(path, altloc_policy=altloc_policy),
+        disulfide_cutoff_angstrom=disulfide_cutoff_angstrom,
+        remove_input_hydrogens=remove_input_hydrogens,
+    )
+
+
+def inspect_structure(
+    structure: PdbStructure,
+    *,
+    disulfide_cutoff_angstrom: float = 2.2,
+    remove_input_hydrogens: bool = False,
+) -> InspectionSummary:
+    """What a structure already read holds; see :func:`inspect_pdb_structure`."""
+
     input_hydrogens = InputHydrogenRemoval()
     if remove_input_hydrogens:
         structure, input_hydrogens = strip_input_hydrogens(structure)

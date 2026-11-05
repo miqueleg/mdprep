@@ -62,6 +62,33 @@ relative executable path when needed.
   this list for what the user agreed to drop: crystallisation additives,
   glycans, a heterogen bonded to the protein, a metal from the purification.
   See [heterogens.md](heterogens.md).
+- `rename_residues`: residues built under another name than the input
+  gives them, each with its reason:
+
+  ```yaml
+  rename_residues:
+    - selector: {chain: F, resname: T01, resid: 1}
+      resname: THC
+      reason: the counterpart of B:THC1 in another copy of the protein
+  ```
+
+  tleap builds every residue of one name from the one template of that
+  name, and the builders write these entries for two cases:
+  - one molecule under two names, such as a copy the input calls THC2, or a
+    ligand answered exactly like another (same SMILES, charge, method and
+    atoms, named and bonded alike). It is built under the first one's name
+    and parameterised once (`parameters_from`).
+  - two different molecules under one name. The second is built under a
+    free name, such as `LIG`, or for a metal its element and a number.
+
+  The selector names the residue as mdprep reads the input. Every other
+  selector in the manifest uses the new name: renames are applied first of
+  all, as the input is read, so a residue has one name from there to the
+  prepared system. A new name may be one another residue has only if that
+  residue has the same heavy atoms, named alike. A ligand may not take a
+  force-field name or one that reads as a metal, and a metal keeps a name
+  that starts with its element. Each rename is listed with its reason in
+  `reports/structure_report.md`. See [ligands.md](ligands.md#names).
 - `preserve_chain_ids`: preserve chain IDs when possible.
 - `remove_input_hydrogens` (default `true`): remove the hydrogens the input
   arrives with, as it is read, before anything looks at the structure. mdprep

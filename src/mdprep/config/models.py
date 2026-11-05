@@ -51,6 +51,25 @@ class RemovedResidueConfig(StrictModel):
     reason: str = Field(min_length=1)
 
 
+class ResidueRenameConfig(StrictModel):
+    """One residue built under another name than the input gives it, and why.
+
+    tleap builds every residue of one name from the one template of that
+    name, so the name decides which parameters a residue gets. Two copies of
+    one molecule the input names apart (THC and THC2) are built under one
+    name and parameterised once; two different molecules the input names
+    alike are built under two. The builder writes these. Preparation applies
+    them as it reads the input, before anything else looks at the structure,
+    so every other selector in the manifest uses the new name, and the
+    structure report lists each one.
+    """
+
+    # The residue as the input names it.
+    selector: ResidueSelector
+    resname: str = Field(pattern=r"^[A-Za-z0-9]{1,3}$")
+    reason: str = Field(min_length=1)
+
+
 class ModifiedResidueReplacement(StrictModel):
     """A modified residue of a chain, and the standard one it becomes."""
 
@@ -172,7 +191,35 @@ class StructureConfig(StrictModel):
     # anything else looks at the structure, so a removed residue is never
     # an unknown heterogen, a ligand or a donor.
     remove_residues: list[RemovedResidueConfig] = Field(default_factory=list)
+    # Residues built under another name, each with its reason. Applied first
+    # of all, as the input is read: every other selector, remove_residues'
+    # included, names the residue the new way.
+    rename_residues: list[ResidueRenameConfig] = Field(default_factory=list)
     repair: StructureRepairConfig = Field(default_factory=StructureRepairConfig)
+
+    @model_validator(mode="after")
+    def validate_renamed_residues(self) -> "StructureConfig":
+        keys = [
+            (item.selector.chain, item.selector.resname, item.selector.resid, item.selector.icode)
+            for item in self.rename_residues
+        ]
+        duplicates = sorted({key for key in keys if keys.count(key) > 1}, key=str)
+        if duplicates:
+            raise ValueError(
+                "structure.rename_residues names a residue more than once: "
+                + ", ".join(f"{c}:{n}{r}{i or ''}" for c, n, r, i in duplicates)
+            )
+        unchanged = [
+            f"{item.selector.chain}:{item.selector.resname}{item.selector.resid}"
+            for item in self.rename_residues
+            if item.resname == item.selector.resname
+        ]
+        if unchanged:
+            raise ValueError(
+                "structure.rename_residues renames a residue to the name it already "
+                "has: " + ", ".join(unchanged)
+            )
+        return self
 
     @model_validator(mode="after")
     def validate_removed_residues(self) -> "StructureConfig":

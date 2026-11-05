@@ -207,6 +207,19 @@ def render_manifest_yaml(
             "# Built with another block's parameters (parameters_from), see docs/oligomers.md:"
         )
         header.extend(shared)
+    # Residues built under another name than the input's, for the same
+    # reason: the selectors below already use the new names.
+    renamed = manifest["structure"].get("rename_residues", [])
+    if renamed:
+        header.append(
+            "# Built under another name than the input gives them "
+            "(structure.rename_residues), see docs/ligands.md:"
+        )
+        header.extend(
+            f"#   {item['selector']['chain']}:{item['selector']['resname']}"
+            f"{item['selector']['resid']} -> {item['resname']}"
+            for item in renamed
+        )
     body = yaml.safe_dump(manifest, sort_keys=False, default_flow_style=False)
     return "\n".join(header) + "\n\n" + body
 

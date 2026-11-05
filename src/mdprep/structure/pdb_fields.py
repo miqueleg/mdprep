@@ -21,6 +21,7 @@ a selector written against the original file can be translated by hand.
 from __future__ import annotations
 
 import warnings
+from collections import Counter
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -28,6 +29,7 @@ from dataclasses import replace
 from mdprep.structure.classify import (
     COORDINATING_METAL_ELEMENTS,
     HISTIDINE_RESIDUES,
+    LEAP_RESERVED_RESIDUE_NAMES,
     STANDARD_PROTEIN_RESIDUES,
     TITRATABLE_RESIDUES,
     WATER_RESIDUES,
@@ -103,8 +105,239 @@ def fit_atoms_to_pdb_fields(
             for atom in atoms
         ]
     atoms, split_names = split_cofactor_metals(atoms, warnings)
+    atoms = name_atoms_apart(atoms, warnings)
     assigned = frozenset(resname_map.values()) | split_names
     return settle_monatomic_ion_elements(atoms), warnings, assigned
+
+
+# Two atoms of one residue closer than this are one atom written twice -- an
+# unlabelled alternate conformer -- not two atoms that happen to share a name.
+_SAME_ATOM_ANGSTROM = 0.5
+# Above this many atoms a residue is not split into molecules: the distance
+# search is quadratic, and nothing that size is a ligand drawn in an editor.
+_SPLIT_ATOM_LIMIT = 1000
+
+
+def name_atoms_apart(atoms: list[AtomRecord], warnings: list[str]) -> list[AtomRecord]:
+    """Give every atom of a heterogen a name no other atom of it has.
+
+    A molecule editor names atoms by element: Avogadro writes every carbon as
+    C and every hydrogen as H. Read as written, those are one atom twice
+    over to everything that goes by name -- PDBFixer keeps one of them,
+    tleap matches one template atom to all of them -- so they are named apart
+    as the structure is read, before anything else sees them: the element
+    and a count, C1, C2 and on, skipping names the residue already uses.
+    Atoms whose names were already their own keep them.
+
+    An editor also writes every molecule it holds as one residue, so a
+    ligand and the water drawn beside it arrive as one residue with two of
+    everything. Named apart they would be one molecule that does not exist,
+    so a residue whose atoms fall into separate molecules, each with heavy
+    atoms named like another's, is split first: each molecule a residue of
+    its own under the next free number in its chain, the atoms of each then
+    named apart.
+
+    Residues whose names a force field defines -- amino acids, nucleotides,
+    water, ions -- are matched to templates atom by name, so their names are
+    not changed. Neither is a residue whose like-named atoms sit on top of
+    each other: that is one atom written twice, and naming the copies apart
+    would make two.
+    """
+
+    keys: list[tuple[str, str, int, str | None]] = []
+    members: dict[tuple[str, str, int, str | None], list[AtomRecord]] = {}
+    for atom in atoms:
+        key = atom.residue_key
+        if key not in members:
+            keys.append(key)
+            members[key] = []
+        members[key].append(atom)
+
+    used_resids: dict[str, set[int]] = {}
+    for chain_id, _, resid, _ in keys:
+        used_resids.setdefault(chain_id, set()).add(resid)
+
+    replaced: dict[int, AtomRecord] = {}
+    for key in keys:
+        residue_atoms = members[key]
+        counts = Counter(atom.name for atom in residue_atoms)
+        if all(count == 1 for count in counts.values()):
+            continue
+        chain_id, resname, resid, icode = key
+        if resname.strip().upper() in LEAP_RESERVED_RESIDUE_NAMES or _in_chain(
+            key, keys, members
+        ):
+            continue
+        if _written_twice(residue_atoms):
+            continue
+
+        molecules = (
+            _molecules(residue_atoms)
+            if len(residue_atoms) <= _SPLIT_ATOM_LIMIT
+            else [residue_atoms]
+        )
+        # Separate molecules only when each has atoms of its own by the same
+        # names -- a water's O beside the ligand's. A cofactor with a
+        # disordered gap is in pieces too, but no heavy atom of one piece is
+        # named like one of another, however a converter named its hydrogens.
+        heavy_names = [
+            {atom.name for atom in molecule if _element_of(atom) not in {"H", "D"}}
+            for molecule in molecules
+        ]
+        if not any(
+            heavy_names[i] & heavy_names[j]
+            for i in range(len(heavy_names))
+            for j in range(i + 1, len(heavy_names))
+        ):
+            molecules = [residue_atoms]
+        numbers = [resid]
+        for _ in molecules[1:]:
+            taken = used_resids[chain_id]
+            numbers.append(max(taken) + 1)
+            taken.add(numbers[-1])
+        if len(molecules) > 1:
+            warnings.append(
+                f"{_label(key)} holds {len(molecules)} separate molecules under one "
+                "residue number, as a molecule editor writes them. mdprep made each "
+                "a residue of its own: "
+                + ", ".join(_label((chain_id, resname, number, None)) for number in numbers)
+                + ". Selectors in the manifest use these."
+            )
+
+        for molecule, number in zip(molecules, numbers):
+            moved = [
+                atom
+                if number == resid
+                else replace(atom, resid=number, icode=None, original_line="")
+                for atom in molecule
+            ]
+            named, renamed = unique_atom_names(moved)
+            for original, final in zip(molecule, named):
+                if final is not original:
+                    replaced[id(original)] = final
+            if not renamed:
+                continue
+            shared = sorted(
+                (name, count)
+                for name, count in Counter(atom.name for atom in molecule).items()
+                if count > 1
+            )
+            shown = ", ".join(f"{old}->{new}" for old, new in renamed[:12])
+            more = f" and {len(renamed) - 12} more" if len(renamed) > 12 else ""
+            warnings.append(
+                f"{_label(moved[0].residue_key)} has atoms sharing a name ("
+                + ", ".join(f"{name} x{count}" for name, count in shared)
+                + "), as a molecule editor writes them. mdprep named them apart: "
+                f"{shown}{more}. Selectors in the manifest use the new names."
+            )
+    if not replaced:
+        return atoms
+    return [replaced.get(id(atom), atom) for atom in atoms]
+
+
+def unique_atom_names(
+    atoms: list[AtomRecord],
+) -> tuple[list[AtomRecord], list[tuple[str, str]]]:
+    """Name apart the atoms of one residue that share a name.
+
+    Every atom whose name another atom also has gets its element and a count
+    in base 36 -- C1 ... C9, CA, CB -- the first one the residue does not
+    already use, in file order. Returns the atoms and each (old, new) pair.
+    """
+
+    counts = Counter(atom.name for atom in atoms)
+    duplicate_names = {name for name, count in counts.items() if count > 1}
+    if not duplicate_names:
+        return atoms, []
+
+    used = {atom.name for atom in atoms if atom.name not in duplicate_names}
+    element_counters: dict[str, int] = {}
+    renamed_atoms: list[AtomRecord] = []
+    rename_map: list[tuple[str, str]] = []
+    for atom in atoms:
+        if atom.name not in duplicate_names:
+            renamed_atoms.append(atom)
+            continue
+        element = (_element_of(atom) or atom.name.strip()[:1] or "X").upper()
+        new_name = _next_unique_atom_name(element, used, element_counters)
+        used.add(new_name)
+        # The line it was read from names it the old way; writers fall back
+        # to the fields when there is none.
+        renamed_atoms.append(replace(atom, name=new_name, original_line=""))
+        rename_map.append((atom.name, new_name))
+    return renamed_atoms, rename_map
+
+
+def _next_unique_atom_name(element: str, used: set[str], counters: dict[str, int]) -> str:
+    symbol = "".join(char for char in element.upper() if char.isalnum()) or "X"
+    if len(symbol) > 2:
+        symbol = symbol[:2]
+    while True:
+        counters[symbol] = counters.get(symbol, 0) + 1
+        suffix = _base36(counters[symbol])
+        candidate = f"{symbol}{suffix}"
+        if len(candidate) > ATOM_NAME_WIDTH:
+            candidate = f"{symbol[:1]}{suffix}"[-ATOM_NAME_WIDTH:]
+        if candidate not in used:
+            return candidate
+
+
+def _base36(value: int) -> str:
+    alphabet = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    if value <= 0:
+        return "0"
+    digits = []
+    current = value
+    while current:
+        current, remainder = divmod(current, 36)
+        digits.append(alphabet[remainder])
+    return "".join(reversed(digits))
+
+
+def _written_twice(atoms: list[AtomRecord]) -> bool:
+    """Whether two like-named atoms of a residue sit on the same spot."""
+
+    by_name: dict[str, list[AtomRecord]] = {}
+    for atom in atoms:
+        by_name.setdefault(atom.name, []).append(atom)
+    return any(
+        _within(first, second, _SAME_ATOM_ANGSTROM)
+        for group in by_name.values()
+        for index, first in enumerate(group)
+        for second in group[index + 1 :]
+    )
+
+
+def _molecules(atoms: list[AtomRecord]) -> list[list[AtomRecord]]:
+    """The separate molecules among a residue's atoms, bonded by distance.
+
+    Hydrogens included, each bonded to what it is within bonding distance
+    of, so a molecule keeps its own. In order of each molecule's first atom,
+    each with its atoms in file order.
+    """
+
+    parent = list(range(len(atoms)))
+
+    def root(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    for i, first in enumerate(atoms):
+        for j in range(i + 1, len(atoms)):
+            second = atoms[j]
+            limit = (
+                COVALENT_RADII.get(_element_of(first), 0.76)
+                + COVALENT_RADII.get(_element_of(second), 0.76)
+                + 0.45
+            )
+            if _within(first, second, limit):
+                parent[root(i)] = root(j)
+    groups: dict[int, list[AtomRecord]] = {}
+    for index, atom in enumerate(atoms):
+        groups.setdefault(root(index), []).append(atom)
+    return list(groups.values())
 
 
 def split_cofactor_metals(
@@ -488,6 +721,17 @@ def ion_element(resname: str) -> str | None:
 
     stripped = resname.upper().rstrip("0123456789+-")
     return stripped if stripped and stripped in PERIODIC_ELEMENTS else None
+
+
+def free_ion_resname(element: str, taken: set[str]) -> str:
+    """A residue name for a lone metal atom, built from its element.
+
+    The element first, then the element and a digit: FE, FE1, FE2. A metal
+    is read out of its residue name from here on, so the name has to keep
+    saying which element it is.
+    """
+
+    return _free_resname(element.upper(), taken, element=element)
 
 
 def _free_resname(
