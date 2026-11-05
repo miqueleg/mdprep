@@ -30,6 +30,26 @@
   another name than the input's, each with its reason. The builders write
   it; preparation applies it as the input is read, before anything else,
   and lists each rename in `reports/structure_report.md`.
+- `mcpb.pyscf.geometry_source: ff_minimized_site` fits a bonded site where
+  the provisional nonbonded force field puts it:
+  - Every residue within 5 A of the metal is minimised and the rest held.
+  - Preparation stops if a donor leaves or joins the first shell, a bond to
+    the metal changes by more than 0.5 A, or the site moves too far.
+  - The Hessian and ESP are taken at the minimised site, and the parameters
+    are built onto the original geometry.
+
+  `fallback_geometry: ff_minimized_site` does this only when the fit at the
+  refined geometry leaves a bond or angle without a restoring force, keeping
+  the failed attempt's files. The builders now write that, with a 12-6-4
+  provisional ion, so a site that fits as it is is not moved. They never
+  write a QM/MM optimisation, which a manifest can still ask for.
+
+  This is for predicted sites, which are far enough from a stationary point
+  that Seminario bonds come out negative. An AlphaFold Fe(II)/alpha-KG site
+  fitted as a singlet had three negative Fe-O force constants with only its
+  hydrogens relaxed; with its site minimised, all six bonds and all 24 angles
+  at the iron are positive. No quantum optimisation is involved. The metal
+  report lists how far the site moved, bond by bond.
 
 ### Changed
 
@@ -39,6 +59,11 @@
 
 ### Fixed
 
+- The 12-6-4 ion model works with GAFF2 ligands. ParmEd's `add12_6_4` needs
+  a polarizability for every atom type in the system, and Amber's table has
+  none for GAFF2's ring and protonation variants (`c5`, `c6`, `n7`, `op`,
+  ...), so a ligand with a ring CH2 stopped it. Each such type now takes its
+  GAFF parent's value, noted in the table ParmEd is given.
 - A dimer assembled by hand pairs its copies' waters correctly. Such a file
   can leave the second copy's waters in a chain with the first copy's
   ligand. The water on the second copy's iron then counted as the first
@@ -49,7 +74,10 @@
   THC2, FE1 and FE2) is paired with it. Heterogens are matched by atoms and
   place rather than by name, and a metal by its element and its first shell.
   Such copies used to go unpaired, and the two iron sites were then refused
-  as two MCPB fits. The refusal of a second bonded fit, when copies really do
+  as two MCPB fits. A copy's residue also takes the fit's template when the
+  first copy's was already called by the template's name. An iron FE1, which
+  MCPB.py also calls FE1, records no rename, and its copy FE2 was left to
+  tleap's own FE2 ion. The refusal of a second bonded fit, when copies really do
   differ, now gives the reason even when nothing paired and the copies
   question was never asked; it used to say only "Model all but one of them
   nonbonded".

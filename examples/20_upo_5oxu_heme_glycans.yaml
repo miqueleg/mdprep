@@ -202,7 +202,7 @@ metals:
     multiplicity: 2
   mcpb:
     workflow: pyscf
-    provisional_nonbonded_parameter_set: '12_6'
+    provisional_nonbonded_parameter_set: '12_6_4'
     cutoff_angstrom: 2.6
     bonds:
     - ion:
@@ -287,6 +287,7 @@ metals:
     large_model_spin: 2
     pyscf:
       geometry_source: qmmm_refinement
+      fallback_geometry: ff_minimized_site
       hessian_backend: xtb
       esp_backend: xtb
       method: B3LYP

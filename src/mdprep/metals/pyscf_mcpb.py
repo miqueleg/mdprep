@@ -261,6 +261,10 @@ class McpbPySCFResult:
         geometry_description = {
             "user_optimized": "user-supplied optimized MCPB small-model geometry",
             "qmmm_refined": "completed ASH/GFN2-xTB QM/MM-refined geometry",
+            "ff_minimized_site": (
+                "site minimized with the provisional nonbonded force field; "
+                "parameters built onto the original geometry"
+            ),
             "test_unoptimized": (
                 "explicitly unoptimized MCPB small-model geometry for workflow testing"
             ),
@@ -327,11 +331,12 @@ def run_mcpb_pyscf(
             raise McpbPySCFError(f"MCPB.py step 1 did not produce model PDB: {path}")
 
     qmmm_refinement_source: Path | None = None
-    if config.geometry_source == "qmmm_refinement":
+    if config.geometry_source in {"qmmm_refinement", "ff_minimized_site"}:
         if refinement_result is None:
             raise McpbPySCFError(
                 f"Metal site {site.config.id!r} requests geometry_source: "
-                "qmmm_refinement, but no completed refinement result reached the metal stage."
+                f"{config.geometry_source}, but no completed refinement result reached "
+                "the metal stage."
             )
         qmmm_refinement_source = refinement_result.refined_hydrogenated_pdb_path
         if not qmmm_refinement_source.is_file():
@@ -398,16 +403,24 @@ def _run_small_model(
 ) -> SmallModelResult:
     generated_structure = read_pdb(input_pdb)
     generated_elements, _ = _elements_and_coordinates(generated_structure)
-    if config.geometry_source == "qmmm_refinement":
+    if config.geometry_source in {"qmmm_refinement", "ff_minimized_site"}:
         if qmmm_refinement_source_pdb is None:
             raise McpbPySCFError(
-                "geometry_source: qmmm_refinement requires completed refinement provenance"
+                f"geometry_source: {config.geometry_source} requires completed "
+                "refinement provenance"
             )
+        # MCPB.py's own model, cut from the structure it was given: the
+        # refined one, or the one whose site the force field minimized.
         optimized_path = input_pdb.resolve()
         _, optimized_coordinates = _elements_and_coordinates(generated_structure)
-        geometry_status = "qmmm_refined"
-        geometry_label = "QM/MM-refined MCPB geometry"
-        evaluated_stem = "small_qmmm_refined_fixed_geometry"
+        if config.geometry_source == "qmmm_refinement":
+            geometry_status = "qmmm_refined"
+            geometry_label = "QM/MM-refined MCPB geometry"
+            evaluated_stem = "small_qmmm_refined_fixed_geometry"
+        else:
+            geometry_status = "ff_minimized_site"
+            geometry_label = "Force-field-minimized MCPB site geometry"
+            evaluated_stem = "small_ff_minimized_fixed_geometry"
     else:
         if user_optimized_pdb is None:
             raise McpbPySCFError(

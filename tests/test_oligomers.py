@@ -726,6 +726,37 @@ def copy_site(tmp_path, structure):
     )
 
 
+def test_a_copy_takes_a_template_the_reference_already_had_the_name_of(tmp_path):
+    """FtmOx1 calls its iron FE1, and so does MCPB.py: no rename is recorded
+    for it, and the copy's iron, called FE2, was left to tleap's own FE2."""
+
+    from mdprep.metals.mcpb import apply_mcpb_site_copies
+
+    structure = two_zinc_copies()
+    result, sites, manifest, numbering = fitted_zinc(tmp_path, structure)
+    result = replace(
+        result,
+        residue_renames=tuple(r for r in result.residue_renames if r["original_resname"] != "ZN"),
+    )
+
+    built = apply_mcpb_site_copies(
+        result,
+        site=sites[0],
+        copies=[sites[1]],
+        structure=structure,
+        manifest=manifest,
+        numbering=numbering,
+        output_path=tmp_path / "with_copies.pdb",
+    )
+
+    [copy] = built.copies
+    assert ("B", 501, "ZN", "ZN1") in [
+        (r["chain"], r["resid"], r["original_resname"], r["final_resname"])
+        for r in copy.residue_renames
+    ]
+    assert "bond system.5.NE2 system.8.ZN" in copy.leap_bond_commands
+
+
 def test_a_copy_takes_the_fits_templates_and_bonds(tmp_path):
     built = copy_site(tmp_path, two_zinc_copies())
 

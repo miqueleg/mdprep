@@ -87,6 +87,9 @@ def run_metal_stage(
     provisional_template_by_resname: dict[str, tuple[str, int, str]] = {}
 
     provisional_setup_commands: list[str] = []
+    # 12-6-4 ion types of the pre-MCPB system, which a site minimised in it
+    # needs the C4 term of.
+    provisional_c4_types: list[str] = []
     bonded_site: ResolvedMetalSite | None = None
     # Sites in other copies of the protein that reuse the fitted site's
     # parameters. They are built like it until the fit, then from it.
@@ -150,6 +153,8 @@ def run_metal_stage(
                     template_by_resname=provisional_template_by_resname,
                     context="pre-MCPB provisional topology",
                 )
+                if artifact.parameter.parameter_set == "12_6_4":
+                    provisional_c4_types.append(artifact.parameter.atom_type)
             provisional_setup_commands.extend(provisional.leap_commands)
 
     if bonded_site is not None:
@@ -197,6 +202,7 @@ def run_metal_stage(
             provisional_inpcrd=hydrogenation_result.inpcrd_path,
             refinement_result=refinement_result,
             copies=hydrated_copies,
+            provisional_c4_types=sorted(set(provisional_c4_types) | set(c4_types)),
         )
         if mcpb_result.complete:
             final_pdb = mcpb_result.final_pdb_path or mcpb_result.restored_final_pdb_path
