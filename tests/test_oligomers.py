@@ -1109,3 +1109,83 @@ def test_a_side_chain_near_one_copy_of_a_site_is_asked_about_in_every_copy(tmp_p
     assert next(site for site in data["metals"] if site["id"] == "b_fe2_899_site")[
         "parameters_from"
     ] == "a_fe2_900_site"
+
+
+# --------------------------------------------------------------------------
+# A dimer put together by hand
+#
+# A dimer assembled from a monomer in a viewer can name the second copy's
+# ligands apart (THC and THC2, FE1 and FE2) and leave its waters in a chain
+# with the first copy's ligand. Neither copy then paired with the other, and
+# the refusal of two fits said only "model all but one of them nonbonded".
+# --------------------------------------------------------------------------
+
+
+def relabelled(structure: PdbStructure, changes: dict[tuple[str, int], dict]) -> PdbStructure:
+    """``structure`` with the residues named by (chain, resid) given new fields."""
+
+    return with_atoms(
+        structure,
+        (
+            replace(atom, **changes[(atom.chain_id, atom.resid)])
+            if (atom.chain_id, atom.resid) in changes
+            else atom
+            for atom in structure.atoms
+        ),
+    )
+
+
+def test_a_water_belongs_to_the_copy_it_sits_against_whatever_its_chain(deposition):
+    # Chain A's additive and the water on chain B's iron, written into one
+    # chain of their own: the chain is A's, the water B's.
+    structure = relabelled(
+        deposition, {("A", 896): {"chain_id": "W"}, ("B", 1019): {"chain_id": "W"}}
+    )
+
+    analysis = analyse_oligomer(structure.residues)
+
+    assert analysis.chain_of_nonprotein_chain["W"] == "A"
+    water = next(r.id for r in structure.residues if (r.id.chain_id, r.id.resid) == ("W", 1019))
+    assert analysis.chain_of_residue[water] == "B"
+    assert analysis.unmatched == {}
+    assert {copy.display(): reference.display() for copy, reference in
+            analysis.heterogen_counterparts().items()}["B:FE2899"] == "A:FE2900"
+
+
+def test_a_copy_under_another_name_is_reported_as_one(deposition):
+    structure = relabelled(
+        deposition, {("B", 898): {"resname": "AKX"}, ("B", 899): {"resname": "FE"}}
+    )
+
+    analysis = analyse_oligomer(structure.residues)
+
+    reasons = {residue.display(): reason for residue, reason in analysis.unmatched.items()}
+    assert reasons["B:AKX898"].startswith(
+        "it sits where A:AKG897 does, with the same atoms, but is called AKX rather than AKG"
+    )
+    assert reasons["B:FE899"].startswith(
+        "it sits where A:FE2900 does, with the same atoms, but is called FE rather than FE2"
+    )
+
+
+def test_the_refusal_of_two_fits_says_why_when_nothing_paired(tmp_path, deposition):
+    """With nothing paired, the copies question is not asked, and the
+    refusal is all the user sees."""
+
+    from mdprep.config.decisions import answer_conflicts
+
+    structure = relabelled(
+        deposition, {("B", 898): {"resname": "AKX"}, ("B", 899): {"resname": "FE"}}
+    )
+    plan = plan_decisions(written(structure, tmp_path / "m.pdb"))
+    assert not any(d.id == "structure.same_parametrization" for d in plan.decisions)
+    answers = {
+        "structure.chains": "all",
+        "metal.a_fe2_900_site.model": "bonded_mcpb",
+        "metal.b_fe_899_site.model": "bonded_mcpb",
+    }
+
+    conflict = answer_conflicts(plan, answers)
+
+    assert "B:FE899 is not a copy of the first site: it sits where A:FE2900 does" in str(conflict)
+    assert "give both the same one in the input" in str(conflict)

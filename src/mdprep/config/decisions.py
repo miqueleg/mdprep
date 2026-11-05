@@ -3816,18 +3816,16 @@ def _require_one_bonded_fit(
         return
     sharing = resolved.get("structure.same_parametrization")
     metals = [_residue_id_of(plan.by_id(f"metal.{site}.model").subject) for site in independent]
+    # Why a copy is not one: that is what the user can do something about,
+    # and "these do not match" on two irons they know to be alike is not.
+    # Nothing paired at all is when it matters most -- the copies are then
+    # not even asked about as copies.
+    unmatched = plan.oligomer.unmatched if plan.oligomer is not None else {}
+    why = [f"{metal.display()} {{}}: {unmatched[metal]}." for metal in metals if metal in unmatched]
     if sharing is True:
-        # Why a copy is not one: that is what the user can do something about,
-        # and "these do not match" on two irons they know to be alike is not.
-        unmatched = plan.oligomer.unmatched if plan.oligomer is not None else {}
-        why = [
-            f"{metal.display()} does not: {unmatched[metal]}."
-            for metal in metals
-            if metal in unmatched
-        ]
         advice = (
             "Each copy that matches the first one already reuses its fit. "
-            + (" ".join(why) if why else "These do not match it.")
+            + (" ".join(reason.format("does not") for reason in why) if why else "These do not match it.")
             + " Model all but one of them nonbonded."
         )
     elif sharing is False:
@@ -3836,7 +3834,9 @@ def _require_one_bonded_fit(
             "reuse one fit, or model all but one of them nonbonded."
         )
     else:
-        advice = "Model all but one of them nonbonded."
+        advice = "".join(
+            reason.format("is not a copy of the first site") + " " for reason in why
+        ) + "Model all but one of them nonbonded."
     labels = [metal.display() for metal in metals]
     raise DecisionError(
         f"The metals at {' and '.join(labels)} would each need a bonded MCPB fit of "
