@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The web builder and the official Colab notebook install mdprep 0.5.4, the
+  release in which copies of a metal site drawn at slightly different
+  distances share one MCPB fit.
+
 ## 0.5.4 - 2026-11-05
 
 ### Added
