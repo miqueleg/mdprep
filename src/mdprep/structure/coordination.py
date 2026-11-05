@@ -58,13 +58,16 @@ def metal_donor_atoms(
 
 
 def metal_bound_waters(
-    residues: Sequence[ResidueRecord], metals: Sequence[ResidueRecord]
+    residues: Sequence[ResidueRecord],
+    metals: Sequence[ResidueRecord],
+    *,
+    cutoff_angstrom: float = COORDINATION_CUTOFF_ANGSTROM,
 ) -> list[ResidueRecord]:
     """Waters in the first shell of any of ``metals``, each once, in order."""
 
     found: list[ResidueRecord] = []
     for metal in metals:
-        for residue, _, _ in metal_donor_atoms(residues, metal):
+        for residue, _, _ in metal_donor_atoms(residues, metal, cutoff_angstrom=cutoff_angstrom):
             if is_water_residue(residue) and all(residue.id != seen.id for seen in found):
                 found.append(residue)
     return found

@@ -46,6 +46,17 @@ residues this way instead:
   for donor and atom for atom. **A ligand bound to a metal** is paired only
   when it binds that metal's counterpart the same way.
 
+A donor counts as bound when it is within 2.6 A of a metal. Copies of one
+site are seldom drawn at the same distances, though. A prediction can put a
+chloride 2.47 A from one iron and 2.70 A from the other, either side of that
+cutoff. So an atom bound in one copy only has to be within 3.0 A of the
+metal in each of the others. Both copies are then offered the same bonds,
+each at its own distance, and the shell question marks a donor that is
+listed because another copy binds it. Further out than 3.0 A, the atom is
+not bound there, and the copies are different sites. The side chains whose
+protonation a site asks are matched the same way: one within 3.0 A of any
+copy's metal is asked about in every copy.
+
 A residue that cannot be paired is reported, never guessed at. Its questions
 are then asked on their own.
 
@@ -103,6 +114,10 @@ real structures:
 - **A copy whose metal has lost a water**, or gained one. Its first shell is
   not the reference's, so it is a different site.
 
+The reason names the atom and both distances, for example `A:FE2900 binds
+A:CL901 CL at 2.47 A, whose counterpart here is 3.30 A away`. Refusing a
+second bonded fit repeats it.
+
 ## Limits
 
 These are refused with a message that says what to change, before anything
@@ -113,7 +128,9 @@ runs:
   sites in several copies therefore have to share parameters. A copy that
   differs from the reference, or a bonded site in a different subunit of a
   heteromer, has to be modelled nonbonded. Fitting each site separately is
-  not supported yet.
+  not supported yet. MCPB.py's bonding cutoff is part of the fit, so every
+  copy repeats it. When a donor is left unticked, the cutoff drops below that
+  donor in whichever copy has it nearest.
 - **A bonded site within one chain.** MCPB.py caps each coordinating residue
   with its neighbours in one numbering, which is wrong across a chain
   boundary. A metal bound between two chains has to be modelled nonbonded.
