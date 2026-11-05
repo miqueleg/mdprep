@@ -69,7 +69,12 @@ from mdprep.structure.heterogens import (
 from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.inspect import InspectionSummary, inspect_pdb_structure
 from mdprep.structure.models import PdbStructure, ResidueId, ResidueRecord
-from mdprep.structure.oligomer import OligomerAnalysis, analyse_oligomer
+from mdprep.structure.oligomer import (
+    CopiedDonor,
+    OligomerAnalysis,
+    analyse_oligomer,
+    site_donor_atoms,
+)
 from mdprep.structure.pdb import AltlocPolicy
 
 
@@ -436,6 +441,52 @@ def contact_residues(
     return found
 
 
+def _site_contacts(
+    residues: Sequence[ResidueRecord],
+    metals: Sequence[ResidueRecord],
+    oligomer: OligomerAnalysis,
+) -> dict[ResidueId, list[ResidueRecord]]:
+    """The residues around each metal, the same ones around every copy of a site.
+
+    A titratable side chain near a metal is asked its protonation. One 2.9 A
+    from one copy's iron and 3.1 A from the other's was asked about in one
+    copy only, and copies asked different questions cannot share answers --
+    the second site then needed a fit of its own. So each copy of a site is
+    asked about the counterpart of every residue near any of them.
+    """
+
+    near = {metal.id: contact_residues(residues, metal) for metal in metals}
+    by_id = {residue.id: residue for residue in residues}
+    order = {residue.id: index for index, residue in enumerate(residues)}
+    for metal in metals:
+        copies = [copy for copy in oligomer.copies_of(metal.id) if copy in near]
+        if not copies:
+            continue
+        # Named as the reference copy's residues, and only its own: a
+        # residue of another chain at an interface has no counterpart here.
+        chain = oligomer.chain_of_residue.get(metal.id)
+        named = {
+            residue.id
+            for residue in near[metal.id]
+            if oligomer.chain_of_residue.get(residue.id) == chain
+        }
+        for copy in copies:
+            named |= {
+                source
+                for residue in near[copy]
+                if (source := oligomer.counterpart(residue.id)) is not None
+            }
+        for member in (metal.id, *copies):
+            have = {residue.id for residue in near[member]}
+            for source in named:
+                own = oligomer.counterpart_beside(source, member)
+                if own is not None and own not in have and own in by_id:
+                    near[member].append(by_id[own])
+                    have.add(own)
+            near[member].sort(key=lambda residue: order[residue.id])
+    return near
+
+
 def _target_from_id(residue_id: Any) -> "ResidueTarget":
     return ResidueTarget(
         chain=residue_id.chain_id,
@@ -469,6 +520,15 @@ def plan_decisions(
         disulfide_cutoff_angstrom=disulfide_cutoff_angstrom,
         remove_input_hydrogens=True,
     )
+    # Copies of one protein, and which residue is which in each. Each metal's
+    # shell is read with it: the copies of one site are asked about, and
+    # bonded to, the same atoms, though a predicted dimer seldom puts them
+    # at the same distance from both metals.
+    oligomer = analyse_oligomer(summary.structure.residues)
+    shells = {
+        metal.id: site_donor_atoms(summary.structure.residues, metal, oligomer)
+        for metal in summary.metal_ions
+    }
     # A metal ion is a heterogen, but it is parameterised as a metal site, not
     # as a GAFF ligand, so it must not also be offered for antechamber.
     # A metal ion is parameterised as a metal site, and a single-atom donor --
@@ -477,14 +537,12 @@ def plan_decisions(
     monatomic_donors = {
         donor.id
         for metal in summary.metal_ions
-        for donor, _, _ in metal_donor_atoms(summary.structure.residues, metal)
+        for donor, _, _ in shells[metal.id]
         if len(donor.atoms) == 1
     }
     # A ligand that coordinates a metal belongs to that site's quantum model.
     donor_residue_ids = {
-        donor.id
-        for metal in summary.metal_ions
-        for donor, _, _ in metal_donor_atoms(summary.structure.residues, metal)
+        donor.id for metal in summary.metal_ions for donor, _, _ in shells[metal.id]
     }
     # Heterogens that are not ligands: a modified residue of a chain, a
     # glycan, anything else bonded to the protein, a crystallisation
@@ -558,12 +616,10 @@ def plan_decisions(
             ],
         )
 
-    oligomer = analyse_oligomer(summary.structure.residues)
-
     decisions: list[Decision] = []
     decisions.extend(_project_decisions(path))
     decisions.extend(_chain_decision(summary))
-    decisions.extend(_structure_decisions(summary, groups, modified))
+    decisions.extend(_structure_decisions(summary, groups, modified, shells=shells))
     decisions.extend(_repair_decisions(summary, groups))
     decisions.extend(_protein_decisions())
     decisions.extend(_protonation_decisions(summary))
@@ -581,6 +637,7 @@ def plan_decisions(
                 input_hydrogens=removed_hydrogens.get(residue.id.display(), 0),
             )
         )
+    coordinators = _site_contacts(summary.structure.residues, summary.metal_ions, oligomer)
     for residue in summary.metal_ions:
         decisions.extend(
             _metal_decisions(
@@ -588,9 +645,12 @@ def plan_decisions(
                 summary.structure.residues,
                 getattr(summary.structure, "assigned_resnames", frozenset()),
                 modified=modified,
+                donors=shells[residue.id],
+                coordinators=coordinators[residue.id],
+                copied=oligomer.copied_donors.get(residue.id, ()),
             )
         )
-    decisions.extend(_qm_region_decisions(summary))
+    decisions.extend(_qm_region_decisions(summary, shells))
     decisions.extend(_solvation_decisions())
     decisions.extend(_md_decisions())
 
@@ -652,9 +712,7 @@ def plan_decisions(
                     "element": (atom.element or "").strip(),
                     "distance": round(distance, 3),
                 }
-                for donor, atom, distance in metal_donor_atoms(
-                    summary.structure.residues, metal
-                )
+                for donor, atom, distance in shells[metal.id]
             ]
             for metal in summary.metal_ions
         },
@@ -1634,6 +1692,8 @@ def _structure_decisions(
     summary: InspectionSummary,
     groups: HeterogenGroups | None = None,
     modified: Sequence["ModifiedResidueName"] = (),
+    *,
+    shells: Mapping[ResidueId, Sequence[tuple[ResidueRecord, Any, float]]] | None = None,
 ) -> list[Decision]:
     groups = groups if groups is not None else HeterogenGroups()
     decisions: list[Decision] = []
@@ -1678,7 +1738,11 @@ def _structure_decisions(
     site_ions = {
         donor.id
         for metal in summary.metal_ions
-        for donor, _, _ in metal_donor_atoms(summary.structure.residues, metal)
+        for donor, _, _ in (
+            shells[metal.id]
+            if shells is not None
+            else metal_donor_atoms(summary.structure.residues, metal)
+        )
     }
     free_ions = [residue for residue in summary.crystal_ions if residue.id not in site_ions]
     bound_ions = [residue for residue in summary.crystal_ions if residue.id in site_ions]
@@ -2294,7 +2358,18 @@ def _metal_decisions(
     assigned_resnames: frozenset[str] = frozenset(),
     *,
     modified: Sequence["ModifiedResidueName"] = (),
+    donors: Sequence[tuple[ResidueRecord, Any, float]] | None = None,
+    coordinators: Sequence[ResidueRecord] | None = None,
+    copied: Sequence[CopiedDonor] = (),
 ) -> list[Decision]:
+    """The questions about one metal.
+
+    ``donors`` is its shell as its site is confirmed and ``coordinators``
+    the residues whose protonation it asks, both the same in every copy of
+    the site (``site_donor_atoms``, ``_site_contacts``); ``copied`` names
+    the donors that are in the shell because a copy binds them.
+    """
+
     site_id = metal_site_id_for(residue)
     display = residue.id.display()
     element = _residue_element(residue)
@@ -2304,7 +2379,8 @@ def _metal_decisions(
         name.strip().upper() for name in assigned_resnames
     }
     cofactor = source_cofactor(residue, all_residues, assigned_resnames)
-    donors = metal_donor_atoms(all_residues, residue)
+    donors = list(metal_donor_atoms(all_residues, residue) if donors is None else donors)
+    from_copies = {(donor.residue, donor.atom_name): donor for donor in copied}
     donor_residues: list[ResidueRecord] = []
     for donor_residue, _, _ in donors:
         if all(donor_residue.id != seen.id for seen in donor_residues):
@@ -2313,6 +2389,12 @@ def _metal_decisions(
     contacts = tuple(_target_for(neighbour) for neighbour in neighbours)
     donor_evidence = tuple(
         f"{donor_residue.id.display()} {atom.name} at {distance:.2f} A"
+        + (
+            f"; its counterpart is {copy.distance_there:.2f} A from "
+            f"{copy.bound_to.display()}, the same site in another copy"
+            if (copy := from_copies.get((donor_residue.id, atom.name))) is not None
+            else ""
+        )
         for donor_residue, atom, distance in donors
     )
     evidence = (
@@ -2530,8 +2612,14 @@ def _metal_decisions(
                 "Each one ticked becomes a bond to the metal, with bonded "
                 "parameters from the MCPB fit and its atoms in the metal "
                 "site's quantum model. They are ticked because each has an "
-                f"atom within {COORDINATION_CUTOFF_ANGSTROM:.1f} A of the metal, "
-                "and distance alone does not make a bond: untick one that is "
+                f"atom within {COORDINATION_CUTOFF_ANGSTROM:.1f} A of the metal"
+                + (
+                    " or of its counterpart in another copy of the protein, as "
+                    "the copies of one site are bonded alike"
+                    if copied
+                    else ""
+                )
+                + ", and distance alone does not make a bond: untick one that is "
                 "only close -- a substrate docked against the metal, say, in "
                 "a site with no water on it. It then stays where it is, "
                 "unbonded, and the site is fitted without it. Untick them all "
@@ -2560,7 +2648,7 @@ def _metal_decisions(
             # different radii (3.0 A against 2.6 A), so asking about donors
             # left a side chain between them bonded and unasked about,
             # which is the gap that sent the refusal to Colab.
-            neighbours,
+            neighbours if coordinators is None else coordinators,
             distances={
                 donor_residue.id.display(): (atom.name, distance)
                 for donor_residue, atom, distance in donors
@@ -2744,7 +2832,10 @@ def _metal_donor_protonation_decisions(
     return decisions
 
 
-def _qm_region_decisions(summary: InspectionSummary) -> list[Decision]:
+def _qm_region_decisions(
+    summary: InspectionSummary,
+    shells: Mapping[ResidueId, Sequence[tuple[ResidueRecord, Any, float]]],
+) -> list[Decision]:
     """The spin state of the QM region: the one spin question there is.
 
     One bonded site is fitted per preparation, and the QM region is that
@@ -2770,7 +2861,7 @@ def _qm_region_decisions(summary: InspectionSummary) -> list[Decision]:
     when_any = tuple(
         Condition(f"metal.{metal_site_id_for(site)}.confirm_donors", ("true",))
         for site in sites
-        if metal_donor_atoms(summary.structure.residues, site)
+        if shells[site.id]
     )
     if not when_any:
         return []
@@ -3622,7 +3713,10 @@ def _link_metal_copies(
 
     A bonded copy's bonds are written in the order of its reference's, so
     the n-th bond of one is the n-th of the other and the build can carry
-    the reference's templates across residue by residue.
+    the reference's templates across residue by residue. MCPB.py's cutoff
+    is a setting of the fit that every copy repeats, and each copy is
+    checked against it in its own geometry, so it is the lowest any copy
+    needs to keep its unticked donors outside.
     """
 
     by_id = {block["id"]: block for block in blocks}
@@ -3662,6 +3756,21 @@ def _link_metal_copies(
                         decision_id="structure.same_parametrization",
                     )
                 ordered.append(by_residue[counterpart])
+            # One bonded here and not there is a bond the fit has no
+            # parameters for; dropping it would leave the copy's metal
+            # unbonded to a donor it holds.
+            extra = [
+                f"{_selector_label(item[key])} {item[key]['atom_name']}"
+                for item in own
+                if not any(item is kept for kept in ordered)
+            ]
+            if extra:
+                raise DecisionError(
+                    f"{block['id']} is bonded to {', '.join(extra)}, and {source} "
+                    "to no counterpart of it, so it is not a copy of "
+                    f"{source}; answer no to sharing parameters",
+                    decision_id="structure.same_parametrization",
+                )
             return ordered
 
         block["mcpb"]["bonds"] = in_reference_order(
@@ -3671,6 +3780,19 @@ def _link_metal_copies(
             block["coordinating_ions"] = in_reference_order(
                 block.get("coordinating_ions", []), reference["coordinating_ions"], "selector"
             )
+    fits: dict[str, list[dict[str, Any]]] = {}
+    for block in blocks:
+        source = block.get("parameters_from")
+        if (
+            block["model"] == "bonded_mcpb"
+            and source in by_id
+            and by_id[source]["model"] == "bonded_mcpb"
+        ):
+            fits.setdefault(source, [by_id[source]]).append(block)
+    for family in fits.values():
+        lowest = min(member["mcpb"]["cutoff_angstrom"] for member in family)
+        for member in family:
+            member["mcpb"]["cutoff_angstrom"] = lowest
     return blocks
 
 
@@ -3693,10 +3815,20 @@ def _require_one_bonded_fit(
     if len(independent) <= 1:
         return
     sharing = resolved.get("structure.same_parametrization")
+    metals = [_residue_id_of(plan.by_id(f"metal.{site}.model").subject) for site in independent]
     if sharing is True:
+        # Why a copy is not one: that is what the user can do something about,
+        # and "these do not match" on two irons they know to be alike is not.
+        unmatched = plan.oligomer.unmatched if plan.oligomer is not None else {}
+        why = [
+            f"{metal.display()} does not: {unmatched[metal]}."
+            for metal in metals
+            if metal in unmatched
+        ]
         advice = (
-            "Each copy that matches the first one already reuses its fit; these "
-            "do not match it, so model all but one of them nonbonded."
+            "Each copy that matches the first one already reuses its fit. "
+            + (" ".join(why) if why else "These do not match it.")
+            + " Model all but one of them nonbonded."
         )
     elif sharing is False:
         advice = (
@@ -3705,7 +3837,7 @@ def _require_one_bonded_fit(
         )
     else:
         advice = "Model all but one of them nonbonded."
-    labels = [_residue_id_of(plan.by_id(f"metal.{site}.model").subject).display() for site in independent]
+    labels = [metal.display() for metal in metals]
     raise DecisionError(
         f"The metals at {' and '.join(labels)} would each need a bonded MCPB fit of "
         "their own, and mdprep builds one fit per preparation: MCPB.py gives every "

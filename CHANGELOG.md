@@ -17,6 +17,22 @@
 
 ### Fixed
 
+- Copies of one metal site whose donors sit at slightly different distances
+  now share one MCPB fit. A predicted dimer can put a donor 2.5 A from one
+  iron and 2.7 A from the other. mdprep compared the two shells at exactly
+  2.6 A, so it took them for different sites, and asked about the second
+  iron and its cofactor on their own. With both bonded, the builder then
+  refused "two fits", even after the answer that the copies share their
+  parameters. Now an atom bound within 2.6 A in one copy only has to be
+  within 3.0 A in the others. Every copy is offered the same bonds, and
+  every copy of a site is asked about the same nearby side chains. A copy
+  that really differs is still asked about on its own, and the refusal of a
+  second fit says what differs, atom by atom, with both distances.
+- Unticking a donor of a bonded site shared by several copies no longer
+  writes a manifest that `mdprep config-check` refuses. Each copy worked out
+  MCPB.py's cutoff from its own geometry, and the copies' cutoffs differed by
+  hundredths of an angstrom, where a copy has to repeat the fit's settings.
+  Every copy now takes the lowest of them.
 - The web builder's 3D view holds up when the browser's graphics give way.
   At a workshop one laptop drew a large protein's ligands but not its
   cartoon, until several tries later. 3Dmol 2.5 draws through one WebGL

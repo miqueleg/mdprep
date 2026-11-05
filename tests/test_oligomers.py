@@ -921,3 +921,191 @@ def test_the_wizard_refuses_a_second_fit_at_its_question_and_asks_again(tmp_path
 
     assert asked.count("metal.b_fe2_899_site.model") == 2
     assert told and "A:FE2900 and B:FE2899 would each need a bonded MCPB fit" in told[0]
+
+
+# --------------------------------------------------------------------------
+# Copies of one site, drawn apart
+#
+# A predicted dimer seldom puts the same donor at the same distance from both
+# irons. With the shells compared at exactly 2.6 A, a chloride 2.47 A from
+# one iron and 2.70 A from the other made two sites of one: asked about
+# separately, each needing a fit, and refused for that -- after the student
+# had answered that the copies share their parameters.
+# --------------------------------------------------------------------------
+
+# Chain A's answers for 2FCT laid out as a prediction (prediction_layout).
+PREDICTED = {
+    "structure.chains": "all",
+    "structure.remove_unknown_heterogens": False,
+    "structure.repair.add_missing_heavy_atoms": True,
+    "ligand.f_akg_1.net_charge": -2,
+    "ligand.f_akg_1.smiles": AKG_SMILES,
+    "metal.c_fe2_1_site.confirm_donors": True,
+    "metal.c_fe2_1_site.model_charge": -1,
+    "refinement.total_qm_multiplicity": 5,
+}
+
+
+def slid(structure: PdbStructure, metal: tuple[str, int], atom: tuple[str, int, str], to: float):
+    """``structure`` with one atom moved along its line to a metal, ``to`` A from it."""
+
+    centre = next(a for a in structure.atoms if (a.chain_id, a.resid) == metal)
+
+    def moved(a):
+        if (a.chain_id, a.resid, a.name) != atom:
+            return a
+        scale = to / dist((a.x, a.y, a.z), (centre.x, centre.y, centre.z))
+        return replace(
+            a,
+            x=centre.x + (a.x - centre.x) * scale,
+            y=centre.y + (a.y - centre.y) * scale,
+            z=centre.z + (a.z - centre.z) * scale,
+        )
+
+    return with_atoms(structure, (moved(a) for a in structure.atoms))
+
+
+def with_a_shared_additive(structure: PdbStructure) -> PdbStructure:
+    """2FCT with chain A's DSU placed in chain B too, as a copy would hold it.
+
+    Something besides the iron site that both copies share -- the second
+    ligand a prediction puts in each monomer -- so the sharing question is
+    asked whatever becomes of the site.
+    """
+
+    ca = {(a.chain_id, a.resid): (a.x, a.y, a.z) for a in structure.atoms if a.name == "CA"}
+    paired = [key for key in ca if key[0] == "A" and ("B", key[1]) in ca]
+    frame = kabsch([ca[key] for key in paired], [ca[("B", key[1])] for key in paired])
+    serial = max(a.serial for a in structure.atoms)
+    additive = []
+    for offset, a in enumerate(a for a in structure.atoms if a.resname == "DSU"):
+        x, y, z = frame.apply((a.x, a.y, a.z))
+        additive.append(replace(a, chain_id="B", resid=1896, serial=serial + offset + 1, x=x, y=y, z=z))
+    return with_atoms(structure, [*structure.atoms, *additive])
+
+
+@pytest.fixture(scope="module")
+def predicted(deposition) -> PdbStructure:
+    return prediction_layout(deposition)
+
+
+def test_a_donor_either_side_of_the_cutoff_is_one_site(predicted):
+    structure = slid(predicted, ("G", 1), ("H", 1, "CL"), 2.7)
+
+    analysis = analyse_oligomer(structure.residues)
+
+    assert analysis.unmatched == {}
+    assert {copy.display(): reference.display() for copy, reference in
+            analysis.heterogen_counterparts().items()}["G:FE21"] == "C:FE21"
+    # The copy's chloride is in its shell all the same, through the first copy's.
+    [copied] = analysis.copied_donors[next(m for m in analysis.copied_donors)]
+    assert (copied.residue.display(), copied.atom_name, copied.bound_to.display()) == (
+        "H:CL1", "CL", "C:FE21"
+    )
+    assert copied.distance_there == pytest.approx(2.466, abs=0.01)
+
+
+def test_copies_drawn_apart_share_one_fit(tmp_path, predicted):
+    from mdprep.config.decisions import answer_conflicts
+
+    plan = plan_decisions(written(slid(predicted, ("G", 1), ("H", 1, "CL"), 2.7), tmp_path / "m.pdb"))
+    asked = {decision.id for decision in plan.applicable(PREDICTED)}
+
+    assert "structure.same_parametrization" in asked
+    assert not any(key.startswith(("ligand.j_", "metal.g_")) for key in asked)
+    assert answer_conflicts(plan, PREDICTED) is None
+    data = build_manifest(plan, PREDICTED)
+    ManifestConfig.model_validate(data)
+    copy = next(site for site in data["metals"] if site["id"] == "g_fe2_1_site")
+    assert copy["parameters_from"] == "c_fe2_1_site"
+    # Bonded to its chloride 2.70 A away, as the first copy is to its own.
+    assert [(b["coordinator"]["chain"], b["coordinator"]["atom_name"]) for b in copy["mcpb"]["bonds"]] == [
+        ("J", "O2"), ("B", "NE2"), ("J", "O5"), ("B", "NE2"), ("H", "CL")
+    ]
+
+
+def test_a_donor_further_out_in_the_first_copy_is_offered_there_too(tmp_path, predicted):
+    """The first copy is the one asked about, so it has to offer what any copy binds."""
+
+    plan = plan_decisions(written(slid(predicted, ("C", 1), ("F", 1, "O5"), 2.75), tmp_path / "m.pdb"))
+    confirm = plan.by_id("metal.c_fe2_1_site.confirm_donors")
+
+    assert "F:AKG1 O5 at 2.75 A; its counterpart is 2.28 A from G:FE21" in " ".join(confirm.evidence)
+    assert "another copy of the protein" in confirm.why
+    data = build_manifest(plan, PREDICTED)
+    ManifestConfig.model_validate(data)
+    fitted = next(site for site in data["metals"] if site["id"] == "c_fe2_1_site")
+    assert ("F", "O5") in [
+        (b["coordinator"]["chain"], b["coordinator"]["atom_name"]) for b in fitted["mcpb"]["bonds"]
+    ]
+
+
+def test_a_donor_that_has_left_still_makes_another_site_and_says_how_far(predicted):
+    structure = slid(predicted, ("G", 1), ("J", 1, "O5"), 3.3)
+
+    analysis = analyse_oligomer(structure.residues)
+
+    reason = analysis.unmatched[next(r for r in analysis.unmatched if r.resname == "FE2")]
+    assert "C:FE21 binds F:AKG1 O5 at 2.19 A, whose counterpart here is 3.30 A away" in reason
+    assert analysis.copied_donors == {}
+
+
+def test_the_refusal_of_two_fits_says_why_a_copy_is_not_one(tmp_path, deposition):
+    """'These do not match it' was all a student got about two irons they
+    knew to be alike. What differs, and by how much, is what they can act on."""
+
+    from mdprep.config.decisions import answer_conflicts
+
+    structure = slid(with_a_shared_additive(deposition), ("B", 899), ("B", 902, "CL"), 3.3)
+    plan = plan_decisions(written(structure, tmp_path / "m.pdb"))
+    answers = {**SHARED, "structure.same_parametrization": True,
+               "metal.b_fe2_899_site.model": "bonded_mcpb"}
+
+    conflict = answer_conflicts(plan, answers)
+
+    assert conflict.decision_id == "metal.b_fe2_899_site.model"
+    assert (
+        "B:FE2899 does not: its first shell differs from A:FE2900's (A:FE2900 binds "
+        "A:CL901 CL at 2.47 A, whose counterpart here is 3.30 A away)"
+    ) in str(conflict)
+
+
+def test_every_copy_of_a_fit_takes_the_lowest_cutoff(plan):
+    """MCPB.py's cutoff drops below a donor left unticked, and a copy repeats
+    the fit's settings. Each copy computed its own, from its own water, and
+    the manifest failed config-check on the hundredths between them."""
+
+    confirm = plan.by_id("metal.a_fe2_900_site.confirm_donors")
+    answers = {
+        **SHARED,
+        "metal.a_fe2_900_site.confirm_donors": [
+            choice.value for choice in confirm.choices if choice.value != "A:HOH1072"
+        ],
+    }
+
+    data = build_manifest(plan, answers)
+
+    cutoffs = {site["id"]: site["mcpb"]["cutoff_angstrom"] for site in data["metals"]}
+    # A's water is 2.24 A from its iron and B's 2.28 A from its own.
+    assert set(cutoffs.values()) == {2.19}
+    ManifestConfig.model_validate(data)
+
+
+def test_a_side_chain_near_one_copy_of_a_site_is_asked_about_in_every_copy(tmp_path, deposition):
+    """Each titratable residue near a metal is asked its protonation. One near
+    one copy's iron only gave the copies different questions, which they
+    cannot share -- the same refusal, one radius further out."""
+
+    from mdprep.config.decisions import answer_conflicts
+
+    structure = slid(deposition, ("B", 899), ("B", 254, "NH1"), 2.95)
+    plan = plan_decisions(written(structure, tmp_path / "m.pdb"))
+
+    copy = plan.by_id("metal.b_fe2_899_site.donor_state.b_arg_254")
+    assert copy.copy_of == "metal.a_fe2_900_site.donor_state.a_arg_254"
+    answers = {**SHARED, "metal.a_fe2_900_site.donor_state.a_arg_254": "ARG"}
+    assert answer_conflicts(plan, answers) is None
+    data = build_manifest(plan, answers)
+    assert next(site for site in data["metals"] if site["id"] == "b_fe2_899_site")[
+        "parameters_from"
+    ] == "a_fe2_900_site"

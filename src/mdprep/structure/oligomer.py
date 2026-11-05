@@ -18,7 +18,9 @@ So residues are matched the way a person would match them:
   break the match;
 * a metal only when its whole first shell matches as well, donor for donor
   and atom for atom, and a ligand on a metal only when it binds that metal's
-  counterpart the same way.
+  counterpart the same way. A donor bound in one copy only has to be near
+  enough in another (SHELL_MATCH_ANGSTROM), since a prediction rarely puts
+  the same oxygen at the same distance from both irons.
 
 Anything that does not match is reported with the reason, never guessed at.
 Its questions are then asked on their own.
@@ -32,7 +34,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from difflib import SequenceMatcher
 from math import sqrt
-from typing import Sequence
+from typing import Any, Sequence
 
 from mdprep.structure.classify import (
     is_bulk_ion_residue,
@@ -41,7 +43,11 @@ from mdprep.structure.classify import (
     is_standard_protein_residue,
     is_water_residue,
 )
-from mdprep.structure.coordination import metal_bound_waters, metal_donor_atoms
+from mdprep.structure.coordination import (
+    COORDINATION_CUTOFF_ANGSTROM,
+    metal_bound_waters,
+    metal_donor_atoms,
+)
 from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import ResidueId, ResidueRecord
 
@@ -74,6 +80,15 @@ NEIGHBOURHOOD_ANGSTROM = 10.0
 # looser one could swap them.
 ATOM_MATCH_ANGSTROM = 1.5
 LIGAND_MATCH_ANGSTROM = 2.5
+
+# A donor within the first-shell cutoff of one copy's metal is in the shell
+# of another copy's when its counterpart is this close to that metal. Copies
+# of one site are not drawn alike: a predicted dimer puts the same oxygen
+# 2.5 A from one iron and 2.7 A from the other, either side of the 2.6 A
+# cutoff, and that is one site, not two. Further out it is not bound there,
+# and the copies are different sites -- a water that left, a carboxylate
+# that turned away.
+SHELL_MATCH_ANGSTROM = 3.0
 
 # A heterogen chain touching a protein chain this closely belongs to it.
 CONTACT_ANGSTROM = 4.5
@@ -111,6 +126,18 @@ class ChainAlignment:
 
 
 @dataclass(frozen=True)
+class CopiedDonor:
+    """An atom another copy of a metal's site binds, a little further out here."""
+
+    residue: ResidueId
+    atom_name: str
+    # The metal of the copy that binds it within the first-shell cutoff, and
+    # how close it is to that metal.
+    bound_to: ResidueId
+    distance_there: float
+
+
+@dataclass(frozen=True)
 class OligomerAnalysis:
     """Which chains are copies of one protein, and how their residues pair."""
 
@@ -128,6 +155,11 @@ class OligomerAnalysis:
     counterparts: dict[ResidueId, ResidueId] = field(default_factory=dict)
     # Heterogens of a copy that have no counterpart, and why.
     unmatched: dict[ResidueId, str] = field(default_factory=dict)
+    # Metal -> the atoms its site is confirmed with beyond the first-shell
+    # cutoff, because a copy of the site binds their counterparts within it.
+    # Every copy of a site then offers the same bonds, each at its own
+    # distance.
+    copied_donors: dict[ResidueId, tuple[CopiedDonor, ...]] = field(default_factory=dict)
 
     @property
     def homomeric(self) -> bool:
@@ -152,6 +184,17 @@ class OligomerAnalysis:
         """Every residue that corresponds to ``reference``, in input order."""
 
         return [copy for copy, source in self.counterparts.items() if source == reference]
+
+    def counterpart_beside(self, reference: ResidueId, residue: ResidueId) -> ResidueId | None:
+        """The residue standing for ``reference`` in the copy ``residue`` is in."""
+
+        chain = self.chain_of_residue.get(residue)
+        if chain is not None and self.chain_of_residue.get(reference) == chain:
+            return reference
+        for copy in self.copies_of(reference):
+            if self.chain_of_residue.get(copy) == chain:
+                return copy
+        return None
 
     def heterogen_counterparts(self) -> dict[ResidueId, ResidueId]:
         protein = {
@@ -342,7 +385,14 @@ def _assign_nonprotein_chains(
 def _pair_copies(analysis: OligomerAnalysis, residues: Sequence[ResidueRecord]) -> None:
     residue_by_id = {residue.id: residue for residue in residues}
     metals = [residue for residue in residues if is_metal_ion_residue(residue)]
-    bound_waters = {residue.id for residue in metal_bound_waters(residues, metals)}
+    # As far out as a copy's shell reaches, so that a water bound to one
+    # copy's metal is paired with its counterpart a little further out.
+    bound_waters = {
+        residue.id
+        for residue in metal_bound_waters(
+            residues, metals, cutoff_angstrom=SHELL_MATCH_ANGSTROM
+        )
+    }
 
     def is_item(residue: ResidueRecord) -> bool:
         if is_standard_protein_residue(residue):
@@ -424,54 +474,138 @@ def _require_matching_metal_shells(
     different site, whose questions are asked on their own. A ligand bound to
     a metal follows its metal, since its charges may come from that site's
     fit.
+
+    An atom within the first-shell cutoff of one copy's metal has to be
+    within SHELL_MATCH_ANGSTROM of every other copy's. The site is then the
+    atoms any of its copies binds, and each copy is confirmed with all of
+    them: the ones a little further out in one copy are its
+    ``copied_donors``.
     """
 
-    def shell(metal: ResidueRecord) -> set[tuple[ResidueId, str]]:
-        return {
-            (donor.id, atom.name) for donor, atom, _ in metal_donor_atoms(residues, metal)
-        }
-
-    for copy_id, reference_id in list(analysis.counterparts.items()):
-        copy = residue_by_id.get(copy_id)
-        reference = residue_by_id.get(reference_id)
-        if copy is None or reference is None or not is_metal_ion_residue(copy):
-            continue
-        mapped = {
-            (analysis.counterparts.get(donor), name) for donor, name in shell(copy)
-        }
-        expected = shell(reference)
-        if mapped != expected:
-            del analysis.counterparts[copy_id]
-            missing = sorted(
-                f"{donor.display()} {name}"
-                for donor, name in expected - mapped
-                if donor is not None
-            )
-            extra = sorted(
-                f"{donor.display()} {name}"
-                for donor, name in shell(copy)
-                if (analysis.counterparts.get(donor), name) not in expected
-            )
-            detail = "; ".join(
-                part
-                for part in (
-                    f"bound in {reference_id.display()} only: {', '.join(missing)}"
-                    if missing
-                    else "",
-                    f"bound here only: {', '.join(extra)}" if extra else "",
-                )
-                if part
-            )
-            analysis.unmatched[copy_id] = (
-                f"its first shell differs from {reference_id.display()}'s ({detail})"
-            )
-
-    # Which metal each ligand binds, if any.
     metals = [residue for residue in residues if is_metal_ion_residue(residue)]
+    # Every donor atom within reach of each metal, and how far it is.
+    reach = {
+        metal.id: {
+            (donor.id, atom.name): distance
+            for donor, atom, distance in metal_donor_atoms(
+                residues, metal, cutoff_angstrom=SHELL_MATCH_ANGSTROM
+            )
+        }
+        for metal in metals
+    }
+
+    def bound(metal: ResidueId) -> dict[tuple[ResidueId, str], float]:
+        return {
+            atom: distance
+            for atom, distance in reach[metal].items()
+            if distance <= COORDINATION_CUTOFF_ANGSTROM
+        }
+
+    def as_reference(
+        atom: tuple[ResidueId, str], metal: ResidueId, reference: ResidueId
+    ) -> tuple[ResidueId | None, str]:
+        """One of ``metal``'s donor atoms, named as the reference copy's."""
+
+        if metal == reference:
+            return atom
+        return (analysis.counterparts.get(atom[0]), atom[1])
+
+    def distance_to(residue: ResidueId | None, name: str, metal: ResidueId) -> str:
+        atom = _named_atom(residue_by_id, residue, name)
+        if atom is None:
+            return "is missing"
+        return f"is {_atom_distance(residue_by_id[metal].atoms[0], atom):.2f} A away"
+
+    copies: dict[ResidueId, list[ResidueId]] = {}
+    for copy_id, reference_id in analysis.counterparts.items():
+        copy = residue_by_id.get(copy_id)
+        if copy is not None and reference_id in reach and is_metal_ion_residue(copy):
+            copies.setdefault(reference_id, []).append(copy_id)
+
+    for reference_id, members in copies.items():
+        while True:
+            # The site, in the reference's atoms: every atom a copy binds,
+            # with the metal that binds it closest.
+            site: dict[
+                tuple[ResidueId | None, str], tuple[ResidueId, tuple[ResidueId, str], float]
+            ] = {}
+            for metal in (reference_id, *members):
+                for atom, distance in bound(metal).items():
+                    key = as_reference(atom, metal, reference_id)
+                    if key not in site or distance < site[key][2]:
+                        site[key] = (metal, atom, distance)
+            differences: dict[ResidueId, list[str]] = {}
+            for member in members:
+                own = {as_reference(atom, member, reference_id) for atom in reach[member]}
+                found: list[str] = []
+                # Whatever it binds, the reference reaches...
+                for atom, distance in bound(member).items():
+                    key = as_reference(atom, member, reference_id)
+                    if key[0] is not None and key in reach[reference_id]:
+                        continue
+                    found.append(
+                        f"it binds {atom[0].display()} {atom[1]} at {distance:.2f} A, "
+                        + (
+                            f"whose counterpart {distance_to(key[0], key[1], reference_id)} "
+                            f"from {reference_id.display()}"
+                            if key[0] is not None
+                            else "which has no counterpart in chain "
+                            f"{analysis.chain_of_residue.get(reference_id)}"
+                        )
+                    )
+                # ...and whatever the others bind, it reaches.
+                for key, (binder, atom, distance) in site.items():
+                    if binder == member or key[0] is None or key not in reach[reference_id]:
+                        continue
+                    if key in own:
+                        continue
+                    here = analysis.counterpart_beside(key[0], member)
+                    found.append(
+                        f"{binder.display()} binds {atom[0].display()} {atom[1]} at "
+                        f"{distance:.2f} A, "
+                        + (
+                            f"whose counterpart here {distance_to(here, key[1], member)}"
+                            if here is not None
+                            else "which has no counterpart here"
+                        )
+                    )
+                if found:
+                    differences[member] = found
+            if not differences:
+                break
+            for member, found in differences.items():
+                del analysis.counterparts[member]
+                analysis.unmatched[member] = (
+                    f"its first shell differs from {reference_id.display()}'s "
+                    f"({'; '.join(found)})"
+                )
+            members = [member for member in members if member not in differences]
+        if not members:
+            continue
+        for metal in (reference_id, *members):
+            own = {
+                as_reference(atom, metal, reference_id): (atom, distance)
+                for atom, distance in reach[metal].items()
+            }
+            further_out = sorted(
+                (
+                    (own[key][1], CopiedDonor(*own[key][0], bound_to=binder, distance_there=there))
+                    for key, (binder, _, there) in site.items()
+                    if own[key][1] > COORDINATION_CUTOFF_ANGSTROM
+                ),
+                key=lambda item: item[0],
+            )
+            if further_out:
+                analysis.copied_donors[metal] = tuple(donor for _, donor in further_out)
+
+    # Which metal each ligand binds, if any: through its own shell, or
+    # through what its copies bind.
     bound_to: dict[ResidueId, set[ResidueId]] = {}
     for metal in metals:
-        for donor, _, _ in metal_donor_atoms(residues, metal):
-            bound_to.setdefault(donor.id, set()).add(metal.id)
+        for residue, _ in bound(metal.id):
+            bound_to.setdefault(residue, set()).add(metal.id)
+        for donor in analysis.copied_donors.get(metal.id, ()):
+            bound_to.setdefault(donor.residue, set()).add(metal.id)
     for copy_id, reference_id in list(analysis.counterparts.items()):
         copy = residue_by_id.get(copy_id)
         if copy is None or is_standard_protein_residue(copy) or is_metal_ion_residue(copy):
@@ -487,6 +621,49 @@ def _require_matching_metal_shells(
                 analysis.unmatched[copy_id] = (
                     f"it binds a metal differently from {reference_id.display()}"
                 )
+
+
+def _named_atom(
+    residue_by_id: dict[ResidueId, ResidueRecord], residue: ResidueId | None, name: str
+):
+    record = residue_by_id.get(residue) if residue is not None else None
+    if record is None:
+        return None
+    return next((atom for atom in record.atoms if atom.name == name), None)
+
+
+def _atom_distance(first, second) -> float:
+    return sqrt(
+        (first.x - second.x) ** 2 + (first.y - second.y) ** 2 + (first.z - second.z) ** 2
+    )
+
+
+def site_donor_atoms(
+    residues: Sequence[ResidueRecord],
+    metal: ResidueRecord,
+    analysis: OligomerAnalysis | None,
+) -> list[tuple[ResidueRecord, Any, float]]:
+    """A metal's first shell as its site is confirmed, nearest first.
+
+    The donors within the first-shell cutoff, and the atoms that a copy of
+    the site binds and that sit a little further out here
+    (``OligomerAnalysis.copied_donors``): every copy of a site is then asked
+    about, and bonded to, the same atoms, each at its own distance.
+    """
+
+    found = metal_donor_atoms(residues, metal)
+    copied = analysis.copied_donors.get(metal.id, ()) if analysis is not None else ()
+    if not copied:
+        return found
+    residue_by_id = {residue.id: residue for residue in residues}
+    for donor in copied:
+        atom = _named_atom(residue_by_id, donor.residue, donor.atom_name)
+        if atom is not None:
+            found.append(
+                (residue_by_id[donor.residue], atom, _atom_distance(metal.atoms[0], atom))
+            )
+    found.sort(key=lambda item: item[2])
+    return found
 
 
 # --------------------------------------------------------------------------
