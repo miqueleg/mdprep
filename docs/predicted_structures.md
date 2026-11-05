@@ -107,6 +107,14 @@ How it works:
 4. **The waters join the protein chain nearest them**, numbered after its last
    residue, so a chain selection later keeps them.
 
+Waters brought across some other way get a lighter check, by the builders:
+superposed by hand in a viewer, or from a predictor that writes them. A
+water closer than 2.2 A to an atom the build keeps is sitting on it, and is
+left out with that atom named in `structure.remove_residues`. A user's
+hand-assembled AlphaFold dimer had 85 such waters, some 0.4 A from a side
+chain's atoms, and its refinement could not place a lysine's hydrogens until
+they were gone.
+
 It refuses a reference that does not share the model's fold (TM-score below
 0.5), and warns when the reference is distant (TM-score below 0.7 or identity
 below 30%), when another copy in the crystal has a water on its metal that the

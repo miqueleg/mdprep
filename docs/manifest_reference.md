@@ -61,6 +61,14 @@ relative executable path when needed.
   refused, and so is one the structure does not have. The builders write
   this list for what the user agreed to drop: crystallisation additives,
   glycans, a heterogen bonded to the protein, a metal from the purification.
+  They also write, without asking, every crystal water whose oxygen is closer
+  than 2.2 A to an atom the build keeps. Nothing comes closer except
+  something placed for other coordinates: a water superposed into a
+  predicted model or a hand-assembled dimer, or one modelled for the
+  side-chain conformer the build does not use. Of two waters that close,
+  the later goes. A water on a metal is never left out. A water whose only
+  neighbour that close is itself left out (a removed additive, a declined
+  ligand, a chain not kept) stays.
   See [heterogens.md](heterogens.md).
 - `rename_residues`: residues built under another name than the input
   gives them, each with its reason:

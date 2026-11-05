@@ -105,3 +105,20 @@ def test_one_bonded_fit_serves_both_copies(manifest):
 def test_the_page_says_what_it_renamed(report):
     assert "B:AKX898 → AKG" in report["warnings"]
     assert "counterpart of A:AKG897 in another copy of the protein" in report["warnings"]
+
+
+def test_the_page_says_which_waters_it_left_out(report, manifest):
+    """2FCT's A:HOH1034 sits 2.14 A from a carbonyl oxygen: left out, and
+    said so beside the manifest."""
+
+    waters = [
+        item
+        for item in manifest["structure"]["remove_residues"]
+        if item["reason"].startswith("crystal water overlapping")
+    ]
+    assert {"chain": "A", "resname": "HOH", "resid": 1034} in [
+        {key: item["selector"][key] for key in ("chain", "resname", "resid")} for item in waters
+    ]
+    said = " ".join(report["warnings"].split())
+    assert f"{len(waters)} crystal water" in said
+    assert "left out for sitting on another atom" in said
