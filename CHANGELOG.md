@@ -8,6 +8,20 @@
   release in which copies of a metal site drawn at slightly different
   distances share one MCPB fit.
 
+### Fixed
+
+- A ligand whose skeleton is symmetric while its bond orders are not is no
+  longer refused as the wrong tautomer. In tetrahydrocarbazole, for example,
+  the saturated ring and the benzene ring are interchangeable until the bond
+  orders are known. RDKit kept the first way of laying the SMILES on the
+  residue that it found, and only logged "More than one matching pattern
+  found - picking one". When the structure listed the benzene ring first,
+  that put single bonds on its 1.38 A aromatic bonds, and preparation stopped
+  with a correct SMILES. Every distinct way of laying the SMILES on is now
+  tried, and the one the bond lengths agree with is kept. A SMILES is refused
+  for its bond orders only when none fits. Noncanonical residues
+  parameterised from a SMILES are matched the same way.
+
 ## 0.5.4 - 2026-11-05
 
 ### Added

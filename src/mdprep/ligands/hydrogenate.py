@@ -26,7 +26,7 @@ Two rules govern this module:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Callable, Sequence
 
 from mdprep.structure.hydrogens import is_hydrogen
 from mdprep.structure.models import AtomRecord, ResidueRecord
@@ -254,6 +254,104 @@ def _atom_label(atom: object) -> str:
     return f"{atom.GetSymbol()}{atom.GetIdx()}"
 
 
+# How many ways of laying a SMILES on a residue are looked through. RDKit
+# lists every symmetric equivalent, and a ligand with three CF3 groups and
+# two carboxylates already has 864; most give the same bond orders.
+TEMPLATE_MATCH_LIMIT = 10_000
+
+
+def assign_bond_orders_by_geometry(
+    template: object,
+    molecule: object,
+    residue: ResidueRecord,
+    *,
+    judged: Callable[[str], bool] = lambda complaint: True,
+) -> tuple[object, list[str]]:
+    """``molecule`` with ``template``'s bond orders, laid on as its bond lengths say.
+
+    RDKit's AssignBondOrdersFromTemplate matches the SMILES's skeleton onto
+    the residue's and keeps the first match. A skeleton without its bond
+    orders can be more symmetric than the molecule: tetrahydrocarbazole's
+    saturated ring and its benzene ring are then interchangeable, and the
+    first match put the SMILES's single bonds on the residue's 1.38 A
+    aromatic ones -- after which the bond-length check blamed a correct
+    SMILES ("More than one matching pattern found - picking one" was the
+    only sign). Every distinct way of laying it on is tried, RDKit's own
+    first, and the first whose bond lengths agree is kept. Failing that, the
+    one with fewest disagreements, so the error lists what is really wrong.
+
+    Returns the molecule and its remaining disagreements -- those of
+    geometry_contradicts_bond_orders that ``judged`` keeps. Raises
+    ValueError when the skeletons do not match at all, as RDKit does.
+    """
+
+    from rdkit import Chem
+
+    if molecule.GetSubstructMatch(template):
+        # Alike with bond orders and all: RDKit returns it as it is.
+        alike = Chem.Mol(molecule)
+        return alike, [c for c in geometry_contradicts_bond_orders(alike, residue) if judged(c)]
+
+    skeleton_template = Chem.Mol(template)
+    skeleton = Chem.Mol(molecule)
+    for bare in (skeleton_template, skeleton):
+        for bond in bare.GetBonds():
+            bond.SetBondType(Chem.BondType.SINGLE)
+            bond.SetIsAromatic(False)
+        for atom in bare.GetAtoms():
+            atom.SetFormalCharge(0)
+    matches = skeleton.GetSubstructMatches(
+        skeleton_template, uniquify=False, maxMatches=TEMPLATE_MATCH_LIMIT
+    )
+    if not matches:
+        raise ValueError("No matching found")
+
+    best: tuple[object, list[str]] | None = None
+    refused: Exception | None = None
+    seen: set[tuple[object, ...]] = set()
+    for match in matches:
+        trial = Chem.Mol(skeleton)
+        for bond in template.GetBonds():
+            target = trial.GetBondBetweenAtoms(
+                match[bond.GetBeginAtomIdx()], match[bond.GetEndAtomIdx()]
+            )
+            target.SetBondType(bond.GetBondType())
+            target.SetIsAromatic(bond.GetIsAromatic())
+        for atom in template.GetAtoms():
+            target = trial.GetAtomWithIdx(match[atom.GetIdx()])
+            target.SetHybridization(atom.GetHybridization())
+            target.SetIsAromatic(atom.GetIsAromatic())
+            target.SetNumExplicitHs(atom.GetNumExplicitHs())
+            target.SetFormalCharge(atom.GetFormalCharge())
+        # Swapping two methyls changes the match and nothing else.
+        laid_on = (
+            tuple(bond.GetBondType() for bond in trial.GetBonds()),
+            tuple(
+                (atom.GetFormalCharge(), atom.GetNumExplicitHs()) for atom in trial.GetAtoms()
+            ),
+        )
+        if laid_on in seen:
+            continue
+        seen.add(laid_on)
+        try:
+            Chem.SanitizeMol(trial)
+        except Exception as exc:  # RDKit raises its own types
+            refused = refused or exc
+            continue
+        disagreements = [
+            complaint
+            for complaint in geometry_contradicts_bond_orders(trial, residue)
+            if judged(complaint)
+        ]
+        if not disagreements:
+            return trial, []
+        if best is None or len(disagreements) < len(best[1]):
+            best = (trial, disagreements)
+    if best is None:
+        raise refused if refused is not None else ValueError("No matching found")
+    return best
+
+
 def add_ligand_hydrogens(
     residue: ResidueRecord,
     smiles: str,
@@ -473,7 +571,6 @@ def _match_smiles_onto_residue(
 
     try:
         from rdkit import Chem
-        from rdkit.Chem import AllChem
     except ImportError as exc:  # pragma: no cover - exercised by the skip guard
         raise LigandHydrogenationError(
             f"Ligand {ligand_id} has a SMILES, and placing or checking its "
@@ -514,7 +611,7 @@ def _match_smiles_onto_residue(
         )
 
     try:
-        molecule = AllChem.AssignBondOrdersFromTemplate(template, molecule)
+        molecule, contradictions = assign_bond_orders_by_geometry(template, molecule, residue)
     except Exception as exc:
         raise LigandHydrogenationError(
             f"Ligand {ligand_id}: the SMILES could not be matched onto the "
@@ -522,7 +619,6 @@ def _match_smiles_onto_residue(
             "the same molecule, including its charge."
         ) from exc
 
-    contradictions = geometry_contradicts_bond_orders(molecule, residue)
     if contradictions:
         raise LigandHydrogenationError(
             f"Ligand {ligand_id}: the bond orders this SMILES implies do not "

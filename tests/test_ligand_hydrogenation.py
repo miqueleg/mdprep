@@ -409,6 +409,82 @@ def test_a_wrong_tautomer_is_caught_by_the_structure_geometry():
         )
 
 
+# Tetrahydrocarbazole: a saturated ring and a benzene ring either side of a
+# pyrrole. Without its bond orders -- all a PDB file gives -- its skeleton is
+# symmetric, so its SMILES can be laid on the residue two ways, and RDKit's
+# AssignBondOrdersFromTemplate keeps whichever it finds first. A predicted
+# model listing the benzene ring first got the saturated ring's single bonds
+# on its 1.38 A aromatic ones, and was refused as the wrong tautomer.
+TETRAHYDROCARBAZOLE = "C1CCC2=C(C1)C3=CC=CC=C3N2"
+
+
+def _tetrahydrocarbazole(reverse: bool) -> ResidueRecord:
+    """Its heavy atoms where RDKit puts them, in SMILES order or reversed."""
+
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from mdprep.structure.models import build_residues
+
+    molecule = Chem.AddHs(Chem.MolFromSmiles(TETRAHYDROCARBAZOLE))
+    AllChem.EmbedMolecule(molecule, randomSeed=7)
+    AllChem.MMFFOptimizeMolecule(molecule)
+    conformer = molecule.GetConformer()
+    heavy = [a for a in molecule.GetAtoms() if a.GetAtomicNum() > 1]
+    atoms = []
+    for serial, item in enumerate(reversed(heavy) if reverse else heavy, start=1):
+        position = conformer.GetAtomPosition(item.GetIdx())
+        atoms.append(
+            AtomRecord(
+                serial=serial, name=f"{item.GetSymbol()}{item.GetIdx() + 1}", altloc=None,
+                resname="THC", chain_id="B", resid=1, icode=None,
+                x=position.x, y=position.y, z=position.z, occupancy=1.0, bfactor=0.0,
+                element=item.GetSymbol(), record_name="HETATM", original_line="",
+            )
+        )
+    return build_residues(atoms)[0]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_a_symmetric_skeleton_is_laid_on_the_way_its_bond_lengths_say(reverse):
+    from math import dist
+
+    residue = _tetrahydrocarbazole(reverse)
+
+    result = add_ligand_hydrogens(
+        residue, TETRAHYDROCARBAZOLE, ligand_id="b_thc_1", net_charge=0
+    )
+
+    assert result.added_hydrogens == 13
+    heavy = [a for a in result.residue.atoms if a.element != "H"]
+    carried: dict[str, int] = {}
+    for hydrogen in (a for a in result.residue.atoms if a.element == "H"):
+        parent = min(heavy, key=lambda a: dist((a.x, a.y, a.z), (hydrogen.x, hydrogen.y, hydrogen.z)))
+        carried[parent.name] = carried.get(parent.name, 0) + 1
+    # Named after the SMILES's atoms: C1, C2, C3 and C6 make the saturated
+    # ring, C8 to C11 are the benzene ring's CH, N13 the pyrrole's NH.
+    assert carried == {
+        "C1": 2, "C2": 2, "C3": 2, "C6": 2,
+        "C8": 1, "C9": 1, "C10": 1, "C11": 1, "N13": 1,
+    }
+
+
+def test_rdkits_first_match_is_the_wrong_one_for_the_reversed_order():
+    """What the test above is for: the first match RDKit finds puts single
+    bonds on the benzene ring, which is what used to be refused."""
+
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+
+    from mdprep.ligands.hydrogenate import _pdb_block, geometry_contradicts_bond_orders
+
+    residue = _tetrahydrocarbazole(reverse=True)
+    molecule = Chem.MolFromPDBBlock(_pdb_block(list(residue.atoms)), removeHs=False, sanitize=False)
+    first = AllChem.AssignBondOrdersFromTemplate(Chem.MolFromSmiles(TETRAHYDROCARBAZOLE), molecule)
+
+    assert len(geometry_contradicts_bond_orders(first, residue)) == 4
+
+
 def test_a_carboxylate_is_not_mistaken_for_a_contradiction():
     """A deprotonated carboxylate refines with two equal C-O bonds near
     1.25 A, which any SMILES has to write as one single and one double. The

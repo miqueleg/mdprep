@@ -29,7 +29,12 @@ Three things are checked, and one is not:
 
 - The SMILES must describe the same number of heavy atoms as the residue.
 - It must match the residue's heavy-atom connectivity, which is what lets the
-  bond orders be transferred onto the coordinates.
+  bond orders be transferred onto the coordinates. A connectivity without
+  bond orders can match more than one way. Tetrahydrocarbazole's saturated
+  ring and its benzene ring are interchangeable until the bond orders are
+  known. So every distinct way of laying the SMILES on the residue is tried,
+  and the first one that the bond lengths below agree with is kept. A SMILES
+  is refused for its bond orders only when no way of laying it on fits.
 - Its formal charge must equal `net_charge`. Without this a SMILES one proton
   out is accepted, because it still matches the same heavy atoms -- and the
   hydrogens then describe a different molecule from the charge the rest of
