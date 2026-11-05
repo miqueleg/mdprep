@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The web builder and the official Colab notebook install mdprep 0.5.5, the
+  release that renames names a structure cannot be built with instead of
+  refusing them, and minimises a bonded site with the force field and fits
+  it again when its fit at the refined geometry leaves a bond without a
+  restoring force.
+
 ## 0.5.5 - 2026-11-05
 
 ### Added
