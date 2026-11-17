@@ -20,6 +20,8 @@ from typing import Any, Sequence
 import numpy as np
 
 from mdprep.config.models import MolecularDynamicsConfig
+from mdprep.md import cupotential
+from mdprep.md.c4_pairs import restrict_c4_to_ion_pairs
 from mdprep.md.imaging import solute_atom_indices, write_imaged_pdb
 
 
@@ -63,6 +65,10 @@ class RoeBrooksResult:
     equilibration_log: Path | None = None
     # Platforms tried before the one used, and why each would not start.
     platform_failures: dict[str, str] = field(default_factory=dict)
+    engine: str = "openmm"
+    # Why cuPotential's integrator could not run this system, when its
+    # forces then ran under OpenMM's integrator instead.
+    integrator_failure: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -70,6 +76,8 @@ class RoeBrooksResult:
             "output_dir": str(self.output_dir),
             "platform": self.platform,
             "platform_failures": dict(self.platform_failures),
+            "engine": self.engine,
+            "integrator_failure": self.integrator_failure,
             "step10_elapsed_ps": self.step10_elapsed_ps,
             "production_steps": self.production_steps,
             "final_pdb": str(self.final_pdb),
@@ -367,23 +375,73 @@ def run_roe_brooks(
     pressure = config.pressure_atmosphere * unit.atmosphere
     started = perf_counter()
 
-    def build_system(*, constraints: Any, rigid_water: bool, barostat: bool) -> Any:
+    nv: Any = None
+    if config.engine == "cupotential":
+        try:
+            nv = cupotential.load_plugin()
+        except cupotential.CuPotentialUnavailable as exc:
+            raise RoeBrooksError(str(exc)) from exc
+    # cuPotential runs the dynamics only. tleap's box arrives with atoms all
+    # but on top of one another -- a rebuilt lysine's NZ 0.7 A from a water
+    # hydrogen in 2FCT -- and the plugin is made for MD on a relaxed box, not
+    # for pulling such a box apart. Every minimisation keeps OpenMM's own
+    # force, at mdprep's usual tolerance, and the dynamics start from what
+    # they left.
+    ewald_tolerance = {"minimisation": 1.0e-4, "dynamics": 1.0e-4}
+    if nv is not None:
+        ewald_tolerance["dynamics"] = cupotential.EWALD_ERROR_TOLERANCE
+    # Settled when the platform is: whether cuPotential's integrator can run
+    # this system, or its forces run under OpenMM's.
+    plugin_integrator = [False]
+    integrator_failure: str | None = None
+    c4_ion_atoms: list[int] = []
+
+    def build_system(
+        *, constraints: Any, rigid_water: bool, barostat: bool, dynamics: bool = False
+    ) -> Any:
         system = prmtop.createSystem(
             nonbondedMethod=PME,
             nonbondedCutoff=0.8 * unit.nanometer,
             constraints=constraints,
             rigidWater=rigid_water,
-            ewaldErrorTolerance=1.0e-4,
+            ewaldErrorTolerance=ewald_tolerance["dynamics" if dynamics else "minimisation"],
         )
         for force_index in range(system.getNumForces()):
             force = system.getForce(force_index)
             if isinstance(force, mm.NonbondedForce):
                 force.setUseDispersionCorrection(True)
+        c4_ion_atoms[:] = restrict_c4_to_ion_pairs(system)
         if barostat:
             barostat_force = mm.MonteCarloBarostat(pressure, temperature, 100)
             barostat_force.setRandomNumberSeed(config.random_seed)
             system.addForce(barostat_force)
+        if nv is not None and dynamics:
+            cupotential.use_cupotential_forces(system, nv)
+            if plugin_integrator[0]:
+                cupotential.use_cupotential_dynamics(system, nv)
         return system
+
+    def langevin(friction: Any, timestep: Any) -> Any:
+        if plugin_integrator[0]:
+            return cupotential.langevin_integrator(nv, temperature, friction, timestep)
+        return mm.LangevinMiddleIntegrator(temperature, friction, timestep)
+
+    def removes_com_motion(simulation: Any) -> bool:
+        """Whether OpenMM's reporters should count 3 degrees of freedom out.
+
+        cuPotential's integrator removes the centre-of-mass motion itself,
+        so a System it runs has no CMMotionRemover to say so.
+        """
+
+        system = simulation.system
+        if any(
+            isinstance(system.getForce(index), mm.CMMotionRemover)
+            for index in range(system.getNumForces())
+        ):
+            return True
+        return plugin_integrator[0] and not isinstance(
+            simulation.integrator, mm.VerletIntegrator
+        )
 
     def add_restraints(
         system: Any,
@@ -416,7 +474,18 @@ def run_roe_brooks(
     selected_platform = None
     selected_properties: dict[str, str] = {}
     platform_failures: dict[str, str] = {}
-    for candidate in platform_candidates(config.platform, available):
+    candidates = platform_candidates(config.platform, available)
+    if nv is not None:
+        # cuPotential is a CUDA plugin: no other platform can run it, and
+        # passing over to OpenCL would be running something else than was
+        # asked for.
+        if "CUDA" not in candidates:
+            raise RoeBrooksError(
+                "molecular_dynamics.engine: cupotential needs OpenMM's CUDA platform; "
+                f"this OpenMM has {', '.join(available)}"
+            )
+        candidates = ["CUDA"]
+    for candidate in candidates:
         candidate_platform = Platform.getPlatformByName(candidate)
         candidate_properties = _platform_properties(candidate_platform, config)
         trial_integrator = mm.VerletIntegrator(1.0 * unit.femtoseconds)
@@ -445,7 +514,7 @@ def run_roe_brooks(
 
                 reason = f"{reason} {explain_cuda_failure(reason)}"
             platform_failures[candidate] = reason
-            if config.platform != "auto":
+            if config.platform != "auto" or nv is not None:
                 raise RoeBrooksError(
                     f"Requested OpenMM platform {candidate!r} failed: {reason}"
                 ) from exc
@@ -459,6 +528,30 @@ def run_roe_brooks(
             "No OpenMM platform could initialize: "
             + "; ".join(f"{key}: {value}" for key, value in platform_failures.items())
         )
+    if nv is not None:
+        # The plugin's integrator implements SHAKE and SETTLE but not CCMA,
+        # and says so when the Context is made. A system it refuses still
+        # gets cuPotential's forces, under OpenMM's integrator, and the
+        # report says why.
+        plugin_integrator[0] = True
+        trial_system = build_system(
+            constraints=HBonds, rigid_water=True, barostat=True, dynamics=True
+        )
+        try:
+            trial_simulation = Simulation(
+                topology,
+                trial_system,
+                langevin(5.0 / unit.picosecond, 1.0 * unit.femtoseconds),
+                selected_platform,
+                selected_properties,
+            )
+            trial_simulation.context.setPositions(positions)
+            trial_simulation.context.setPeriodicBoxVectors(*box_vectors)
+            trial_simulation.context.getState(getEnergy=True)
+            del trial_simulation
+        except Exception as exc:  # the plugin raises OpenMMException
+            plugin_integrator[0] = False
+            integrator_failure = str(exc)
 
     stage_records: list[dict[str, object]] = []
     # Every stage on one time axis, so the whole equilibration can be read
@@ -477,11 +570,9 @@ def run_roe_brooks(
             system.getParticleMass(index).value_in_unit(unit.dalton)
             for index in range(system.getNumParticles())
         ]
-        removes_com = any(
-            isinstance(system.getForce(index), mm.CMMotionRemover)
-            for index in range(system.getNumForces())
+        dof = degrees_of_freedom(
+            masses, system.getNumConstraints(), removes_com_motion(simulation)
         )
-        dof = degrees_of_freedom(masses, system.getNumConstraints(), removes_com)
         potential = state.getPotentialEnergy().value_in_unit(unit.kilojoules_per_mole)
         kinetic = state.getKineticEnergy().value_in_unit(unit.kilojoules_per_mole)
         volume = state.getPeriodicBoxVolume().value_in_unit(unit.nanometer**3)
@@ -616,9 +707,11 @@ def run_roe_brooks(
     current_positions = state.getPositions()
     current_box = state.getPeriodicBoxVectors()
 
-    system = build_system(constraints=HBonds, rigid_water=True, barostat=False)
+    system = build_system(
+        constraints=HBonds, rigid_water=True, barostat=False, dynamics=True
+    )
     add_restraints(system, reference_positions, 5.0, "heavy")
-    integrator = mm.LangevinMiddleIntegrator(temperature, 5.0 / unit.picosecond, dt_1fs)
+    integrator = langevin(5.0 / unit.picosecond, dt_1fs)
     integrator.setConstraintTolerance(1.0e-6)
     integrator.setRandomNumberSeed(config.random_seed + 2)
     simulation = make_simulation(
@@ -664,12 +757,12 @@ def run_roe_brooks(
     current_positions, current_box = state.getPositions(), state.getPeriodicBoxVectors()
     step5_reference = current_positions
 
-    system = build_system(constraints=HBonds, rigid_water=True, barostat=False)
+    system = build_system(
+        constraints=HBonds, rigid_water=True, barostat=False, dynamics=True
+    )
     add_restraints(system, step5_reference, 1.0, "heavy")
     settle_dt = 0.25 * unit.femtoseconds
-    integrator = mm.LangevinMiddleIntegrator(
-        temperature, 20.0 / unit.picosecond, settle_dt
-    )
+    integrator = langevin(20.0 / unit.picosecond, settle_dt)
     integrator.setConstraintTolerance(1.0e-6)
     integrator.setRandomNumberSeed(config.random_seed + 5)
     simulation = make_simulation(
@@ -694,12 +787,12 @@ def run_roe_brooks(
         seed_offset: int,
     ) -> None:
         nonlocal current_positions, current_velocities, current_box
-        system = build_system(constraints=HBonds, rigid_water=True, barostat=barostat)
+        system = build_system(
+            constraints=HBonds, rigid_water=True, barostat=barostat, dynamics=True
+        )
         if restraint_k is not None and restraint_selection is not None:
             add_restraints(system, step5_reference, restraint_k, restraint_selection)
-        integrator = mm.LangevinMiddleIntegrator(
-            temperature, 5.0 / unit.picosecond, timestep
-        )
+        integrator = langevin(5.0 / unit.picosecond, timestep)
         integrator.setConstraintTolerance(1.0e-6)
         integrator.setRandomNumberSeed(config.random_seed + seed_offset)
         simulation = make_simulation(
@@ -736,10 +829,10 @@ def run_roe_brooks(
     )
 
     # Step 10: unrestrained NPT until the configured density window converges.
-    system = build_system(constraints=HBonds, rigid_water=True, barostat=True)
-    integrator = mm.LangevinMiddleIntegrator(
-        temperature, 5.0 / unit.picosecond, dt_2fs
+    system = build_system(
+        constraints=HBonds, rigid_water=True, barostat=True, dynamics=True
     )
+    integrator = langevin(5.0 / unit.picosecond, dt_2fs)
     integrator.setConstraintTolerance(1.0e-6)
     integrator.setRandomNumberSeed(config.random_seed + 10)
     simulation = make_simulation(
@@ -818,8 +911,25 @@ def run_roe_brooks(
     simulation.reporters.append(
         DCDReporter(str(trajectory), production.trajectory_interval_steps)
     )
+    state_reporter = StateDataReporter
+    if plugin_integrator[0]:
+
+        class PluginIntegratorStateReporter(StateDataReporter):
+            """OpenMM's reporter, counting out the motion the integrator removes.
+
+            It subtracts the centre-of-mass degrees of freedom only for a
+            System holding a CMMotionRemover, and cuPotential's integrator
+            removes that motion itself instead.
+            """
+
+            def _initializeConstants(self, simulation: Any) -> None:
+                super()._initializeConstants(simulation)
+                if getattr(self, "_dof", 0) > 3:
+                    self._dof -= 3
+
+        state_reporter = PluginIntegratorStateReporter
     simulation.reporters.append(
-        StateDataReporter(
+        state_reporter(
             str(state_log),
             production.state_interval_steps,
             step=True,
@@ -856,6 +966,18 @@ def run_roe_brooks(
         "platform_selected": selected_platform.getName(),
         "platform_properties": selected_properties,
         "platform_initialization_failures": platform_failures,
+        "engine": config.engine,
+        "ewald_error_tolerance": ewald_tolerance,
+        "c4_restricted_to_ion_atoms": c4_ion_atoms,
+        "cupotential": (
+            {
+                "plugin_version": cupotential.plugin_version(),
+                "integrator": "cupotential" if plugin_integrator[0] else "openmm",
+                "integrator_failure": integrator_failure,
+            }
+            if nv is not None
+            else None
+        ),
         "random_seed": config.random_seed,
         "temperature_kelvin": config.temperature_kelvin,
         "pressure_atmosphere": config.pressure_atmosphere,
@@ -889,4 +1011,6 @@ def run_roe_brooks(
         report_path=report_path,
         equilibration_log=equilibration_path,
         platform_failures=dict(platform_failures),
+        engine=config.engine,
+        integrator_failure=integrator_failure,
     )

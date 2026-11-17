@@ -85,6 +85,98 @@ using the CUDA version `nvidia-smi` prints. `mdprep doctor` starts a small
 CUDA system to check, and both `doctor` and the MD say what to do when it
 fails. With `platform: auto`, the MD says which platform it passed over, and why.
 
+## NVIDIA cuPotential (`engine: cupotential`)
+
+```yaml
+molecular_dynamics:
+  engine: cupotential   # default: openmm
+```
+
+[cuPotential](https://github.com/NVIDIA/cuPotential) is NVIDIA's nonbonded
+engine for OpenMM's CUDA platform, shipped as the `nv-openmm-plugin` wheel.
+With `engine: cupotential` the dynamics -- the heating, every restrained and
+unrestrained stage, step 10 and the production -- run with three of its
+parts in place of OpenMM's:
+
+- its `NonbondedForce`, copied from the one OpenMM builds from the prmtop:
+  charges, Lennard-Jones, the 1-4 exceptions and the dispersion correction.
+  Its Coulomb lattice sum is NVIDIA's own splitting, not OpenMM's PME;
+- its `LangevinMiddleIntegrator`, which removes the centre-of-mass motion
+  itself (OpenMM's `CMMotionRemover` comes out of the System, and the
+  temperatures in the logs still count those three degrees of freedom out);
+- its `MonteCarloBarostat`, with the pressure, frequency and seed OpenMM's
+  would have had.
+
+Bonded terms, the positional restraints and the 12-6-4 C4 term stay OpenMM's.
+
+What changes besides the engine:
+
+- **The minimisations stay on OpenMM.** The plugin is made for MD on a
+  relaxed box, not for the atoms tleap leaves all but on top of one another,
+  so steps 1, 1b, 3, 4, 5 and 5b use OpenMM's force as with `engine: openmm`,
+  and the dynamics start from what they leave.
+- **The Ewald error tolerance of the dynamics is 5e-4**, OpenMM's default and
+  the only one the plugin accepts; mdprep's OpenMM runs use 1e-4. The report
+  records both.
+- **CUDA only, single or mixed precision.** Any other `platform` or
+  `precision: double` is refused when the manifest is read, and a CUDA
+  platform that does not start is an error rather than a fall back to OpenCL.
+- **SHAKE and SETTLE only.** The plugin's integrator has no CCMA. A system
+  that needs it still gets the plugin's forces, under OpenMM's integrator;
+  the MD says so and `md_report.json` records why.
+
+`md_report.json` has `engine`, the tolerances, the plugin's version and
+which integrator ran. The trajectory, restarts and logs are the same files as
+with OpenMM, and the analysis reads them the same way.
+
+### Installing it
+
+The plugin is **NVIDIA proprietary software under
+[NVIDIA's licence](https://github.com/NVIDIA/cuPotential/blob/main/LICENSE-cupo.txt)**,
+early access, which mdprep cannot redistribute: it is never a dependency and
+is never installed unasked. Anyone who installs it accepts that licence, which
+among other things restricts publishing benchmark results obtained with it.
+
+Its wheel is for Python 3.12, OpenMM 8.4 from PyPI, CUDA 13.4 and glibc 2.38
+or newer, so it gets an environment of its own:
+
+```bash
+python3.12 -m venv cupotential && . cupotential/bin/activate
+pip install mdprep nv-openmm-plugin
+export LD_LIBRARY_PATH=$VIRTUAL_ENV/lib/python3.12/site-packages/nvidia/cu13/lib:$LD_LIBRARY_PATH
+mdprep run-md system.yaml
+```
+
+The `LD_LIBRARY_PATH` line puts the CUDA 13 libraries pip installed before
+any system CUDA, whose NVRTC the plugin would otherwise load. NVIDIA asks for
+driver R615 or newer. With an older CUDA 13 driver (CUDA 13.0-13.3, as
+`nvidia-smi` prints), install that release's NVRTC in place of the plugin's,
+whose kernels the driver cannot load:
+
+```bash
+pip install --no-deps "nvidia-cuda-nvrtc==13.0.*"
+```
+
+A CUDA 12 driver cannot run it.
+
+In the official Colab notebook, choose `ENGINE = "cupotential"` in section D.
+The first run builds the `mdprep-cupotential` environment
+(`mdprep.workflows.runtime.cupotential_setup_commands`): it checks glibc and
+the driver first and stops with the reason on a machine that cannot run the
+plugin, installs the same mdprep as section A beside the plugin, and matches
+NVRTC to the driver as above.
+
+## The 12-6-4 C4 term
+
+OpenMM builds a prmtop's C4 table into a `CustomNonbondedForce` over every
+pair in the box, though the table is zero unless one atom of the pair is a
+12-6-4 ion. Both engines evaluate it as an interaction group of the ions'
+atoms against all atoms instead, which covers each nonzero pair and nothing
+else: the forces are the same, and the energy differs only in how OpenMM
+averages the force's long-range correction, by about 1e-3 kJ/mol on a box of
+27,000 atoms. `md_report.json` lists the ions' atoms under
+`c4_restricted_to_ion_atoms`.
+
 
 Step 10 stops only after its final density window passes both the configured
 slope and half-window mean-difference tests. `maximum_duration_ns` prevents an

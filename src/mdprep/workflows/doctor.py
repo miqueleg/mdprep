@@ -249,6 +249,29 @@ def ash_note(manifest: Mapping[str, Any] | None) -> str | None:
     )
 
 
+def cupotential_note(manifest: Mapping[str, Any] | None) -> str | None:
+    """NVIDIA's plugin is never installed for anyone: it is proprietary, so
+    a manifest asking for it is the one place to say what to install, and
+    under which licence."""
+
+    if manifest is None:
+        return None
+    md = manifest.get("molecular_dynamics") or {}
+    if not md.get("enabled") or md.get("engine", "openmm") != "cupotential":
+        return None
+    if importlib.util.find_spec("nv_openmm_plugin") is not None:
+        return None
+    from mdprep.md.cupotential import LICENCE_URL, PLUGIN_PACKAGE
+
+    return (
+        f"molecular_dynamics.engine: cupotential needs NVIDIA's {PLUGIN_PACKAGE}, "
+        "which is not installed here. It is NVIDIA proprietary software under "
+        f"its own licence ({LICENCE_URL}), installed only by you: see "
+        "docs/molecular_dynamics.md, or choose ENGINE cupotential in section D "
+        "of the official notebook. engine: openmm needs none of this."
+    )
+
+
 def cuda_note(manifest: Mapping[str, Any] | None) -> str | None:
     """Whether OpenMM's CUDA platform actually starts on this machine's GPU.
 

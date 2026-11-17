@@ -48,7 +48,9 @@ recorded in the output reports.
 - Final `prmtop`, `inpcrd`, and PDB generation through `tleap`, followed by
   topology, coordinate, charge, and optional OpenMM energy validation.
 - Optional Roe–Brooks OpenMM minimization, heating, density equilibration, and
-  manifest-sized production MD with GPU-first/CPU-fallback execution.
+  manifest-sized production MD with GPU-first/CPU-fallback execution, or with
+  the dynamics on NVIDIA's cuPotential plugin where you install it
+  ([molecular_dynamics.md](docs/molecular_dynamics.md#nvidia-cupotential-engine-cupotential)).
 - Predicted models: the closest X-ray structure from the RCSB, and its crystal
   waters transplanted onto the model with PyMOL -- a water on the metal moves
   with it.
