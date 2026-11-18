@@ -64,6 +64,11 @@ class StructureRepairResult:
     # Modified residues PDBFixer replaced by their parents, each with the
     # name it had and the one it got.
     modified_residues_replaced: tuple[dict[str, object], ...] = ()
+    # Every heavy atom PDBFixer placed: a side chain or a residue the input
+    # lacked, what only a replacement's parent has, a terminal OXT. The
+    # builders never saw these, so normalisation checks the crystal waters
+    # against them.
+    built_heavy_atoms: tuple[AtomRecord, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -260,6 +265,7 @@ def repair_structure(
         },
     )
     added_atom_count = len(repaired.atoms) - len(original.atoms)
+    built = _built_heavy_atoms(original, repaired)
     repaired = _return_held_hydrogens(repaired, held_hydrogens)
     checks = _validate_repaired_peptide_bonds(
         repaired,
@@ -301,6 +307,7 @@ def repair_structure(
         ),
         missing_residues_left_absent=tuple(left_absent),
         modified_residues_replaced=tuple(replaced),
+        built_heavy_atoms=built,
         missing_heavy_atoms_detected=tuple(detected_atoms),
         added_atom_count=added_atom_count,
         peptide_bond_checks=tuple(checks),
@@ -886,6 +893,31 @@ def _restore_existing_atom_metadata(
         warnings=list(original.warnings),
         conect_bonds=bonds,
         ter_after_serials=ter_after,
+    )
+
+
+def _built_heavy_atoms(original: PdbStructure, repaired: PdbStructure) -> tuple[AtomRecord, ...]:
+    """The heavy atoms of ``repaired`` that no atom of ``original`` stands for.
+
+    Matched by residue number, atom name and place, not by residue name: a
+    residue replaced by its parent keeps the atoms the two share where they
+    were, while what only the parent has, or a side chain rebuilt beyond CB,
+    is somewhere new.
+    """
+
+    existing: dict[tuple[str, int, str | None, str], list[tuple[float, float, float]]] = {}
+    for atom in original.atoms:
+        existing.setdefault(
+            (atom.chain_id, atom.resid, atom.icode, atom.name.strip()), []
+        ).append((atom.x, atom.y, atom.z))
+    return tuple(
+        atom
+        for atom in repaired.atoms
+        if not is_hydrogen(atom)
+        and not any(
+            dist(place, (atom.x, atom.y, atom.z)) <= EXISTING_ATOM_TOLERANCE_ANGSTROM
+            for place in existing.get((atom.chain_id, atom.resid, atom.icode, atom.name.strip()), ())
+        )
     )
 
 

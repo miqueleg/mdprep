@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+import math
 import re
 from pathlib import Path
 
@@ -21,7 +22,7 @@ from mdprep.structure.classify import (
     is_standard_protein_residue,
     is_water_residue,
 )
-from mdprep.structure.coordination import metal_bound_waters
+from mdprep.structure.coordination import WATER_OVERLAP_ANGSTROM, metal_bound_waters
 from mdprep.structure.hydrogens import (
     InputHydrogenRemoval,
     is_hydrogen,
@@ -209,6 +210,13 @@ def normalize_structure_stage(
             structure.residues, [residue for _, _, residue in configured_metals]
         )
     }
+    # The builders left out the crystal waters sitting on an atom of the
+    # input, but a side chain or loop PDBFixer built was not there when they
+    # looked: a water modelled into a disordered lysine's density is where
+    # its NZ is now.
+    on_built_atoms = _waters_on_built_atoms(
+        structure.residues, repair_result.built_heavy_atoms if repair_result is not None else ()
+    )
     # Only the chains the build keeps. A deposition of four copies has four
     # sets of cofactors, and demanding a declaration for the three about to be
     # discarded would reject a manifest that is already complete. The repair
@@ -251,7 +259,8 @@ def normalize_structure_stage(
 
     keep_residue_ids: set[int] = set()
     waters_kept: list[ResidueRecord] = []
-    waters_removed: list[ResidueRecord] = []
+    waters_removed: list[dict[str, object]] = []
+    water_warnings: list[str] = []
     ions_kept: list[ResidueRecord] = []
     ions_removed: list[ResidueRecord] = []
     unknown_removed: list[ResidueRecord] = []
@@ -288,12 +297,40 @@ def normalize_structure_stage(
             keep_residue_ids.add(id(residue))
             if is_water_residue(residue):
                 waters_kept.append(residue)
+                if id(residue) in on_built_atoms:
+                    water_warnings.append(
+                        f"{_format_residue_for_error(residue)} is a metal's water, kept as "
+                        "part of the site although "
+                        f"{_built_atom_overlap(*on_built_atoms[id(residue)])}; minimize "
+                        "before anything else."
+                    )
         elif is_water_residue(residue):
-            if manifest.structure.keep_crystal_waters:
+            if not manifest.structure.keep_crystal_waters:
+                waters_removed.append(_residue_dict(residue))
+            elif id(residue) not in on_built_atoms:
                 keep_residue_ids.add(id(residue))
                 waters_kept.append(residue)
+            elif manifest.structure.repair.remove_waters_on_built_atoms:
+                atom, distance = on_built_atoms[id(residue)]
+                waters_removed.append(
+                    {
+                        **_residue_dict(residue),
+                        "overlaps": _atom_label(atom),
+                        "distance_angstrom": round(distance, 2),
+                        "reason": f"crystal water {_built_atom_overlap(atom, distance)}: "
+                        "closer than any hydrogen bond, in the place of an atom the "
+                        "deposition did not resolve",
+                    }
+                )
             else:
-                waters_removed.append(residue)
+                keep_residue_ids.add(id(residue))
+                waters_kept.append(residue)
+                water_warnings.append(
+                    f"{_format_residue_for_error(residue)} is kept, as "
+                    "structure.repair.remove_waters_on_built_atoms: false asks, although "
+                    f"{_built_atom_overlap(*on_built_atoms[id(residue)])}; minimize before "
+                    "anything else."
+                )
         elif id(residue) in configured_ligand_keys:
             keep_residue_ids.add(id(residue))
         elif is_bulk_ion_residue(residue):
@@ -378,6 +415,20 @@ def normalize_structure_stage(
     )
     if repair_result is not None:
         warnings.extend(repair_result.warnings)
+    left_out = [item for item in waters_removed if "overlaps" in item]
+    if left_out:
+        warnings.append(
+            f"{len(left_out)} crystal water{'s' if len(left_out) != 1 else ''} left out "
+            "for sitting on an atom structure repair built, closer than any hydrogen "
+            "bond: "
+            + ", ".join(
+                f"{_format_residue_dict(item)} ({item['overlaps']}, "
+                f"{item['distance_angstrom']:.2f} A)"
+                for item in left_out
+            )
+            + ". The solvent box fills their place."
+        )
+    warnings.extend(water_warnings)
     warnings.extend(hydrogenation_warnings)
 
     return StructureNormalizationResult(
@@ -386,7 +437,7 @@ def normalize_structure_stage(
         input_summary=input_summary,
         normalized_structure=normalized_structure,
         waters_kept=_residue_dicts(waters_kept),
-        waters_removed=_residue_dicts(waters_removed),
+        waters_removed=waters_removed,
         crystal_ions_kept=_residue_dicts(ions_kept),
         crystal_ions_removed=_residue_dicts(ions_removed),
         configured_ligands_kept=[
@@ -760,6 +811,57 @@ def _residue_dict(residue: ResidueRecord) -> dict[str, object]:
         "record_names": sorted(residue.record_names),
         "original_index": residue.original_index,
     }
+
+
+def _waters_on_built_atoms(
+    residues: list[ResidueRecord], built: tuple[AtomRecord, ...]
+) -> dict[int, tuple[AtomRecord, float]]:
+    """Each water whose oxygen is within WATER_OVERLAP_ANGSTROM of a built atom.
+
+    Keyed by the residue's id, with the nearest such atom and its distance.
+    """
+
+    if not built:
+        return {}
+    found: dict[int, tuple[AtomRecord, float]] = {}
+    for residue in residues:
+        if not is_water_residue(residue):
+            continue
+        oxygen = next(
+            (atom for atom in residue.atoms if (atom.element or "").strip().upper() == "O"),
+            None,
+        )
+        if oxygen is None:
+            continue
+        distance, atom = min(
+            (
+                (
+                    math.dist((oxygen.x, oxygen.y, oxygen.z), (atom.x, atom.y, atom.z)),
+                    atom,
+                )
+                for atom in built
+            ),
+            key=lambda item: item[0],
+        )
+        if distance < WATER_OVERLAP_ANGSTROM:
+            found[id(residue)] = (atom, distance)
+    return found
+
+
+def _atom_label(atom: AtomRecord) -> str:
+    return (
+        f"{atom.chain_id or '<blank>'}:{atom.resname}{atom.resid}"
+        f"{atom.icode or ''}@{atom.name.strip()}"
+    )
+
+
+def _built_atom_overlap(atom: AtomRecord, distance: float) -> str:
+    return f"overlapping {_atom_label(atom)} ({distance:.2f} A away), an atom structure repair built"
+
+
+def _format_residue_dict(item: dict[str, object]) -> str:
+    chain = item.get("chain_id") or "<blank>"
+    return f"{chain}:{item['resname']}{item['resid']}{item.get('icode') or ''}"
 
 
 def _format_residue_for_error(residue: ResidueRecord) -> str:

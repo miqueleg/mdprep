@@ -23,6 +23,13 @@ COORDINATION_CUTOFF_ANGSTROM = 2.6
 # behind a coordinating oxygen into a spurious bond.
 METAL_DONOR_ELEMENTS = {"N", "O", "S", "SE", "P", "F", "CL", "BR", "I"}
 
+# A water oxygen closer than this to another heavy atom is on top of it: the
+# shortest hydrogen bond is about 2.5 A, and nothing else comes closer. The
+# builders leave such a water out against the atoms of the input, and
+# normalisation against the atoms structure repair builds; a water on a
+# metal is in neither case.
+WATER_OVERLAP_ANGSTROM = 2.2
+
 
 def metal_donor_atoms(
     residues: Sequence[ResidueRecord],

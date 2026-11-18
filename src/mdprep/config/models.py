@@ -117,6 +117,13 @@ class StructureRepairConfig(StrictModel):
     replace_modified_residues: list[ModifiedResidueReplacement] = Field(
         default_factory=list
     )
+    # A crystal water closer than 2.2 A to an atom PDBFixer builds sits where
+    # the deposition left a side chain or a loop unresolved: modelled into
+    # density the residue's atoms now fill. The builders cannot see it, since
+    # nothing is built when they look, so normalisation leaves it out and
+    # reports it. false keeps it, with a warning; a water on a metal is kept
+    # either way.
+    remove_waters_on_built_atoms: bool = True
     random_seed: int = Field(default=20260722, ge=0)
     platform: Literal["Reference", "CPU"] = "Reference"
     peptide_bond_min_angstrom: float = Field(default=1.10, gt=0)
