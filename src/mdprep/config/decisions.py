@@ -55,6 +55,7 @@ from mdprep.structure.classify import (
 from mdprep.structure.completeness import chain_breaks, incomplete_residues
 from mdprep.structure.coordination import (
     COORDINATION_CUTOFF_ANGSTROM,
+    WATER_OVERLAP_ANGSTROM,
     metal_bound_waters,
     metal_donor_atoms,
 )
@@ -789,11 +790,6 @@ def plan_decisions(
         oligomer=oligomer,
         structure=summary.structure,
     )
-
-
-# A water oxygen closer than this to another heavy atom is on top of it: the
-# shortest hydrogen bond is about 2.5 A, and nothing else comes closer.
-WATER_OVERLAP_ANGSTROM = 2.2
 
 
 def overlapping_waters(

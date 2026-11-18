@@ -430,7 +430,9 @@ def test_what_the_reader_said_about_the_input_reaches_the_report_after_repair(
     repaired = read_pdb(_write(tmp_path / "repaired.pdb", lines[:3]))
     monkeypatch.setattr(
         "mdprep.structure.normalize.repair_structure",
-        lambda manifest, output_path: SimpleNamespace(structure=repaired, warnings=()),
+        lambda manifest, output_path: SimpleNamespace(
+            structure=repaired, warnings=(), built_heavy_atoms=()
+        ),
     )
 
     result = normalize_structure_stage(

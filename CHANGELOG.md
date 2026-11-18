@@ -17,6 +17,18 @@
   - It is CUDA-only, single or mixed precision, at OpenMM's default Ewald
     tolerance of 5e-4; a manifest asking for anything else is refused when
     read. See `docs/molecular_dynamics.md`.
+- `mdprep prepare` leaves out a kept crystal water whose oxygen is closer
+  than 2.2 A to a heavy atom structure repair built. The builders' check
+  for waters sitting on another atom runs before PDBFixer has built
+  anything, so it misses a water modelled where the deposition left a side
+  chain or loop unresolved. In 2FCT, Lys A3's rebuilt NZ lands 1.58 A from
+  A:HOH1079, and Arg296's NH1 lands 2.00 A from A:HOH1189.
+  - Each water left out is listed under `waters_removed` in
+    `reports/structure_report.json` and `.md`, with the atom it overlaps
+    and the distance, and one warning names them all.
+  - `structure.repair.remove_waters_on_built_atoms: false` keeps them, with
+    a warning for each. A water on a metal is kept either way, with a
+    warning.
 
 ### Changed
 
