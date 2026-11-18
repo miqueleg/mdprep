@@ -1364,8 +1364,29 @@ class MolecularDynamicsConfig(StrictModel):
     # can still be repeated by setting it here.
     random_seed: int | None = Field(default=None, ge=0)
     step08_ensemble: Literal["NPT", "NVT"] = "NPT"
+    # Who computes the nonbonded forces and advances the dynamics: OpenMM
+    # itself, or NVIDIA's cuPotential plugin (nv-openmm-plugin), which runs
+    # on OpenMM's CUDA platform only, in single or mixed precision. The
+    # plugin is under NVIDIA's own licence and is never installed for you;
+    # see docs/molecular_dynamics.md.
+    engine: Literal["openmm", "cupotential"] = "openmm"
     density: RoeBrooksDensityConfig = Field(default_factory=RoeBrooksDensityConfig)
     production: ProductionMdConfig | None = None
+
+    @model_validator(mode="after")
+    def validate_engine(self) -> "MolecularDynamicsConfig":
+        if self.engine == "cupotential":
+            if self.platform not in {"auto", "CUDA"}:
+                raise ValueError(
+                    "molecular_dynamics.engine: cupotential runs on OpenMM's CUDA "
+                    f"platform only; platform {self.platform!r} cannot run it"
+                )
+            if self.precision == "double":
+                raise ValueError(
+                    "molecular_dynamics.engine: cupotential supports single or mixed "
+                    "precision only"
+                )
+        return self
 
     @model_validator(mode="after")
     def validate_enabled_stage(self) -> "MolecularDynamicsConfig":

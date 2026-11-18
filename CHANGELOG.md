@@ -4,6 +4,19 @@
 
 ### Added
 
+- `molecular_dynamics.engine: cupotential` runs the Roe-Brooks dynamics on
+  NVIDIA's cuPotential, an early-access nonbonded engine for OpenMM's CUDA
+  platform: its nonbonded force, Langevin integrator and barostat take the
+  place of OpenMM's, and the minimisations stay on OpenMM. `md_report.json`
+  records the engine, the plugin's version and which integrator ran.
+  - The plugin is NVIDIA proprietary software, which mdprep neither depends
+    on nor installs unasked. In the official Colab notebook it is a choice
+    in section D, `ENGINE`, which names NVIDIA's licence and installs it into
+    an environment of its own on first use, after checking the machine's
+    glibc and GPU driver can run it.
+  - It is CUDA-only, single or mixed precision, at OpenMM's default Ewald
+    tolerance of 5e-4; a manifest asking for anything else is refused when
+    read. See `docs/molecular_dynamics.md`.
 - `mdprep prepare` leaves out a kept crystal water whose oxygen is closer
   than 2.2 A to a heavy atom structure repair built. The builders' check
   for waters sitting on another atom runs before PDBFixer has built
@@ -19,6 +32,10 @@
 
 ### Changed
 
+- The 12-6-4 C4 term is evaluated for the pairs with a 12-6-4 ion in them,
+  the only ones the table is not zero for, rather than for every pair in
+  the box. The forces are unchanged; the long-range correction moves by
+  about 1e-3 kJ/mol on a 27,000-atom box.
 - The web builder and the official Colab notebook install mdprep 0.5.6, the
   release that leaves out crystal waters sitting on another atom, so a
   predicted or hand-assembled dimer needs no hand edits.

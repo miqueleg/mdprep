@@ -508,6 +508,11 @@ files, and failure behavior.
 - `cpu_threads`: optional OpenMM CPU thread count.
 - `random_seed`: deterministic OpenMM velocity, thermostat, and barostat seed.
 - `step08_ensemble`: `NPT` or the stability-oriented `NVT` alternative.
+- `engine`: `openmm` (default) or `cupotential`, NVIDIA's plugin, which then
+  runs the dynamics while the minimisations stay on OpenMM. It needs
+  `platform` `auto` or `CUDA` and `precision` `single` or `mixed`, and the
+  `nv-openmm-plugin` package, which is under NVIDIA's own licence and never
+  installed for you; see [cuPotential](molecular_dynamics.md#nvidia-cupotential-engine-cupotential).
 - `density`: Step-10 sampling interval, 300-ps-style window, slope and
   half-window mean-difference thresholds, minimum points, and hard maximum
   duration.
@@ -518,7 +523,8 @@ files, and failure behavior.
   production run.
 
 See [Roe--Brooks OpenMM MD](molecular_dynamics.md) and
-`examples/15_roe_brooks_openmm.yaml`.
+`examples/15_roe_brooks_openmm.yaml`, and with cuPotential
+`examples/24_roe_brooks_cupotential.yaml`.
 
 ## validation
 

@@ -202,3 +202,39 @@ def test_reinstalling_caps_the_cuda_runtime_at_the_driver():
 
     assert "micromamba_install_commands(toolchain" in a
     assert "micromamba_setup_commands(toolchain" in a
+
+
+def test_cupotential_is_a_choice_that_names_nvidias_licence():
+    """NVIDIA's plugin is proprietary: never installed unless the student
+    picks it in section D, and the licence is named where it is picked."""
+
+    d = _cell("#@title D.")
+    licence = "https://github.com/NVIDIA/cuPotential/blob/main/LICENSE-cupo.txt"
+
+    assert 'ENGINE = "openmm"  #@param ["openmm", "cupotential"]' in d
+    assert licence in d
+    assert licence in all_source().split("#@title D.")[0]
+    # Nothing before D installs or mentions the plugin's package.
+    assert "nv-openmm-plugin" not in "\n".join(code_cells()[: code_cells().index(d)])
+
+
+def test_cupotential_runs_in_its_own_environment_with_the_same_mdprep():
+    d = _cell("#@title D.")
+
+    assert '"engine": ENGINE' in d
+    assert 'if ENGINE == "cupotential":' in d
+    assert "rt.cupotential_setup_commands(mdprep_spec=MDPREP_SPEC, prefix=str(PREFIX))" in d
+    assert "rt.cupotential_environment_variables(str(PREFIX), environment)" in d
+    assert "rt.cupotential_run_command(MD_MANIFEST.name, prefix=str(PREFIX))" in d
+    # Built once per session, like section A's environment.
+    assert "if not Path(rt.cupotential_environment_prefix(str(PREFIX))).exists():" in d
+
+
+def test_a_branch_name_installs_that_branch():
+    """How a change is tried in Colab before it is released: its branch name
+    in the version field."""
+
+    one = _cell("#@title 1.")
+
+    assert "if RELEASE[0].isdigit():" in one
+    assert "git+https://github.com/miqueleg/mdprep@{RELEASE}" in one
