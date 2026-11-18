@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- The web builder and the official Colab notebook install mdprep 0.5.7, the
+  release that offers NVIDIA's cuPotential as the MD engine in the
+  notebook's section D, and leaves out crystal waters sitting on atoms
+  structure repair builds.
+
 ## 0.5.7 - 2026-11-18
 
 ### Added
