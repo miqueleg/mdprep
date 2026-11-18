@@ -56,6 +56,11 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "",
         f"- Kept: {len(report['waters_kept'])}",
         f"- Removed: {len(report['waters_removed'])}",
+        *(
+            f"  - {_format_residue(item)}: {item['reason']}"
+            for item in report["waters_removed"]
+            if item.get("reason")
+        ),
         "",
         "## Crystal Ions",
         "",

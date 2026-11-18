@@ -68,7 +68,9 @@ relative executable path when needed.
   side-chain conformer the build does not use. Of two waters that close,
   the later goes. A water on a metal is never left out. A water whose only
   neighbour that close is itself left out (a removed additive, a declined
-  ligand, a chain not kept) stays.
+  ligand, a chain not kept) stays. The builders look before anything is
+  repaired, so a water on a side chain or loop PDBFixer builds is left out
+  later, by `mdprep prepare`; see `repair.remove_waters_on_built_atoms`.
   See [heterogens.md](heterogens.md).
 - `rename_residues`: residues built under another name than the input
   gives them, each with its reason:
@@ -133,6 +135,16 @@ relative executable path when needed.
     chemistry is gone, which is why each is named. Exactly the listed
     residues are replaced; PDBFixer's own substitution table is not
     consulted. Each replacement is reported.
+  - `remove_waters_on_built_atoms`: leave out a kept crystal water whose
+    oxygen is closer than 2.2 A to a heavy atom PDBFixer built (default
+    `true`). Such a water was modelled where the deposition left a side
+    chain or loop unresolved, and the built atoms now fill that place: in
+    2FCT, Lys A3's NZ lands 1.58 A from A:HOH1079 and Arg296's NH1 2.00 A
+    from A:HOH1189. The builders cannot see this, since nothing is built
+    when they look, so `mdprep prepare` checks after repair. Each water left
+    out is listed in `reports/structure_report.md` with the atom it overlaps,
+    and the solvent box fills its place. `false` keeps them with a warning.
+    A water on a metal is kept either way, with a warning.
 
 ## protein
 
