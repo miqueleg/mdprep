@@ -6,6 +6,7 @@ from mdprep.workflows.doctor import (
     REQUIREMENTS,
     Requirement,
     ash_note,
+    cupotential_note,
     check_requirement,
     required_packages,
     run_doctor,
@@ -261,3 +262,33 @@ def test_no_cuda_check_for_a_job_that_never_runs_openmm(monkeypatch):
     }
 
     assert doctor.cuda_note(manifest) is None
+
+
+def _md(engine):
+    return _manifest(
+        molecular_dynamics={
+            "enabled": True,
+            "engine": engine,
+            "production": {"steps": 1000, "timestep_fs": 2.0, "trajectory_interval_steps": 100,
+                           "state_interval_steps": 100, "checkpoint_interval_steps": 1000},
+        }
+    )
+
+
+def test_a_missing_cupotential_plugin_is_named_with_its_licence(monkeypatch):
+    """Proprietary, so never installed for anyone: the note says what and under which licence."""
+
+    import mdprep.workflows.doctor as doctor
+
+    monkeypatch.setattr(doctor.importlib.util, "find_spec", lambda name: None)
+    note = cupotential_note(_md("cupotential"))
+
+    assert note is not None
+    assert "nv-openmm-plugin" in note and "LICENSE-cupo.txt" in note
+    assert "engine: openmm" in note
+
+
+def test_openmm_md_raises_no_cupotential_note():
+    assert cupotential_note(_md("openmm")) is None
+    assert cupotential_note(_manifest()) is None
+    assert cupotential_note(None) is None

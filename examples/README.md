@@ -32,6 +32,7 @@ any hydrogens the structure has on it with the SMILES.
 | `21_prna_fad_halogenase.yaml` | PrnA, a flavin-dependent tryptophan halogenase (PDB 2AR8): FAD with its proposed SMILES and charge, the chlorinated product typed in | AmberTools; see [docs/enzyme_families.md](../docs/enzyme_families.md) |
 | `22_spoiiaa_phosphoserine.yaml` | SpoIIAA phosphorylated on Ser57 (PDB 1H4X): the phosphoserine kept in its chain with AmberTools' phosaa14SB template, the SMILES and QMMESP routes shown alongside | AmberTools; see [docs/noncanonical_residues.md](../docs/noncanonical_residues.md) |
 | `23_osteocalcin_gla_calcium.yaml` | Porcine osteocalcin (PDB 1Q8H): three gamma-carboxyglutamates kept in their chain from their SMILES, on three nonbonded Ca2+; the QMMESP fit, which sees the ions, shown in the comments | AmberTools, RDKit, PropKa, xTB; see [docs/noncanonical_residues.md](../docs/noncanonical_residues.md#metals-and-kept-residues) |
+| `24_roe_brooks_cupotential.yaml` | Example 15 with the dynamics on NVIDIA's cuPotential (`molecular_dynamics.engine: cupotential`); the minimisations stay on OpenMM | An NVIDIA GPU and the `nv-openmm-plugin` package, under NVIDIA's own licence and installed separately; see [docs/molecular_dynamics.md](../docs/molecular_dynamics.md#nvidia-cupotential-engine-cupotential) |
 
 The `tutorials/minimal_user_mol2/` directory contains a tiny toy example with
 input PDB, ligand mol2, frcmod, and manifest. It is intended only for checking

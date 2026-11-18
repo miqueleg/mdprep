@@ -419,3 +419,136 @@ def micromamba_setup_commands(
     if wants_gxtb and configured is None:
         commands.extend(gxtb_setup_commands(prefix))
     return commands
+
+
+# NVIDIA's cuPotential (molecular_dynamics.engine: cupotential) is a pip wheel
+# for Python 3.12, built against OpenMM 8.4 from PyPI, CUDA 13.4 and glibc
+# 2.38. None of that fits the conda environment above -- Python 3.11 and
+# conda-forge's OpenMM -- so the MD gets an environment of its own, made only
+# when someone asks for the plugin: it is NVIDIA proprietary software under
+# NVIDIA's own licence, which mdprep does not redistribute or install
+# unasked.
+CUPOTENTIAL_ENVIRONMENT = "mdprep-cupotential"
+CUPOTENTIAL_PYTHON = "3.12"
+CUPOTENTIAL_PLUGIN_SPEC = "nv-openmm-plugin==0.3.5"
+CUPOTENTIAL_MINIMUM_GLIBC = "2.38"
+# The plugin compiles kernels at run time with NVRTC, and its wheel brings
+# NVRTC 13.4, whose output a driver older than CUDA 13.4 refuses -- the
+# PTX trap of the CUDA cap above. With a CUDA 13.0-13.3 driver the NVRTC
+# release of the driver's own CUDA version is put in its place. A CUDA 12
+# driver cannot run a CUDA 13 build at all.
+CUPOTENTIAL_BUILT_CUDA_MINOR = 4
+
+
+def cupotential_environment_prefix(prefix: str = "/content") -> str:
+    return f"{prefix}/mamba-root/envs/{CUPOTENTIAL_ENVIRONMENT}"
+
+
+def cupotential_library_directory(prefix: str = "/content") -> str:
+    """The CUDA 13 libraries pip installed beside the plugin.
+
+    They have to come before the machine's own CUDA on the loader path --
+    Colab has a CUDA 12 toolkit in /usr/local/cuda -- or the plugin finds
+    the wrong NVRTC builtins and cuFFT and stops on its first kernel.
+    """
+
+    return (
+        f"{cupotential_environment_prefix(prefix)}/lib/python{CUPOTENTIAL_PYTHON}"
+        "/site-packages/nvidia/cu13/lib"
+    )
+
+
+def cupotential_environment_variables(
+    prefix: str = "/content", inherited: Mapping[str, str] | None = None
+) -> dict[str, str]:
+    """What the MD has to run with in the cuPotential environment."""
+
+    library_path = cupotential_library_directory(prefix)
+    existing = (inherited or {}).get("LD_LIBRARY_PATH", "")
+    return {
+        "LD_LIBRARY_PATH": f"{library_path}:{existing}" if existing else library_path,
+        # Packages in ~/.local belong to whatever else the machine runs.
+        "PYTHONNOUSERSITE": "1",
+    }
+
+
+def cupotential_setup_commands(
+    *, mdprep_spec: str = "mdprep", prefix: str = "/content"
+) -> list[str]:
+    """Shell lines that build the environment cuPotential's MD runs in.
+
+    They stop, saying why, on a machine that cannot run the plugin -- glibc
+    older than its wheel, no NVIDIA GPU, a CUDA 12 driver -- rather than
+    leave an environment whose MD fails on its first step.
+    """
+
+    environment = CUPOTENTIAL_ENVIRONMENT
+    micromamba = f"{prefix}/bin/micromamba"
+    return [
+        "set -euo pipefail",
+        f"export MAMBA_ROOT_PREFIX={prefix}/mamba-root",
+        'GLIBC="$(getconf GNU_LIBC_VERSION | awk \'{print $2}\')"',
+        (
+            f"if ! printf '%s\\n%s\\n' {CUPOTENTIAL_MINIMUM_GLIBC} \"$GLIBC\" | sort -V -C; then"
+        ),
+        (
+            f'  echo "cuPotential needs glibc {CUPOTENTIAL_MINIMUM_GLIBC} or newer and this '
+            'machine has $GLIBC: run the MD with engine openmm." >&2'
+        ),
+        "  exit 1",
+        "fi",
+        "if ! command -v nvidia-smi >/dev/null 2>&1; then",
+        '  echo "cuPotential runs on an NVIDIA GPU and this machine has none." >&2',
+        "  exit 1",
+        "fi",
+        (
+            "DRIVER_CUDA=\"$(nvidia-smi 2>/dev/null | sed -n "
+            "'s/.*CUDA Version: *\\([0-9][0-9]*\\.[0-9][0-9]*\\).*/\\1/p' || true)\""
+        ),
+        'DRIVER_MAJOR="${DRIVER_CUDA%%.*}"',
+        'DRIVER_MINOR="${DRIVER_CUDA#*.}"',
+        'if [ -z "$DRIVER_CUDA" ] || [ "$DRIVER_MAJOR" -lt 13 ]; then',
+        (
+            '  echo "cuPotential is built with CUDA 13 and this GPU driver supports '
+            'CUDA ${DRIVER_CUDA:-unknown}: run the MD with engine openmm." >&2'
+        ),
+        "  exit 1",
+        "fi",
+        (
+            f"{micromamba} create -y -q -n {environment} -c conda-forge "
+            f"python={CUPOTENTIAL_PYTHON} pip"
+        ),
+        (
+            f"{micromamba} run -n {environment} pip install -q --no-warn-conflicts "
+            f"{mdprep_spec} {CUPOTENTIAL_PLUGIN_SPEC}"
+        ),
+        (
+            'if [ "$DRIVER_MAJOR" -eq 13 ] && '
+            f'[ "$DRIVER_MINOR" -lt {CUPOTENTIAL_BUILT_CUDA_MINOR} ]; then'
+        ),
+        (
+            '  echo "The GPU driver supports CUDA $DRIVER_CUDA: installing the NVRTC '
+            'of that CUDA release, whose kernels it can load."'
+        ),
+        (
+            f"  {micromamba} run -n {environment} pip install -q --no-deps "
+            '--no-warn-conflicts "nvidia-cuda-nvrtc==13.$DRIVER_MINOR.*"'
+        ),
+        "fi",
+    ]
+
+
+def cupotential_run_command(
+    manifest_name: str, *, prefix: str = "/content"
+) -> list[str]:
+    """The command that runs a manifest's MD in the cuPotential environment."""
+
+    return [
+        f"{prefix}/bin/micromamba",
+        "run",
+        "-n",
+        CUPOTENTIAL_ENVIRONMENT,
+        "mdprep",
+        "run-md",
+        manifest_name,
+    ]
